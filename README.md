@@ -1,2 +1,100 @@
 # darkseek
-AI Powered Chatbot
+#AI Powered Chatbot
+# --- README.md ---
+# See below
+
+# --- setup.sh ---
+"""
+#!/bin/bash
+
+# Create a virtual environment (optional but recommended)
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Database setup (if using PostgreSQL)
+# 1. Make sure PostgreSQL is installed and running
+# 2. Create the database and user (if needed):
+#    sudo -u postgres psql
+#    CREATE DATABASE darkseekdb;
+#    CREATE USER user WITH PASSWORD 'password';
+#    GRANT ALL PRIVILEGES ON DATABASE darkseekdb TO user;
+#    \q
+
+echo "Setup complete.  You can now run the application using 'python run.py'"
+
+# To run with Docker:
+# 1. Make sure Docker and Docker Compose are installed
+# 2. Create a .env file based on .env.example and fill in your API keys.
+# 3. Run: docker-compose up --build
+"""
+# --- app/tests/test_backend.py ---
+# Basic example of unit tests. Expand significantly!
+import pytest
+from ..backend.core.utils import sanitize_query
+from ..backend.core.config import MAX_QUERY, GOOGLE_API_KEY, GOOGLE_CSE_ID
+from ..backend.api.search_api import SearchAPI  # Import your class
+from ..backend.api.llm_api import LLMAPI
+# Add more imports as needed.
+
+
+@pytest.mark.parametrize("input_query, expected_output", [
+    ("  hello world  ", "hello world"),
+    ("Multiple   Spaces", "multiple spaces"),
+    ("", ""),
+])
+def test_sanitize_query(input_query, expected_output):
+    assert sanitize_query(input_query) == expected_output
+
+
+@pytest.mark.asyncio  # Mark the test as asynchronous
+async def test_search_api_google_success():
+    # IMPORTANT: Use a *mock* API key and CSE ID for testing, *NOT* your real ones
+    search_api = SearchAPI(google_api_key="dummy_key", google_cse_id="dummy_cse_id")  # Use dummy keys
+    # Mock the requests.get method to return a predefined response
+    with pytest.MonkeyPatch().context() as m:  # Use pytest's MonkeyPatch
+        class MockResponse: # Create a mock response.
+            def __init__(self, json_data, status_code):
+                self.json_data = json_data
+                self.status_code = status_code
+            def json(self):
+                return self.json_data
+            def raise_for_status(self):
+                if self.status_code != 200:
+                    raise requests.exceptions.HTTPError(f"Status code: {self.status_code}")
+        mock_results = {
+              "items": [
+                  {"title": "Result 1", "link": "http://example.com/1", "snippet": "Snippet 1"},
+                  {"title": "Result 2", "link": "http://example.com/2", "snippet": "Snippet 2"},
+              ]
+          }
+
+        m.setattr(requests, "get", lambda *args, **kwargs: MockResponse(mock_results, 200))
+        results = await search_api.google_search("test query")
+        assert isinstance(results, list)
+        assert len(results) == 2  # Check length.
+        assert results[0]["title"] == "Result 1"
+
+
+@pytest.mark.asyncio  # Mark the test as asynchronous
+async def test_search_api_google_failure():
+    search_api = SearchAPI(google_api_key="dummy_key", google_cse_id="dummy_cse_id")  # Use dummy keys
+    with pytest.MonkeyPatch().context() as m:
+        class MockResponse:
+            def __init__(self, json_data, status_code):
+                self.json_data = json_data
+                self.status_code = status_code
+            def json(self):
+                return self.json_data
+
+            def raise_for_status(self):
+                if self.status_code != 200:
+                    raise requests.exceptions.HTTPError(f"Status code: {self.status_code}")
+        m.setattr(requests, "get", lambda *args, **kwargs: MockResponse({}, 500))
+        results = await search_api.google_search("test query")
+        assert results == []
+
+
+@pytest.mark.asyncio
