@@ -93,8 +93,56 @@ async def test_search_api_google_failure():
                 if self.status_code != 200:
                     raise requests.exceptions.HTTPError(f"Status code: {self.status_code}")
         m.setattr(requests, "get", lambda *args, **kwargs: MockResponse({}, 500))
-        results = await search_api.google_search("test query")
+        results = await search_api.google_search("test query"
+        )
         assert results == []
 
 
 @pytest.mark.asyncio
+
+
+
+
+    app/backend/Dockerfile: This Dockerfile builds the backend image. It installs only the backend dependencies and runs the FastAPI application using Uvicorn.
+
+    app/backend/requirements.txt: Contains only the backend dependencies (FastAPI, Uvicorn, SQLAlchemy, etc.).
+
+    app/frontend/Dockerfile: This Dockerfile builds the frontend image. It installs only the frontend dependency (Streamlit) and runs the Streamlit application.
+
+    app/frontend/requirements.txt: Contains only streamlit.
+
+    app/frontend/streamlit_app.py:
+
+        socketio_client.js Path: Now correctly reads from static folder.
+
+        Import paths: Updated to reflect new project structure
+
+    app/frontend/static/js/socketio_client.js: The WebSocket URL now correctly points to ws://localhost:8000, which is the backend's address. This is crucial for the frontend to connect to the backend.
+
+    docker-compose.yaml:
+
+        backend Service: Renamed the web service to backend to be more descriptive. The build context and dockerfile are updated to point to the backend's Dockerfile.
+
+        frontend Service: Added a new service for the frontend. The build context and dockerfile point to the frontend's Dockerfile.
+
+        Dependencies: The frontend service now depends on the backend service. This ensures that the backend is started before the frontend.
+
+        Removed run.py.
+
+How to Run (with Docker Compose):
+
+    cd to the darkseek directory (the project root).
+
+    Make sure you have a .env file in the project root (based on .env.example) with your API keys and other settings.
+
+    Run docker-compose up --build. This will:
+
+        Build the backend and frontend Docker images.
+
+        Start containers for the backend, frontend, database (PostgreSQL), and Redis.
+
+        The frontend (Streamlit) will be accessible at http://localhost:8501.
+
+        The backend (FastAPI) will be running internally on port 8000 (and the frontend will connect to it via WebSockets).
+
+This setup provides a clean, well-structured, and deployable application with separate frontend and backend components. It addresses all the previous issues and incorporates best practices for Docker, dependency management, and deployment. The next major step would be to add comprehensive testing.
