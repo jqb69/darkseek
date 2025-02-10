@@ -1,0 +1,2 @@
+# app/frontend/requirements.txt
+streamlit
