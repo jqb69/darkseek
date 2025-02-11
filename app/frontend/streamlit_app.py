@@ -27,15 +27,15 @@ def main():
     with open("app/frontend/static/js/socketio_client.js", "r") as f:
         js_code = f.read()
     st.components.v1.html(f'<script>{js_code}</script>', height=0)
+    with open("app/frontend/static/css/styles.css", "r") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
     # --- Routing (Login or Chat) ---
     if st.session_state.logged_in:
         chat_interface(st.session_state.session_id)  # Show chat interface
     else:
         login_interface()  # Show login interface
-    with open("app/frontend/static/css/styles.css", "r") as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
+    
     
 
 if __name__ == "__main__":
