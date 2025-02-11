@@ -138,6 +138,37 @@ How to Run (with Docker Compose):
     Run docker-compose up --build. This will:
 
         Build the backend and frontend Docker images.
+        **Key Structural Points (Verbal Explanation - to ensure clarity):**
+
+1.  **Top-Level (`darkseek/`):**  The root directory of the project.  Contains project-level files like `docker-compose.yaml`, `.env.example`, `README.md` and `setup.sh`.
+
+2.  **`app/` Directory:**  This is the main application directory, containing all the source code. It's further subdivided into `backend` and `frontend`.
+
+3.  **`app/backend/`:**  All server-side code (FastAPI application).
+    *   **`api/`:** Modules for interacting with external APIs (Google, DuckDuckGo, Hugging Face).
+    *   **`core/`:**  The core application logic.
+        *   `config.py`: Configuration settings (environment variables, constants).
+        *   `database.py`: Database connection setup (SQLAlchemy).
+        *   `models.py`: Database models (SQLAlchemy).
+        *   `search_manager.py`:  The central orchestrator for search, LLM interaction, and caching.
+        *   `utils.py`: Utility functions.
+        *   `caching.py`: Redis caching logic.
+    *   **`schemas/`:** Pydantic models for request validation.
+    *   **`main.py`:** The FastAPI application's entry point (where the WebSocket endpoint is defined).
+    *   **`Dockerfile`:**  Instructions for building the *backend* Docker image.
+    *   **`requirements.txt`:** Python dependencies for the *backend*.
+
+4.  **`app/frontend/`:** All client-side code (Streamlit application).
+    *   **`static/`:** Static assets.
+        *   **`css/`:** CSS stylesheets.
+        *   **`js/`:** JavaScript files (including `socketio_client.js`).
+    *   **`streamlit_app.py`:** The Streamlit application's entry point.
+    *   **`Dockerfile`:** Instructions for building the *frontend* Docker image.
+    *   **`requirements.txt`:** Python dependencies for the *frontend* (mainly just `streamlit`).
+
+5. **Separation of Concerns**:
+   * The project structure uses a clear separation of concerns to ensure each file and folder has a clear and defined purpose.
+
 
         Start containers for the backend, frontend, database (PostgreSQL), and Redis.
 
