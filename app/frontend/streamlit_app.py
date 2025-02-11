@@ -20,7 +20,7 @@ def main():
     if "last_assistant_message" not in st.session_state:
         st.session_state.last_assistant_message = False
 
-    with open("app/frontend/styles.css", "r") as f:
+    with open("app/frontend/static/css/styles.css", "r") as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
     chat_interface(st.session_state.session_id)
