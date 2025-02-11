@@ -19,11 +19,24 @@ def main():
         st.session_state.chat_started = False
     if "last_assistant_message" not in st.session_state:
         st.session_state.last_assistant_message = False
+# --- Inject JavaScript (for WebSocket communication) ---
+    st.components.v1.html(
+        '<script src="https://cdn.socket.io/4.6.0/socket.io.min.js" integrity="sha384-c79GN5VsunZvi+Q/WObgk2in0CbZsHnjEqvFxC5DxHn9lTfNce2WW6h2pH6u/kF+" crossorigin="anonymous"></script>',
+        height=0,
+    )
+    with open("app/frontend/static/js/socketio_client.js", "r") as f:
+        js_code = f.read()
+    st.components.v1.html(f'<script>{js_code}</script>', height=0)
 
+    # --- Routing (Login or Chat) ---
+    if st.session_state.logged_in:
+        chat_interface(st.session_state.session_id)  # Show chat interface
+    else:
+        login_interface()  # Show login interface
     with open("app/frontend/static/css/styles.css", "r") as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-    chat_interface(st.session_state.session_id)
+    
 
 if __name__ == "__main__":
     main()
