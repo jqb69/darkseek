@@ -1,9 +1,9 @@
+# app/frontend/streamlit_app.py (Corrected - Main App Entry Point)
 import streamlit as st
 import secrets
-import json
-from app.backend.api.llm_api import llm_api
-from app.backend.core.config import DEFAULT_LLM
-from app.frontend.chat_interface import chat_interface
+import json # Not used, but imported for consistency.
+from app.frontend.components.chat_interface import chat_interface  # Correct import
+from app.frontend.components.login import login_interface  # Correct import
 
 def generate_session_id():
     return secrets.token_hex(16)
