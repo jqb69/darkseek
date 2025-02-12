@@ -68,7 +68,7 @@ def chat_interface(session_id):
     else:
         if "last_assistant_message" in st.session_state:
             st.session_state["last_assistant_message"] = False
-        st.error("Socket.IO client script not found. Please check the file path.")
+        #st.error("Socket.IO client script not found. Please check the file path.")
 
     # Add Socket.IO event listener
     #st.components.v1.html(
