@@ -1,4 +1,4 @@
-# --- app/tests/test_backend.py ---
+# --- app/tests/test_backend.py  ---
 import pytest
 from app.backend.config import Config
 from app.backend.core.search_manager import SearchManager
