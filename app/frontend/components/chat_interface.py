@@ -200,14 +200,16 @@ class ChatProcessor:
                 st.markdown(assistant_response)
 
 
-# === Run the Chat Interface ===
-SessionStateManager.initialize_session_state()
-search_enabled, selected_llm = SidebarManager.render_sidebar(llm_api)
+# === Chat Interface Function ===
+def chat_interface():
+    """Main function to run the chat interface."""
+    SessionStateManager.initialize_session_state()
+    search_enabled, selected_llm = SidebarManager.render_sidebar(llm_api)
 
-st.title("DarkSeek")
+    st.title("DarkSeek")
 
-ChatActions.handle_clear_chat()
-ChatActions.handle_new_chat_session()
+    ChatActions.handle_clear_chat()
+    ChatActions.handle_new_chat_session()
 
-MessageDisplay.display_messages()
-ChatInputHandler.handle_chat_input(selected_llm, search_enabled)
+    MessageDisplay.display_messages()
+    ChatInputHandler.handle_chat_input(selected_llm, search_enabled)
