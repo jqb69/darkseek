@@ -46,35 +46,18 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, db: Session 
 
     try:
         while True:
-            data = await asyncio.wait_for(websocket.receive_text(), timeout=60)  # Timeout for inactivity
-            try:
-                request_data = json.loads(data)
-                query_request = QueryRequest(**request_data)
-            except json.JSONDecodeError as e:
-                logger.warning(f"Invalid JSON received: {e}")
-                await websocket.send_text(json.dumps({"error": "Invalid JSON format"}))
-                continue
-            except ValidationError as e:
-                logger.warning(f"Request validation error: {e}")
-                await websocket.send_text(json.dumps({"error": f"Invalid request: {e}"}))
-                continue
+            data = await asyncio.wait_for(websocket.receive_text(), timeout=60)
+            request_data = json.loads(data)
+            query_request = QueryRequest(**request_data)
 
-            try:
-                async for chunk in search_manager.get_streaming_response(
-                    query_request.query,
-                    query_request.session_id,
-                    query_request.search_enabled,
-                    llm_name=query_request.llm_name,
-                    db=db,
-                ):
-                    await websocket.send_text(json.dumps(chunk))
-            except HTTPException as e:
-                logger.error(f"HTTP error processing request: {e}", exc_info=True)
-                await websocket.send_text(json.dumps({"error": str(e)}))
-            except Exception as e:
-                logger.exception(f"Error processing request: {e}")
-                await websocket.send_text(json.dumps({"error": "An internal server error occurred"}))
-
+            async for chunk in search_manager.get_streaming_response(
+                query_request.query,
+                query_request.session_id,
+                query_request.search_enabled,
+                llm_name=query_request.llm_name,
+                db=db,
+            ):
+                await websocket.send_text(json.dumps(chunk))
     except (WebSocketDisconnect, asyncio.TimeoutError):
         logger.info(f"Client disconnected or timed out: {session_id}")
     except Exception as e:
@@ -82,3 +65,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, db: Session 
         await websocket.send_text(json.dumps({"error": "An unexpected error occurred"}))
     finally:
         heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            logger.info(f"Heartbeat task cancelled for session: {session_id}")
