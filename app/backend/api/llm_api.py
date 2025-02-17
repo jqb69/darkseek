@@ -1,3 +1,4 @@
+#app/backend/api/llm_api
 from langchain_community.llms import HuggingFaceHub
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
@@ -55,7 +56,6 @@ class LLMAPI:
         )
 
     async def stream_query_llm(self, query: str, search_results: List[Dict[str, str]], llm_name: str = None) -> AsyncGenerator[str, None]:
-        """Streams responses from the LLM using a TGI server."""
         llm_name = llm_name or self.default_llm
         llm = self._get_llm(llm_name)
         prompt = self.generate_prompt(query, search_results)
@@ -63,7 +63,7 @@ class LLMAPI:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    "http://tgi-server/generate",  # Replace with your TGI server URL
+                    self.tgi_server_url,  # Use the imported TGI_SERVER_URL
                     json={"prompt": prompt, "max_tokens": 512},
                     timeout=None
                 )
@@ -71,10 +71,22 @@ class LLMAPI:
                 data = response.json()
 
                 for token in data.get("tokens", []):
-                    yield token  # Stream tokens incrementally
+                    yield {"type": "token", "content": token}  # Yield structured responses
+        except httpx.RequestError as e:
+            logger.error(f"HTTP request error: {e}", exc_info=True)
+            yield {"type": "error", "message": "Failed to connect to the LLM server."}
         except Exception as e:
-            logger.error(f"Error streaming from LLM: {e}", exc_info=True)
-            yield "An error occurred while streaming the response."
+            logger.error(f"Unexpected error: {e}", exc_info=True)
+            yield {"type": "error", "message": "An unexpected error occurred while streaming."}
+
+                for token in data.get("tokens", []):
+                    yield {"type": "token", "content": token}  # Yield structured responses
+        except httpx.RequestError as e:
+            logger.error(f"HTTP request error: {e}", exc_info=True)
+            yield {"type": "error", "message": "Failed to connect to the LLM server."}
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}", exc_info=True)
+            yield {"type": "error", "message": "An unexpected error occurred while streaming."}
 
     async def query_llm(self, query: str, search_results: List[Dict[str, str]], llm_name: str = None) -> str:
         llm_name = llm_name or self.default_llm
