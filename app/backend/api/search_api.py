@@ -1,9 +1,8 @@
 from .caching import cache_manager
-from ..api.search_api import search_api
 from ..api.llm_api import llm_api
 from .database import get_db, UserQuery
 from sqlalchemy.orm import Session
-from typing import List, Dict, Optional, Tuple, AsyncGenerator
+from typing import List, Dict, AsyncGenerator
 import json
 from .config import MAX_CHATS
 import asyncio
@@ -13,15 +12,22 @@ from asyncio import Semaphore
 logger = logging.getLogger(__name__)
 
 class SearchManager:
-    def __init__(self, cache_manager=cache_manager, search_api=search_api, llm_api=llm_api):
+    def __init__(self, cache_manager=cache_manager, search_api=None, llm_api=llm_api):
         self.cache_manager = cache_manager
         self.search_api = search_api
         self.llm_api = llm_api
         self.db_semaphore = Semaphore(10)  # Limit concurrent DB writes
 
-    async def get_streaming_response(self, query: str, session_id: str, search_enabled: bool = True,
-                                     llm_name: str = None,
-                                     db: Session = next(get_db())) -> AsyncGenerator[Dict, None]:
+    async def get_streaming_response(
+        self,
+        query: str,
+        session_id: str,
+        search_enabled: bool = True,
+        llm_name: str = None,
+        db: Session = None  # Injected via Depends
+    ) -> AsyncGenerator[Dict, None]:
+        if db is None:
+            raise ValueError("Database session is required.")
 
         chat_count_key = f"chat_count:{session_id}"
         chat_count = self.cache_manager.redis_client.incr(chat_count_key)
@@ -33,7 +39,12 @@ class SearchManager:
 
         cached_response = self.cache_manager.get_cached_response(query)
         if cached_response:
-            yield {"type": "full_response", "content": cached_response['response'], "search_results": cached_response['search_results'], "llm_used": cached_response['llm_used']}
+            yield {
+                "type": "full_response",
+                "content": cached_response['response'],
+                "search_results": cached_response['search_results'],
+                "llm_used": cached_response['llm_used']
+            }
             return
 
         if search_enabled:
@@ -61,7 +72,7 @@ class SearchManager:
 
         except Exception as e:
             logger.error(f"Error querying LLM: {e}", exc_info=True)
-            yield {"error": f"Error querying LLM: {e}"}
+            yield {"error": f"Error querying LLM: {str(e)}"}
 
     async def save_query_to_db(self, query, llm_response, search_results, llm_name, db: Session):
         async with self.db_semaphore:
@@ -71,9 +82,12 @@ class SearchManager:
                 return
 
             try:
-                db_query = UserQuery(query_text=query, response_text=llm_response,
-                                     search_results=json.dumps(search_results),
-                                     llm_used=llm_name)
+                db_query = UserQuery(
+                    query_text=query,
+                    response_text=llm_response,
+                    search_results=json.dumps(search_results),
+                    llm_used=llm_name
+                )
                 db.add(db_query)
                 db.commit()
                 db.refresh(db_query)
