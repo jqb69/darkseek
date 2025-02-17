@@ -100,6 +100,42 @@ async def test_search_api_google_failure():
 
 @pytest.mark.asyncio
 
+mport asyncio
+import websockets
+import json
+
+async def websocket_client():
+    uri = "ws://localhost:8000/ws/12345"  # Replace with your server URL and session ID
+    async with websockets.connect(uri) as websocket:
+        print("Connected to WebSocket server")
+
+        # Send a query request
+        query_request = {
+            "query": "What is the capital of France?",
+            "session_id": "12345",
+            "search_enabled": True,
+            "llm_name": "gemma_flash_2.0"
+        }
+        await websocket.send(json.dumps(query_request))
+        print("Sent query request:", query_request)
+
+        # Receive and process responses
+        try:
+            while True:
+                response = await websocket.recv()
+                response_data = json.loads(response)
+                print("Received response:", response_data)
+
+                # Handle different types of responses
+                if response_data.get("type") == "heartbeat":
+                    print("Heartbeat received")
+                elif response_data.get("type") == "llm_response":
+                    print("LLM Response Chunk:", response_data["content"])
+                elif response_data.get("error"):
+                    print("Error:", response_data["error"])
+                    break
+        except websockets.exceptions.ConnectionClosed:
+            print("WebSocket connection closed")
 
 
 
