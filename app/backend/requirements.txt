@@ -10,3 +10,9 @@ pydantic
 httpx
 python-multipart
 tenacity
+sqlalchemy
+fastapi
+json
+logging
+asyncio
+aiomqtt
