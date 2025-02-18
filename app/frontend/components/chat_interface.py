@@ -1,3 +1,4 @@
+#app/foontend/components/chat_interface.py
 import asyncio
 import json
 import websockets
