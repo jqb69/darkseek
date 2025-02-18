@@ -34,3 +34,13 @@ def add_results(combined_results: list, seen_links: set, results: list, num_limi
             if len(combined_results) >= num_limit:
                 return True  # Stop adding if limit reached
     return False
+
+def validate_query(query: str) -> Optional[str]:
+    """
+    Validates and sanitizes the query.
+    Returns None if the query is invalid, otherwise returns the sanitized query.
+    """
+    query = sanitize_query(query)
+    if not query:
+        return None  # Empty query is invalid
+    return query
