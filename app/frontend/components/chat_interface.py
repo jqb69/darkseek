@@ -62,7 +62,11 @@ class WebSocketClient:
                 try:
                     while True:
                         response = await websocket.recv()
-                        response_data = json.loads(response)
+                        try:
+                            response_data = json.loads(response)
+                        except json.JSONDecodeError:
+                            logger.error("Failed to decode JSON response.")
+                            return "Sorry, I couldn't understand the server's response."
                         logger.info(f"Received response: {response_data}")
 
                         # Handle different types of responses
@@ -137,11 +141,17 @@ class MessageDisplay:
 
 
 # === Chat Interface Function ===
-def chat_interface():
+def chat_interface(session_id=None):
     """Main function to run the chat interface."""
+    if session_id is not None:
+        st.session_state.session_id = session_id
     SessionStateManager.initialize_session_state()
     search_enabled, selected_llm = SidebarManager.render_sidebar()
 
+    st.title("DarkSeek")
+
+    MessageDisplay.display_messages()
+    ChatInputHandler.handle_chat_input(selected_llm, search_enabled)
     st.title("DarkSeek")
 
     MessageDisplay.display_messages()
