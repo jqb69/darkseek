@@ -70,15 +70,7 @@ class LLMAPI:
                 response.raise_for_status()
                 data = response.json()
 
-                for token in data.get("tokens", []):
-                    yield {"type": "token", "content": token}  # Yield structured responses
-        except httpx.RequestError as e:
-            logger.error(f"HTTP request error: {e}", exc_info=True)
-            yield {"type": "error", "message": "Failed to connect to the LLM server."}
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}", exc_info=True)
-            yield {"type": "error", "message": "An unexpected error occurred while streaming."}
-
+                
                 for token in data.get("tokens", []):
                     yield {"type": "token", "content": token}  # Yield structured responses
         except httpx.RequestError as e:
