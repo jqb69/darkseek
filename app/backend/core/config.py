@@ -12,6 +12,36 @@ def validate_env_vars():
 
 validate_env_vars()
 
+
+# === Base Directory ===
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Base directory of the backend
+
+# === Certificates Directory ===
+CERTS_DIR = os.path.join(BASE_DIR, "certs")  # Directory for certificates
+os.makedirs(CERTS_DIR, exist_ok=True)  # Ensure the certs directory exists
+
+# === File Paths for Certificates ===
+CA_CERT_PATH = os.path.join(CERTS_DIR, "ca.crt")  # Path to CA certificate
+SERVER_CERT_PATH = os.path.join(CERTS_DIR, "server.crt")  # Path to server certificate
+SERVER_KEY_PATH = os.path.join(CERTS_DIR, "server.key")  # Path to server private key
+
+# === Logs Directory ===
+LOGS_DIR = os.path.join(BASE_DIR, "logs")  # Directory for logs
+os.makedirs(LOGS_DIR, exist_ok=True)  # Ensure the logs directory exists
+
+# === Log File Path ===
+LOG_FILE_PATH = os.path.join(LOGS_DIR, "backend.log")  # Path to backend log file
+
+# === MQTT Broker Configuration ===
+MQTT_BROKER_URI = os.getenv("MQTT_BROKER_URI", "localhost")  # Replace with your broker's URI
+MQTT_PORT = int(os.getenv("MQTT_PORT", 8883))  # Default port for MQTT over TLS/SSL
+
+# === Application Settings ===
+LLM_OPTIONS = ["GPT-4", "GPT-3.5", "Llama2", "Custom LLM"]  # List of available LLMs
+MAX_INPUT_LENGTH = 1000  # Maximum allowed input length for user messages
+
+# === Debug Mode ===
+DEBUG_MODE = os.getenv("DEBUG_MODE", "True").lower() == "true"  # Enable debug mode for development
 # Search Engine API Keys
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_CSE_ID = os.getenv("GOOGLE_CSE_ID")
