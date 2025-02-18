@@ -5,7 +5,7 @@ import websockets
 import streamlit as st
 import uuid
 import logging
-from frontend.static.clientconfig import LLM_OPTIONS, WEBSOCKET_URI, MAX_INPUT_LENGTH
+from app.frontend.static.clientconfig import LLM_OPTIONS, WEBSOCKET_URI, MAX_INPUT_LENGTH
 
 # === Logging Configuration ===
 logging.basicConfig(level=logging.INFO)
