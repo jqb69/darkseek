@@ -1,12 +1,13 @@
 #app/backend/api/search_api.py
-from .caching import cache_manager
-from ..api.llm_api import llm_api
-from ..api.search2.api import search_api
-from .database import get_db, UserQuery
+
+from app.backend.core.caching import cache_manager
+from app.backend.api.llm_api import llm_api
+from app.backend.api.search2.api import search_api
+from app.backend.core.database import get_db, UserQuery
 from sqlalchemy.orm import Session
 from typing import List, Dict, AsyncGenerator
 import json
-from .config import MAX_CHATS
+from app.backend.core.config import MAX_CHATS
 import asyncio
 import logging
 from asyncio import Semaphore
