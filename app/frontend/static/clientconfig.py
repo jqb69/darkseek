@@ -8,8 +8,9 @@ LLM_OPTIONS = [
 ]
 
 # WebSocket server URI
-WEBSOCKET_URI = "ws://localhost:8000/ws/"
-
+WEBSOCKET_URI = "ws://localhost:8000/ws/"QTT
+#MQTTostSERVER ui
+MQTT_URI = "//localhost"
 # Default session ID placeholder
 DEFAULT_SESSION_ID = "default_session_id"
 
