@@ -12,7 +12,6 @@ def validate_env_vars():
 
 validate_env_vars()
 
-
 # === Base Directory ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Base directory of the backend
 
@@ -37,7 +36,7 @@ MQTT_BROKER_URI = os.getenv("MQTT_BROKER_URI", "localhost")  # Replace with your
 MQTT_PORT = int(os.getenv("MQTT_PORT", 8883))  # Default port for MQTT over TLS/SSL
 
 # === Application Settings ===
-LLM_OPTIONS = ["GPT-4", "GPT-3.5", "Llama2", "Custom LLM"]  # List of available LLMs
+LLM_OPTIONS = ["gemma_flash_2.0", "deepseek_r1_llm", "qwen_2.5_max"]  # List of available LLMs
 MAX_INPUT_LENGTH = 1000  # Maximum allowed input length for user messages
 
 # === Debug Mode ===
