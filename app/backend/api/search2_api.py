@@ -1,8 +1,8 @@
 # app/backend/api/search2_api.py
 
 import httpx
-from ..core.config import GOOGLE_API_KEY, GOOGLE_CSE_ID, DUCKDUCKGO_API_KEY, MAX_QUERY
-from ..core.utils import sanitize_query, add_results, validate_query  # Import validate_query
+from app.backend.core.config import GOOGLE_API_KEY, GOOGLE_CSE_ID, DUCKDUCKGO_API_KEY, MAX_QUERY
+from app.backend.core.utils import sanitize_query, add_results, validate_query  # Import validate_query
 from typing import List, Dict, Optional, Union, AsyncGenerator
 import asyncio
 import logging
