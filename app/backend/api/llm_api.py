@@ -2,7 +2,7 @@
 from langchain_community.llms import HuggingFaceHub
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
-from ..core.config import DEFAULT_LLM, STREAMING_CHUNK_SIZE,TGI_SERVER_URL
+from app.backend.core.config import DEFAULT_LLM, STREAMING_CHUNK_SIZE, TGI_SERVER_URL
 from typing import List, Dict, AsyncGenerator
 import httpx
 import json
