@@ -2,7 +2,7 @@
 version: '3.8'
 
 services:
-  backend:  # Renamed from 'web' to 'backend'
+  backend:  # Backend service
     build:
       context: .
       dockerfile: ./app/backend/Dockerfile  # Path to backend Dockerfile
@@ -14,26 +14,54 @@ services:
       - DATABASE_URL=postgresql://user:password@db:5432/darkseekdb
       - REDIS_URL=redis://redis:6379
       - HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN}
+      - MQTT_BROKER_URI=mqtt://mqtt-broker  # MQTT broker URI
+      - MQTT_PORT=1883  # Default MQTT port
     depends_on:
       - db
       - redis
+      - mqtt-broker  # Backend depends on MQTT broker
 
-  frontend:  # New service for the frontend
+  frontend:  # Frontend service
     build:
       context: .
       dockerfile: ./app/frontend/Dockerfile  # Path to frontend Dockerfile
     ports:
       - "8501:8501"  # Streamlit port
     depends_on:
-      - backend # Frontend depends on the backend
+      - backend  # Frontend depends on the backend
 
-  db:
+  db:  # PostgreSQL database
     image: postgres:15
     environment:
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=darkseekdb
     ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:  # Redis cache
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  mqtt-broker:  # MQTT broker service (e.g., Mosquitto)
+    image: eclipse-mosquitto:latest
+    ports:
+      - "1883:1883"  # Standard MQTT port
+      - "9001:9001"  # WebSocket port (optional, for MQTT over WebSockets)
+    volumes:
+      - ./mosquitto/config:/mosquitto/config  # Configuration files
+      - ./mosquitto/logs:/mosquitto/logs     # Logs directory
+      - ./mosquitto/data:/mosquitto/data     # Persistent data storage
+    environment:
+      - MQTT_USERNAME=admin                  # Optional: MQTT username
+      - MQTT_PASSWORD=password               # Optional: MQTT password
+    restart: always
+
+volumes:
+  postgres_data:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
