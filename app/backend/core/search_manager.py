@@ -1,4 +1,16 @@
+
 # app/backend/core/search_manager.py (Modified to handle the search API changes)
+from .caching import cache_manager
+from ..api.llm_api import llm_api
+from ..api.search2.api import search_api
+from .database import get_db, UserQuery
+from sqlalchemy.orm import Session
+from typing import List, Dict, AsyncGenerator
+import json
+from .config import MAX_CHATS
+import asyncio
+import logging
+from asyncio import Semaphore
 class SearchManager:
     def __init__(self, cache_manager=cache_manager, search_api=search_api, llm_api=llm_api):
         self.cache_manager = cache_manager
