@@ -2,8 +2,8 @@
 
 # app/backend/api/search_api.py (Error propagation and Retry-After)
 import httpx
-from ..core.config import GOOGLE_API_KEY, GOOGLE_CSE_ID, DUCKDUCKGO_API_KEY, MAX_QUERY
-from ..core.utils import sanitize_query
+from app.backend.core.config import GOOGLE_API_KEY, GOOGLE_CSE_ID, DUCKDUCKGO_API_KEY, MAX_QUERY
+from app.backend.core.utils import sanitize_query  # Import sanitize
 from typing import List, Dict, Optional, Union, AsyncGenerator
 import asyncio
 import logging
