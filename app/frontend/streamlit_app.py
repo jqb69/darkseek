@@ -2,7 +2,7 @@
 import streamlit as st
 import secrets
 import json # Not used, but imported for consistency.
-from app.frontend.components.chat_interface import chat_interface  # Correct import
+from app.frontend.components.chat2_interface import chat_interface  # Correct import
 from app.frontend.components.login import login_interface  # Correct import
 
 def generate_session_id():
