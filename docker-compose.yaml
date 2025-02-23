@@ -1,0 +1,55 @@
+#darkseeek/docker-compose.yaml
+version: '3.8'
+
+services:
+  backend:  # Backend service
+    build:
+      context: .
+      dockerfile: ./app/backend/Dockerfile  # Path to backend Dockerfile
+    ports:
+      - "8000:8000"  # Backend port
+      - "8080:8080"  # Additional exposed port for your application
+      - "8885:8885"  # Expose port 8885 (if needed by your application)
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
+      - DATABASE_URL=postgresql://user:password@db:5432/darkseekdb
+      - REDIS_URL=redis://redis:6379
+      - HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN}
+      - MQTT_BROKER_HOST=${MQTT_BROKER_HOST}  # External MQTT broker host
+      - MQTT_BROKER_PORT=${MQTT_BROKER_PORT}  # External MQTT broker port
+      - MQTT_TLS=${MQTT_TLS}                  # Indicates if TLS is enabled
+      - MQTT_USERNAME=${MQTT_USERNAME}        # MQTT username (if any)
+      - MQTT_PASSWORD=${MQTT_PASSWORD}        # MQTT password (if any)
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+
+  frontend:  # Frontend service
+    build:
+      context: .
+      dockerfile: ./app/frontend/Dockerfile  # Path to frontend Dockerfile
+    ports:
+      - "8501:8501"  # Streamlit port
+    depends_on:
+      - backend  # Frontend depends on the backend
+
+  db:  # PostgreSQL database
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=darkseekdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:  # Redis cache
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
