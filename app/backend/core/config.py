@@ -77,4 +77,4 @@ MAX_CHATS = int(os.getenv("MAX_CHATS", 12))
 # Database Configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/darkseekdb")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-STREAMING_CHUNK_SIZE = 10
+
