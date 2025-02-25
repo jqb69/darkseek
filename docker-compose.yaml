@@ -1,0 +1,75 @@
+#app/docker-compose.yaml
+version: '3.8'
+
+services:
+  backend-ws:
+    build:
+      context: .
+      dockerfile: ./app/backend/Dockerfile.ws
+    ports:
+      - "8000:8000"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
+      - HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN}
+      - DATABASE_URL=postgresql://user:password@db:5432/darkseekdb
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+
+  backend-mqtt:
+    build:
+      context: .
+      dockerfile: ./app/backend/Dockerfile.mqtt
+    ports:
+      - "8001:8001"
+      - "8885:8885"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
+      - HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN}
+      - DATABASE_URL=postgresql://user:password@db:5432/darkseekdb
+      - REDIS_URL=redis://redis:6379
+      - MQTT_BROKER_HOST=${MQTT_BROKER_HOST}
+      - MQTT_BROKER_PORT=${MQTT_BROKER_PORT}
+      - MQTT_TLS=${MQTT_TLS}
+      - MQTT_USERNAME=${MQTT_USERNAME}
+      - MQTT_PASSWORD=${MQTT_PASSWORD}
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: ./app/frontend/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - WEBSOCKET_URI=ws://backend-ws:8000/ws/
+      - MQTT_URI=http://backend-mqtt:8001
+      - MQTT_BROKER_HOST=test.mosquitto.org
+      - MQTT_BROKER_PORT=8885
+      - MQTT_TLS=true
+
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=darkseekdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
