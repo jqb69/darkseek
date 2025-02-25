@@ -1,0 +1,17 @@
+# /etc/systemd/system/darksearch-backend-mqtt.service
+[Unit]
+Description=DarkSearch MQTT Backend Service
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/docker-compose -f /opt/darksearch/docker-compose.yaml up backend-mqtt db redis
+ExecStop=/usr/local/bin/docker-compose -f /opt/darksearch/docker-compose.yaml stop backend-mqtt db redis
+WorkingDirectory=/opt/darksearch
+Restart=always
+User=yourusername  # Replace with your Google Cloud VM username
+EnvironmentFile=/opt/darksearch/.env
+
+[Install]
+WantedBy=multi-user.target
