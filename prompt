@@ -1,0 +1,28 @@
+
+
+Refined Prompt:
+
+"I’m building a chatbot application called 'Darkseek' with the following structure. The client-side entry point is streamlit_app.py. I need to implement secure sign-up and login functionality with two-factor authentication (2FA) for email, along with Gmail integration. The login UI should mimic the design of Grok.com, reusing and refining the HTML framework from login.html and signup.html.
+Client-Side Requirements:
+
+    MQTT Interface:
+        Implement loginmqtt_interface and signupmqtt_interface to handle encrypted MQTT-based authentication.
+        Pass validation requests to the backend via mqttmain.py.
+
+    WebSocket Interface:
+        Create separate loginws_interface and signupws_interface for WebSocket-based authentication.
+        Pass validation requests to the backend via main.py.
+
+Backend Requirements:
+
+    Develop signup_api and login_api in usermodels.py to manage server-side user registration and login.
+    Ensure seamless integration with the specified user model in usermodels.py.
+    Implement robust security measures, including encryption, input validation, and protection against common vulnerabilities (e.g., SQL injection, XSS).
+
+Additional Requirements:
+
+    Ensure all communications between client and backend are encrypted.
+    Prioritize security, scalability, and user experience.
+    Reuse and optimize existing HTML templates (login.html, signup.html) for consistency and efficiency.
+
+The system should be reliable, secure, and capable of handling high traffic while maintaining low latency."
