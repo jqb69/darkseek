@@ -10,6 +10,46 @@ darksearch/
 │_________├── llm_api.py # LLM management class
 │_________├── search_api.py # Search engine abstraction SearchManagerclass
 │_________├── search2_api.py     # search_api search engine
+|_________|__ mqtt_api.py # define AsyncMQTTServer class
+|
+|_________├── login_api.py #does login validation to database
+|_________├── signup_api.py, handle signup and save to database
+|_______+ core/
+│_________├── config.py      # Configuration file
+|_________[__ database.py #postgres+ redis
+|_________[__ models.py #Data models (for query)
+|_________[__ usermodels.py Models fir login
+|_________[__ caching.py #caching redis
+|_________[__ utils.py # validate_query,sanitize_query method
+|_______+ schemas/
+|_______________|___request_models.py #QueryRequest type
+|_______________|___credentials.py
+|_______Dockerfile.mqtt #Dockerfile for mqtt for the backend
+│   ├── Dockerfil.ws     # Dockerfile for ws
+│   └── requirements.txt
+|___ + frontend/  # Frontend (Streamlit, JavaScript)
+|________streamlit.py # Streamlit application
+|
+|______+ components/    # Reusable Streamlit components (search bar, results display)
+|____________├── chat_interface.py #chat_interface() defined websock client
+|____________├── chat2_interface.py #chat2_interface() defined MQTT client
+|____________├── chat_action.py #ChatAction initilze MQTT
+|____________├── signupmqtt_interface.py handle signup using  mqtt
+|____________├── loginmqtt_interface.py handle login using mqtt
+|____________├── signupws_interface.py handle signup using web socket
+|____________├── loginws_interface.py handle login using web socket
+|
+├darksearch/
+|__+ app /
+|___ + backend/  Backend (Python, FastAPI)
+|____├──  main.py   FastAPI application server received post websockets# inv
+|____├──  mainmqtt.py server side mqtt fastapi server 
+|____├──  loginmain.py server side mqtt fastapi server 
+|_______+ api/
+│_______________      
+│_________├── llm_api.py # LLM management class
+│_________├── search_api.py # Search engine abstraction SearchManagerclass
+│_________├── search2_api.py     # search_api search engine
 |_________|__ mqttapi.py # define AsyncMQTTServer class
 |
 |_________├── login_api.py #does login validation to database
@@ -40,6 +80,20 @@ darksearch/
 |____________├── loginws_interface.py handle login using web socket
 |
 ├______+ static/   # Static assets (CSS, JS,html)
+├_______________+ css/
+|_______________├──style.css
+|_______________+ js/
+│_______________├──script.js
+|_______________+ html/
+|_______________├──login.html
+]_______________├──signup.html
+|_______________clientconfig.py # Client configuration file
+│________├── Dockerfile     # Dockerfile for the frontend
+|        └── requirements.txt
+|_____+ tests/
+|______docker-compose.yaml #docker-compose for project
+|______setup.sh #installation script
+|______.env #environmental variables/   # Static assets (CSS, JS,html)
 ├_______________+ css/
 |_______________├──style.css
 |_______________+ js/
