@@ -46,7 +46,7 @@ check_command docker-compose
 
 # --- Define Project Directory and GitHub Repo ---
 PROJECT_DIR="/opt/darksearch"
-REPO_URL="https://github.com/yourusername/darksearch.git"  # Replace with your GitHub repo URL
+REPO_URL="https://github.com/jqb69/darkseek.git"  # Replace with your GitHub repo URL
 CURRENT_USER=$(whoami)
 
 # --- Clone or Update from GitHub ---
