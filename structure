@@ -51,8 +51,8 @@ darksearch/
 |_______________clientconfig.py # Client configuration file
 │________├── Dockerfile     # Dockerfile for the frontend
 |        └── requirements.txt
-|______+ tests/
-|______docker-compose.yaml #docker-compose for project
-|______setup.sh #installation script
-|______.env #environmental variables/   # Static assets (CSS, JS,html)
+|____+ tests/
+|____docker-compose.yaml #docker-compose for project
+|____setup.sh #installation script
+|____.env #environmental variables/   # Static assets (CSS, JS,html)
 
