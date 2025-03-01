@@ -75,7 +75,7 @@ MAX_QUERY = int(os.getenv("MAX_QUERY", 7))
 MAX_CHATS = int(os.getenv("MAX_CHATS", 50))
 
 # Database Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/darkseekdb")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:Gfysjqb@localhost:5432/darkseekdb")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 CLOUD_SQL_CONNECTION = os.getenv("DATABASE_URL") 
 #REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
