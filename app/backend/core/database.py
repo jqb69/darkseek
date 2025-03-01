@@ -2,7 +2,7 @@
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from .config import DATABASE_URL
+from app.backend.core.config import DATABASE_URL
 import datetime
 
 engine = create_engine(DATABASE_URL)
