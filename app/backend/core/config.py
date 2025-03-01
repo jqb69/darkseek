@@ -55,7 +55,7 @@ LLM_CONFIGS = {
 }
 
 
-STREAMING_CHUNK_SIZE = 128  # Example default value
+STREAMING_CHUNK_SIZE = 512  # Example default value
 LLM_OPTIONS = list(LLM_CONFIGS.keys())  # Automatically reflect available LLMs
 MAX_INPUT_LENGTH = 1000  # Maximum allowed input length for user messages
 
@@ -72,9 +72,10 @@ DEFAULT_LLM = os.getenv("DEFAULT_LLM", "gemma_flash_2.0")
 
 # Constants
 MAX_QUERY = int(os.getenv("MAX_QUERY", 7))
-MAX_CHATS = int(os.getenv("MAX_CHATS", 12))
+MAX_CHATS = int(os.getenv("MAX_CHATS", 50))
 
 # Database Configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/darkseekdb")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-
+CLOUD_SQL_CONNECTION = os.getenv("DATABASE_URL") 
+#REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
