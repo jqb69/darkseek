@@ -1,8 +1,8 @@
 # app/backend/core/caching.py
 import redis
 import json
-from .config import REDIS_URL
-from .utils import generate_query_hash
+from app.backend.core.config import REDIS_URL
+from app.backend.core.utils import generate_query_hash
 
 class CacheManager:
     def __init__(self, redis_url=REDIS_URL):
