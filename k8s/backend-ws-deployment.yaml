@@ -22,7 +22,7 @@ spec:
         - configMapRef:
             name: darkseek-config
         - secretRef:
-            name: darkseekh-secrets
+            name: darkseek-secrets
         env:
         - name: DATABASE_URL
           value: "postgresql://admin:Gfysjqb@ddarkseek-db:5432/darkseekdb"
