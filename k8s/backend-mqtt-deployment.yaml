@@ -1,0 +1,31 @@
+# backend-mqtt-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: darkseek-backend-mqtt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: darkseek-backend-mqtt
+  template:
+    metadata:
+      labels:
+        app: darkseek-backend-mqtt
+    spec:
+      containers:
+      - name: backend-mqtt
+        image: gcr.io/your-project-id/darkseek-backend-mqtt:latest
+        ports:
+        - containerPort: 8001
+        - containerPort: 8885
+        envFrom:
+        - configMapRef:
+            name: darkseek-config
+        - secretRef:
+            name: darseek-secrets
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://admin:Gfysjqbd@darksearch-db:5432/darkseekdb"
+        - name: REDIS_URL
+          value: "redis://darkseek-redis:6379"
