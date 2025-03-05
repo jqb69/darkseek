@@ -1,0 +1,13 @@
+# backend-ws-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: darkseek-backend-ws
+spec:
+  selector:
+    app: darkseek-backend-ws
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+  type: LoadBalancer  # Exposes externally; use ClusterIP if internal only
