@@ -2,11 +2,11 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: darksearch-config
+  name: darkseek-config
 data:
   DEFAULT_LLM: "gemma_flash_2.0"
   MQTT_BROKER_HOST: "test.mosquitto.org"
   MQTT_BROKER_PORT: "8885"
   MQTT_TLS: "true"
-  WEBSOCKET_URI: "ws://darksearch-backend-ws:8000/ws/"  # Internal service name
-  MQTT_URI: "http://darksearch-backend-mqtt:8001"       # Internal service name
+  WEBSOCKET_URI: "ws://darkseek-backend-ws:8000/ws/"  # Internal service name
+  MQTT_URI: "http://darkseek-backend-mqtt:8001"       # Internal service name
