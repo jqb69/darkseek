@@ -1,0 +1,30 @@
+# backend-ws-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: darkseek-backend-ws
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: darkseek-backend-ws
+  template:
+    metadata:
+      labels:
+        app: darkseek-backend-ws
+    spec:
+      containers:
+      - name: backend-ws
+        image: gcr.io/your-project-id/darkseek-backend-ws:latest
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: darkseek-config
+        - secretRef:
+            name: darkseekh-secrets
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://admin:Gfysjqb@ddarkseek-db:5432/darkseekdb"
+        - name: REDIS_URL
+          value: "redis://darkseek-redis:6379"
