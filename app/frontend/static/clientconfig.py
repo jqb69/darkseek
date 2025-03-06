@@ -8,11 +8,11 @@ LLM_OPTIONS = [
 ]
 
 # WebSocket server URI
-WEBSOCKET_URI = "ws://localhost:8000/ws/"QTT
+WEBSOCKET_URI = "ws://darkseek-backend-ws:8000/ws/"
 #MQTTostSERVER ui
-MQTT_URI = "//localhost"
+MQTT_URI = "http://darkseek-backend-mqtt:8001"
 # Default session ID placeholder
 DEFAULT_SESSION_ID = "default_session_id"
 
 # Maximum input length for user queries
-MAX_INPUT_LENGTH = 500
+MAX_INPUT_LENGTH = 512
