@@ -1,0 +1,20 @@
+# redis-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: darkseek-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: darkseek-redis
+  template:
+    metadata:
+      labels:
+        app: darkseek-redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
