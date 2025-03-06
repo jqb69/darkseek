@@ -49,8 +49,8 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - WEBSOCKET_URI=ws://localhost-ws:8000/ws/
-      - MQTT_URI=http://localhost-mqtt:8001
+      - WEBSOCKET_URI=ws://darkseek-backend-ws:8000/ws/
+      - MQTT_URI=http://darkseek-backend-mqtt:8001
       - MQTT_BROKER_HOST=test.mosquitto.org
       - MQTT_BROKER_PORT=8885
       - MQTT_TLS=true
