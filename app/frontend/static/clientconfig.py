@@ -14,6 +14,10 @@ CERTS_DIR = /etc/mosquitto/ssl/  # Directory for certificates
 CA_CERT_PATH = os.path.join(CERTS_DIR, "mosquitto.org.crt")  # Path to CA certificate
 SERVER_CERT_PATH = os.path.join(CERTS_DIR, "test.mosquitto.org.crt")  # Path to server certificate
 SERVER_KEY_PATH = os.path.join(CERTS_DIR, "test.mosquitto.org.key")  # Path to server private key
+# === MQTT Broker Configuration ===
+MQTT_BROKER_URI = os.getenv("MQTT_BROKER_URI", "test.mosquitto.org")  # Replace with your broker's URI
+MQTT_PORT = int(os.getenv("MQTT_PORT", 8885))  # Default port for MQTT over TLS/SSL
+
 # WebSocket server URI
 WEBSOCKET_URI = "ws://darkseek-backend-ws:8000/ws/"
 #MQTTostSERVER ui
