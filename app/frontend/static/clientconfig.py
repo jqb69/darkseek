@@ -26,4 +26,4 @@ MQTT_URI = "http://darkseek-backend-mqtt:8001"
 DEFAULT_SESSION_ID = "default_session_id"
 
 # Maximum input length for user queries
-MAX_INPUT_LENGTH = 512
+MAX_INPUT_LENGTH = 1000
