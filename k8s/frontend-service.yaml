@@ -1,0 +1,13 @@
+# frontend-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: darkseek-frontend
+spec:
+  selector:
+    app: darkseek-frontend
+  ports:
+  - port: 8501
+    targetPort: 8501
+    protocol: TCP
+  type: LoadBalancer
