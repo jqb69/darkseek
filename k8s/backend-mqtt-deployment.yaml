@@ -26,6 +26,6 @@ spec:
             name: darseek-secrets
         env:
         - name: DATABASE_URL
-          value: "postgresql://admin:Gfysjqbd@darksearch-db:5432/darkseekdb"
+          value: "postgresql://admin:Gfysjqbd@darkseekdb:5432/darkseekdb"
         - name: REDIS_URL
           value: "redis://darkseek-redis:6379"
