@@ -1,4 +1,4 @@
-# configmap.yaml
+# configmap.yaml darkseek-backend inst localhost
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -8,5 +8,5 @@ data:
   MQTT_BROKER_HOST: "test.mosquitto.org"
   MQTT_BROKER_PORT: "8885"
   MQTT_TLS: "true"
-  WEBSOCKET_URI: "ws://darkseek-backend-ws:8000/ws/"  # Internal service name
-  MQTT_URI: "http://darkseek-backend-mqtt:8001"       # Internal service name
+  WEBSOCKET_URI: "ws://localhost-ws:8000/ws/"  # Internal service name
+  MQTT_URI: "http://localhost-mqtt:8001"       # Internal service name
