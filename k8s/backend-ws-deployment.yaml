@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: backend-ws
-        image: gcr.io/your-project-id/darkseek-backend-ws:latest
+        image: gcr.io/ascendant-lore-452208-b6/darkseek-backend-ws:latest
         ports:
         - containerPort: 8000
         envFrom:
