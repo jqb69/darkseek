@@ -2,24 +2,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: darksearch-frontend
+  name: darkseek-frontend
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: darksearch-frontend
+      app: darkseek-frontend
   template:
     metadata:
       labels:
-        app: darksearch-frontend
+        app: darkseek-frontend
     spec:
       containers:
       - name: frontend
-        image: gcr.io/your-project-id/darksearch-frontend:latest
+        image: gcr.io/your-project-id/ddarkseek-frontend:latest
         ports:
         - containerPort: 8501
         envFrom:
         - configMapRef:
-            name: darksearch-config
+            name: darkseek-config
         - secretRef:
-            name: darksearch-secrets
+            name: darkseek-secrets
