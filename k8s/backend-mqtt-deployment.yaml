@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: backend-mqtt
-        image: gcr.io/your-project-id/darkseek-backend-mqtt:latest
+        image: gcr.io/ascendant-lore-452208-b6/darkseek-backend-mqtt:latest
         ports:
         - containerPort: 8001
         - containerPort: 8885
