@@ -1,4 +1,4 @@
-name: Deploy Docker Image
+name: Deploy Docker Images
 
 on:
   push:
@@ -22,13 +22,29 @@ jobs:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
 
-    - name: Build and push Docker image
+    - name: Build and push Docker image (Backend - WS)
       uses: docker/build-push-action@v3
       with:
         context: .
         file: ./app/backend/Dockerfile.ws  # Adjust the Dockerfile path accordingly
         push: true
-        tags: jqb69/darkseek:latest  # Change this to your Docker Hub repository and tag
+        tags: jqb69/darkseek-backend-ws:latest  # Change this to your Docker Hub repository and tag
+
+    - name: Build and push Docker image (Backend - MQTT)
+      uses: docker/build-push-action@v3
+      with:
+        context: .
+        file: ./app/backend/Dockerfile.mqtt  # Adjust the Dockerfile path accordingly
+        push: true
+        tags: jqb69/darkseek-backend-mqtt:latest  # Change this to your Docker Hub repository and tag
+
+    - name: Build and push Docker image (Frontend)
+      uses: docker/build-push-action@v3
+      with:
+        context: .
+        file: ./app/frontend/Dockerfile  # Adjust the Dockerfile path accordingly
+        push: true
+        tags: jqb69/darkseek-frontend:latest  # Change this to your Docker Hub repository and tag
 
     - name: Deploy with Docker Compose
       run: |
