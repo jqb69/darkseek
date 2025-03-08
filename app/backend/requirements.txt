@@ -13,5 +13,4 @@ python-dotenv
 #langchain
 python-multipart
 tenacity
-logging
 asyncio
