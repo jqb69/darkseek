@@ -46,6 +46,11 @@ jobs:
         push: true
         tags: jqb69/darkseek-frontend:latest  # Change this to your Docker Hub repository and tag
 
+    - name: Install Docker Compose
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y docker-compose
+
     - name: Deploy with Docker Compose
       run: |
         docker-compose -f docker-compose.yaml up -d
