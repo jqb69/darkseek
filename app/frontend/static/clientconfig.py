@@ -19,9 +19,9 @@ MQTT_BROKER_URI = os.getenv("MQTT_BROKER_URI", "test.mosquitto.org")  # Replace 
 MQTT_PORT = int(os.getenv("MQTT_PORT", 8885))  # Default port for MQTT over TLS/SSL
 
 # WebSocket server URI
-WEBSOCKET_URI = "ws://darkseek-backend-ws:8000/ws/"
+WEBSOCKET_URI = os.getenv("WEBSOCKET_URI", "wss://darkseek.yourdomain.com/ws/")
 #MQTTostSERVER ui
-MQTT_URI = "http://darkseek-backend-mqtt:8001"
+MQTT_URI = os.getenv("MQTT_URI", "https:darkseek-backend-mqtt:8001")
 # Default session ID placeholder
 DEFAULT_SESSION_ID = "default_session_id"
 
