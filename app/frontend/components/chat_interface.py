@@ -7,7 +7,7 @@ import uuid
 import logging
 from app.frontend.static.clientconfig import LLM_OPTIONS, WEBSOCKET_URI, MAX_INPUT_LENGTH
 
-# === Logging Configuration ===
+# === Logging Configuration =====
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
