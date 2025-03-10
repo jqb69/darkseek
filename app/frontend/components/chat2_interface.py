@@ -1,25 +1,12 @@
-# app/frontend/components/chat_interface.py
+# app/frontend/components/chat2_interface.py
+import asyncio
 import json
 import aiomqtt
-import requests
-import re
 import streamlit as st
 import uuid
 import logging
-from app.frontend.static.clientconfig import (
-    MQTT_BROKER_URI,
-    MQTT_PORT,
-    CA_CERT_PATH,
-    CLIENT_CERT_PATH,
-    CLIENT_KEY_PATH,
-    LLM_OPTIONS,
-    MAX_INPUT_LENGTH,
-    MQTT_URI,
-)
-from app.frontend.components.chat_action import ChatActions  # Import ChatActions
-import asyncio
-import ssl
-import time
+import requests
+from app.frontend.static.clientconfig import LLM_OPTIONS, MQTT_URI, MQTT_BROKER_HOST, MQTT_BROKER_PORT, MAX_INPUT_LENGTH
 
 # === Logging Configuration ===
 logging.basicConfig(level=logging.INFO)
@@ -33,262 +20,120 @@ class SessionStateManager:
         defaults = {
             "messages": [],
             "session_id": str(uuid.uuid4()),
-            "clear_chat_confirmed": False,
-            "new_session_confirmed": False,
         }
         for key, value in defaults.items():
             if key not in st.session_state:
                 st.session_state[key] = value
 
-# === Asynchronous MQTT Client ===
+# === MQTT Client ===
 class AsyncMQTTClient:
     def __init__(self):
-        self.client = aiomqtt.Client()
-        self.client.on_connect = self.on_connect
-        self.client.on_message = self.on_message
-        self.response_queue = asyncio.Queue()  # Use a queue for responses
-
-    async def on_connect(self, client, userdata, flags, rc):
-        try:
-            if rc == 0:
-                logger.info("Connected to MQTT broker")
-                await client.subscribe(f"chat/#")  # Subscribe to all chat topics
-            else:
-                logger.error(f"Failed to connect to MQTT broker, return code: {rc}")
-                raise ConnectionError(f"Failed to connect to MQTT broker, return code: {rc}")
-        except Exception as e:
-            logger.error(f"Error on connect: {e}")
-            raise
-
-    async def on_message(self, client, userdata, msg):
-        try:
-            response_data = json.loads(msg.payload)
-            logger.info(f"Received response: {response_data}")
-            if response_data.get("error"):
-                logger.error(f"Error from server: {response_data['error']}")
-                await self.response_queue.put("Sorry, I couldn't process your request at the moment.")
-            else:
-                await self.response_queue.put(response_data["content"])  # Push message to the queue
-        except json.JSONDecodeError:
-            logger.error("Failed to decode JSON response.")
-            await self.response_queue.put("Sorry, I couldn't understand the server's response.")
-        except Exception as e:
-            logger.error(f"Error on message: {e}")
-            await self.response_queue.put("Sorry, an error occurred.")
-
-    async def get_response(self, timeout=10):
-        """Get the response from the queue with a timeout."""
-        try:
-            response = await asyncio.wait_for(self.response_queue.get(), timeout)
-            return response
-        except asyncio.TimeoutError:
-            logger.error("Response timeout.")
-            return "The request timed out. Please try again."
-        except Exception as e:
-            logger.error(f"Failed to get response: {e}")
-            return "Failed to get response. Please try again."
+        self.client = aiomqtt.Client(hostname=MQTT_BROKER_HOST, port=int(MQTT_BROKER_PORT), tls_context=True)
+        self.response_queue = asyncio.Queue()
 
     async def connect(self):
-        try:
-            # Configure TLS settings using paths from clientconfig
-            self.client.tls_set(
-                ca_certs=CA_CERT_PATH,
-                certfile=CLIENT_CERT_PATH,
-                keyfile=CLIENT_KEY_PATH,
-                tls_version=ssl.PROTOCOL_TLSv1_2
-            )
-            self.client.tls_insecure_set(False)  # Set to True only for testing with self-signed certificates
+        """Connect to the MQTT broker."""
+        await self.client.connect()
+        await self.client.subscribe("chat/#")
+        asyncio.create_task(self.listen())
 
-            # Connect to the broker
-            await self.client.connect(MQTT_BROKER_URI, MQTT_PORT)
-            await self.client.loop_start()  # Start the loop to process incoming messages
-        except ConnectionError as e:
-            logger.error(f"Failed to connect to MQTT broker: {e}")
-            st.error("Could not connect to the MQTT broker. Please check your settings.")
-            raise
-        except Exception as e:
-            logger.error(f"Failed to connect to MQTT broker: {e}")
-            st.error("Failed to connect to the MQTT broker. Please try again.")
-            raise
+    async def listen(self):
+        """Listen for MQTT messages."""
+        async for message in self.client.messages:
+            payload = message.payload.decode()
+            try:
+                response_data = json.loads(payload)
+                await self.response_queue.put(response_data["content"])
+            except json.JSONDecodeError:
+                logger.error("Failed to decode MQTT message payload.")
 
-    async def publish_query(self, user_input, selected_llm, search_enabled):
+    async def publish_query(self, user_input: str, selected_llm: str, search_enabled: bool):
+        """Send query via HTTPS to the backend and wait for MQTT response."""
+        query_request = {
+            "query": user_input,
+            "session_id": st.session_state.session_id,
+            "search_enabled": search_enabled,
+            "llm_name": selected_llm,
+        }
         try:
-            query_request = {
-                "query": user_input,
-                "session_id": st.session_state.session_id,
-                "search_enabled": search_enabled,
-                "llm_name": selected_llm,
-            }
-            # Send the query to the FastAPI endpoint
-            response = requests.post(MQTT_URI + "/process_query/", json=query_request)
-            if response.status_code == 200:
-                logger.info(f"Query processed successfully: {query_request}")
-            else:
-                logger.error(f"Failed to process query: {response.text}")
-                st.error("Failed to process your query. Please try again.")
-        except Exception as e:
-            logger.error(f"Failed to publish query: {e}")
-            st.error("Failed to send your message. Please try again.")
-            raise
-
-    async def close_connection(self):
-        """Close the MQTT connection."""
-        try:
-            await self.client.disconnect()
-            logger.info("Disconnected from MQTT broker.")
-        except Exception as e:
-            logger.error(f"Failed to disconnect: {e}")
-            raise
+            # Use HTTPS for the POST request
+            response = requests.post(f"{MQTT_URI}/process_query/", json=query_request, verify=True)
+            response.raise_for_status()
+            logger.info(f"Query sent to {MQTT_URI}/process_query/: {query_request}")
+            # Wait for response via MQTT
+            assistant_response = await asyncio.wait_for(self.response_queue.get(), timeout=30)
+            return assistant_response
+        except requests.RequestException as e:
+            logger.error(f"Failed to send query to {MQTT_URI}: {e}")
+            return "Sorry, I couldn't connect to the server at the moment."
+        except asyncio.TimeoutError:
+            logger.error("Timeout waiting for MQTT response.")
+            return "Sorry, no response received in time."
 
 # === Chat Input Handling ===
 class ChatInputHandler:
     @staticmethod
-    async def handle_chat_input(selected_llm: str, search_enabled: bool, mqtt_client: AsyncMQTTClient):
-        """Handle user input and generate assistant response."""
-        try:
-            user_input = await ChatInputHandler.get_user_input()
-            if user_input:
-                await ChatInputHandler.publish_query(user_input, selected_llm, search_enabled, mqtt_client)
-                response = await ChatInputHandler.get_response(mqtt_client)
-                if response:
-                    st.session_state.messages.append({"role": "assistant", "content": response})
-                    with st.chat_message("assistant"):
-                        st.markdown(response)
-        except Exception as e:
-            logger.error(f"Error handling chat input: {e}")
-            st.error("Failed to handle your input. Please try again.")
-
-    @staticmethod
-    async def get_user_input() -> str:
-        """Get user input from the form."""
-        try:
-            with st.form("chat_form"):
-                user_input = st.text_input("Ask me anything...", key="chat_input")
-                submit_button = st.form_submit_button("Submit")
-            if submit_button:
-                if ChatInputHandler.validate_user_input(user_input):
-                    return user_input
-                else:
-                    st.error(f"Please enter a valid message (max {MAX_INPUT_LENGTH} characters).")
-                return ""
-            return ""
-        except Exception as e:
-            logger.error(f"Error validating user input: {e}")
-            st.error("Failed to send your message. Please try again.")
-            raise
-
-    @staticmethod
-    async def publish_query(user_input: str, selected_llm: str, search_enabled: bool, mqtt_client: AsyncMQTTClient):
-        """Publish the query to the MQTT broker."""
-        try:
-            await mqtt_client.publish_query(user_input, selected_llm, search_enabled)
-        except Exception as e:
-            logger.error(f"Failed to publish query: {e}")
-            st.error("Failed to send your message. Please try again.")
-            raise
-
-    @staticmethod
-    async def get_response(mqtt_client: AsyncMQTTClient) -> str:
-        """Get the response from the MQTT broker using the queue."""
-        try:
-            response = await mqtt_client.get_response(timeout=10)
-            return response
-        except Exception as e:
-                logger.error(f"Failed to get response: {e}")
-            st.error("Failed to get response. Please try again.")
-            raise
-
-    
-
-    def sanitize_input(user_input: str) -> str:
-        """Sanitize user input to prevent injection attacks."""
-        sanitized = re.sub(r"[^a-zA-Z0-9\s\?\.,!]", "", user_input)
-        return sanitized.strip()
-
-    @staticmethod
     def validate_user_input(user_input: str) -> bool:
         """Validate user input."""
-        try:
-            sanitized_input = sanitize_input(user_input)
-            if not sanitized_input:
-                logger.warning("Empty or invalid input detected.")
-                return False
-            if len(sanitized_input) > MAX_INPUT_LENGTH:
-                logger.warning(f"Input exceeds character limit of {MAX_INPUT_LENGTH}.")
-                return False
-            return True
-        except Exception as e:
-            logger.error(f"Failed to validate user input: {e}")
-            st.error("Failed to validate user input. Please try again.")
-            raise
+        if not user_input.strip():
+            logger.warning("Empty input detected.")
+            return False
+        if len(user_input) > MAX_INPUT_LENGTH:
+            logger.warning(f"Input exceeds character limit of {MAX_INPUT_LENGTH}.")
+            return False
+        return True
+
+    @staticmethod
+    async def handle_chat_input(client: AsyncMQTTClient, selected_llm: str, search_enabled: bool):
+        """Handle user input and generate assistant response."""
+        user_input = st.chat_input("Ask me anything...", key="chat_input")
+        if user_input:
+            if ChatInputHandler.validate_user_input(user_input):
+                with st.spinner("Generating response..."):
+                    assistant_response = await client.publish_query(user_input, selected_llm, search_enabled)
+                    st.session_state.messages.append({"role": "assistant", "content": assistant_response})
+                    with st.chat_message("assistant"):
+                        st.markdown(assistant_response)
+            else:
+                st.error(f"Please enter a valid message (max {MAX_INPUT_LENGTH} characters).")
 
 # === Sidebar Settings ===
 class SidebarManager:
     @staticmethod
     def render_sidebar():
         """Render sidebar settings."""
-        try:
-            with st.sidebar:
-                st.title("DarkSeek Settings")
-                search_enabled = st.checkbox("Enable Web Search", value=True)
-                selected_llm = st.selectbox("Select LLM", LLM_OPTIONS, index=0)  # Use centralized LLM options
-                st.markdown("---")
-                st.markdown("DarkSeek is an AI-powered chatbot...")
-            return search_enabled, selected_llm
-        except Exception as e:
-            logger.error(f"Failed to render sidebar: {e}")
-            st.error("Failed to render sidebar. Please try again.")
-            raise
+        with st.sidebar:
+            st.title("DarkSeek Settings")
+            search_enabled = st.checkbox("Enable Web Search", value=True)
+            selected_llm = st.selectbox("Select LLM", LLM_OPTIONS, index=0)
+            st.markdown("---")
+            st.markdown("DarkSeek is an AI-powered chatbot...")
+        return search_enabled, selected_llm
 
 # === Message Display ===
 class MessageDisplay:
     @staticmethod
     def display_messages():
         """Display chat messages."""
-        try:
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-        except Exception as e:
-            logger.error(f"Failed to display messages: {e}")
-            st.error("Failed to display messages. Please try again.")
-            raise
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
 
 # === Chat Interface Function ===
-async def chat_interface(session_id=None):
-    mqtt_client = None
-    try:
-        if session_id is not None:
-            st.session_state.session_id = session_id
-        SessionStateManager.initialize_session_state()
-        
-        # Create an instance of the MQTT client
-        mqtt_client = AsyncMQTTClient()
-        await mqtt_client.connect()  # Connect to the MQTT broker
+async def chat2_interface(session_id=None):
+    """Main function to run the MQTT chat interface."""
+    if session_id is not None:
+        st.session_state.session_id = session_id
+    SessionStateManager.initialize_session_state()
+    search_enabled, selected_llm = SidebarManager.render_sidebar()
 
-        search_enabled, selected_llm = SidebarManager.render_sidebar()
+    client = AsyncMQTTClient()
+    await client.connect()
 
-        st.title("DarkSeek")
-        ChatActions.handle_clear_chat()
-        ChatActions.handle_new_chat_session()
-        await ChatInputHandler.handle_chat_input(selected_llm, search_enabled, mqtt_client)
-        MessageDisplay.display_messages()
+    st.title("DarkSeek")
+    MessageDisplay.display_messages()
+    await ChatInputHandler.handle_chat_input(client, selected_llm, search_enabled)
 
-    except Exception as e:
-        logger.error(f"Failed to run chat interface: {e}")
-        st.error("Failed to run chat interface. Please try again.")
-        raise
-    finally:
-        if mqtt_client:
-            await mqtt_client.close_connection()
-
-
-# Run the chat interface
-#try:
-#    await chat_interface()
-#    st.experimental_rerun()
-#except Exception as e:
-#    logger.error(f"Failed to run chat interface: {e}")
-#    st.error("Failed to run chat interface. Please try again.")
-
-
+# Run the async function
+if __name__ == "__main__":
+    asyncio.run(chat2_interface())
