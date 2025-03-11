@@ -1,0 +1,63 @@
+name: Deploy to GKE With DNS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+    - name: Install kubectl
+      run: |
+        curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x ./kubectl
+        sudo mv ./kubectl /usr/local/bin/kubectl
+
+    - name: Configure kubectl
+      run: |
+        gcloud auth activate-service-account --key-file=${{ github.workspace }}/gcloud.json
+        gcloud container clusters get-credentials ${{ secrets.GKE_CLUSTER_NAME }} --zone ${{ secrets.GKE_CLUSTER_ZONE }} --project ${{ secrets.GCP_PROJECT_ID }}
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Generate Secret Manifest
+      run: |
+        cat <<EOF > ./k8s/secret.yaml
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: darkseek-secrets
+        type: Opaque
+        data:
+          GOOGLE_API_KEY: $(echo -n "${{ secrets.GOOGLE_API_KEY }}" | base64)
+          GOOGLE_CSE_ID: $(echo -n "${{ secrets.GOOGLE_CSE_ID }}" | base64)
+          HUGGINGFACEHUB_API_TOKEN: $(echo -n "${{ secrets.HUGGINGFACEHUB_API_TOKEN }}" | base64)
+          POSTGRES_USER: $(echo -n "${{ secrets.POSTGRES_USER }}" | base64)
+          POSTGRES_PASSWORD: $(echo -n "${{ secrets.POSTGRES_PASSWORD }}" | base64)
+          POSTGRES_DB: $(echo -n "${{ secrets.POSTGRES_DB }}" | base64)
+        EOF
+
+    - name: Install Ingress-Nginx Controller
+      run: |
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+
+    - name: Deploy to GKE with DNS
+      run: |
+        chmod +x ./k8s/deploy_k8sdns.sh
+        ./k8s/deploy_k8sdns.sh
