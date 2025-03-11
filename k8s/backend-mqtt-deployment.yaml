@@ -1,4 +1,3 @@
-# backend-mqtt-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,9 +22,8 @@ spec:
         - configMapRef:
             name: darkseek-config
         - secretRef:
-            name: darseek-secrets
+            name: darkseek-secrets
         env:
         - name: DATABASE_URL
-          value: "postgresql://admin:Gfysjqbd@darkseekdb:5432/darkseekdb"
-        - name: REDIS_URL
-          value: "redis://darkseek-redis:6379"
+          value: "postgresql://$(kubectl get secret darkseek-secrets -o jsonpath='{.data.POSTGRES_USER}' | base64 -d):$(kubectl get secret darkseek-secrets -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)@darkseek-db:5432/$(kubectl get secret darkseek-secrets -o jsonpath='{.data.POSTGRES_DB}' | base64 -d)"
+        # REDIS_URL is now sourced from darkseek-secrets via envFrom, no need to hardcode
