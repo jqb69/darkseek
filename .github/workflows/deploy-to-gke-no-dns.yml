@@ -1,0 +1,53 @@
+name: Deploy to GKE Without DNS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+    - name: Install kubectl
+      run: |
+        curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x ./kubectl
+        sudo mv ./kubectl /usr/local/bin/kubectl
+
+    - name: Configure kubectl
+      run: |
+        gcloud auth activate-service-account --key-file=${{ github.workspace }}/gcloud.json
+        gcloud container clusters get-credentials ${{ secrets.GKE_CLUSTER_NAME }} --zone ${{ secrets.GKE_CLUSTER_ZONE }} --project ${{ secrets.GCP_PROJECT_ID }}
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Deploy to GKE
+      run: |
+        chmod +x ./k8s/deploy_k8s.sh
+        ./k8s/deploy_k8s.sh
+      env:
+        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+        HUGGINGFACEHUB_API_TOKEN: ${{ secrets.HUGGINGFACEHUB_API_TOKEN }}
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        REDIS_URL: ${{ secrets.REDIS_URL }}
+        MQTT_BROKER_HOST: ${{ secrets.MQTT_BROKER_HOST }}
+        MQTT_BROKER_PORT: ${{ secrets.MQTT_BROKER_PORT }}
+        MQTT_TLS: ${{ secrets.MQTT_TLS }}
+        MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
+        MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
