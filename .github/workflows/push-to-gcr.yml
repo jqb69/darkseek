@@ -1,0 +1,46 @@
+name: Push Docker Images to GCR
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Set up Google Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+    - name: Configure Docker for GCR
+      run: |
+        gcloud auth configure-docker --quiet
+
+    - name: Build and Push Frontend Image
+      run: |
+        docker build -f app/frontend/Dockerfile -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-frontend:latest .
+        docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-frontend:latest
+      working-directory: ./
+
+    - name: Build and Push Backend MQTT Image
+      run: |
+        docker build -f app/backend/Dockerfile.mqtt -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest .
+        docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest
+      working-directory: ./
+
+    - name: Build and Push Backend WebSocket Image
+      run: |
+        docker build -f app/backend/Dockerfile.ws -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-ws:latest .
+        docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-ws:latest
+      working-directory: ./
