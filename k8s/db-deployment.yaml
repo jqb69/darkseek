@@ -1,17 +1,17 @@
-# db-deployment.yaml
+# k8s/db-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: darkseekdb
+  name: darkseek-db
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: darkseekdb
+      app: darkseek-db
   template:
     metadata:
       labels:
-        app: darkseekdb
+        app: darkseek-db
     spec:
       containers:
       - name: postgres
@@ -40,4 +40,4 @@ spec:
       volumes:
       - name: postgres-data
         persistentVolumeClaim:
-          claimName: postgres-pvc
+          claimName: darkseek-postgres-pvc
