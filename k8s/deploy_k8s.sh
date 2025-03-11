@@ -9,13 +9,9 @@ set -e
 check_kubectl() {
   if ! command -v kubectl &> /dev/null; then
     echo "Error: 'kubectl' is not installed. Attempting to install it..." >&2
-    # Download the latest stable kubectl binary
     curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
-    # Make it executable
     chmod +x kubectl
-    # Move to a directory in PATH
     sudo mv kubectl /usr/local/bin/kubectl
-    # Verify installation
     if ! command -v kubectl &> /dev/null; then
       echo "Error: Failed to install 'kubectl'. Please install it manually." >&2
       exit 1
@@ -43,9 +39,23 @@ cd "$K8S_DIR"
 # --- Deploy All Manifests ---
 echo "Deploying DarkSeek to GKE without DNS..."
 
-# Shared configuration and secrets
+# Shared configuration
 kubectl apply -f configmap.yaml
-kubectl apply -f secret.yaml
+
+# Create or update secrets from environment variables
+echo "Creating or updating darkseek-secrets from environment variables..."
+kubectl create secret generic darkseek-secrets \
+  --from-literal=GOOGLE_API_KEY="${GOOGLE_API_KEY}" \
+  --from-literal=GOOGLE_CSE_ID="${GOOGLE_CSE_ID}" \
+  --from-literal=HUGGINGFACEHUB_API_TOKEN="${HUGGINGFACEHUB_API_TOKEN}" \
+  --from-literal=DATABASE_URL="${DATABASE_URL}" \
+  --from-literal=REDIS_URL="${REDIS_URL}" \
+  --from-literal=MQTT_BROKER_HOST="${MQTT_BROKER_HOST}" \
+  --from-literal=MQTT_BROKER_PORT="${MQTT_BROKER_PORT}" \
+  --from-literal=MQTT_TLS="${MQTT_TLS}" \
+  --from-literal=MQTT_USERNAME="${MQTT_USERNAME}" \
+  --from-literal=MQTT_PASSWORD="${MQTT_PASSWORD}" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 # Deployment files
 kubectl apply -f backend-ws-deployment.yaml
@@ -89,6 +99,6 @@ kubectl get services
 # --- Success Message ---
 echo "\nDarkSeek deployed successfully to GKE (Without DNS)!"
 echo "Access services at:"
-echo "  - WebSocket: wss://<WS_IP>:443/ws/{session_id}"
-echo "  - MQTT: https://<MQTT_IP>:443/process_query/"
+echo "  - WebSocket: wss://$WS_IP:443/ws/{session_id}"
+echo "  - MQTT: https://$MQTT_IP:443/process_query/"
 echo "  - Frontend: http://<frontend-ip>:8501"
