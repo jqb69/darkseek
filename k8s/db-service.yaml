@@ -1,11 +1,11 @@
-# db-service.yaml
+# k8s/db-service.yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: darkseekdb
+  name: darkseek-db
 spec:
   selector:
-    app: darkseekdb
+    app: darkseek-db
   ports:
   - port: 5432
     targetPort: 5432
