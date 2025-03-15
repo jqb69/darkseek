@@ -12,7 +12,7 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
       - HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN}
-      - DATABASE_URL=postgresql://admn:Gfysjqb@db:5432/darkseekdb
+      - DATABASE_URL="postgresql://admin:Gfysjqb@localhost:5432/darkseekdb"
       - REDIS_URL=redis://redis:6379
     depends_on:
       - db
@@ -30,7 +30,7 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
       - HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN}
-      - DATABASE_URL=postgresql://user:password@db:5432/darkseekdb
+      - DATABASE_URL="postgresql://admin:Gfysjqb@localhost:5432/darkseekdb"
       - REDIS_URL=redis://redis:6379
       - MQTT_BROKER_HOST=${MQTT_BROKER_HOST}
       - MQTT_BROKER_PORT=${MQTT_BROKER_PORT}
