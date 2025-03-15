@@ -22,6 +22,7 @@ jobs:
       uses: google-github-actions/setup-gcloud@v2
       with:
         project_id: ${{ secrets.GCP_PROJECT_ID }}
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
 
     - name: Install kubectl
       run: |
@@ -29,12 +30,11 @@ jobs:
         chmod +x ./kubectl
         sudo mv ./kubectl /usr/local/bin/kubectl
 
-    - name: Configure kubectl
-      run: |
-        gcloud auth activate-service-account --key-file=${{ github.workspace }}/gcloud.json
-        gcloud container clusters get-credentials ${{ secrets.GKE_CLUSTER_NAME }} --zone ${{ secrets.GKE_CLUSTER_ZONE }} --project ${{ secrets.GCP_PROJECT_ID }}
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
+   - name: Configure kubectl
+        run: |
+          echo "${{ secrets.GCP_SA_KEY }}" > /home/runner/work/darkseek/darkseek/gcloud.json
+          gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
+          gcloud container clusters get-credentials [CLUSTER_NAME] --zone [ZONE] --project ${{ secrets.GCP_PROJECT_ID }}
 
     - name: Generate Secret Manifest
       run: |
