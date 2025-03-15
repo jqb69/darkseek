@@ -95,7 +95,7 @@ DEFAULT_LLM="gemma_flash_2.0"
 MQTT_BROKER_HOST="test.mosquitto.org"
 MQTT_BROKER_PORT=8885
 MQTT_TLS=true
-DATABASE_URL="postgresql://user:password@localhost:5432/darkseekdb"
+DATABASE_URL="postgresql://admin:Gfysjqb@localhost:5432/darkseekdb"
 REDIS_URL="redis://localhost:6379"
 EOL
   fi
