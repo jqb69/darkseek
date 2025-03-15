@@ -30,18 +30,21 @@ jobs:
 
     - name: Build and Push Frontend Image
       run: |
-        docker build -f app/frontend/Dockerfile -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-frontend:latest .
+        docker-compose -f docker-compose.yaml build frontend
+        docker tag darkseek_frontend:latest gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-frontend:latest
         docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-frontend:latest
       working-directory: ./
 
     - name: Build and Push Backend MQTT Image
       run: |
-        docker build -f app/backend/Dockerfile.mqtt -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest .
+        docker-compose -f docker-compose.yaml build backend-mqtt
+        docker tag darkseek_backend-mqtt:latest gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest
         docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest
       working-directory: ./
 
     - name: Build and Push Backend WebSocket Image
       run: |
-        docker build -f app/backend/Dockerfile.ws -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-ws:latest .
+        docker-compose -f docker-compose.yaml build backend-ws
+        docker tag darkseek_backend-ws:latest gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-ws:latest
         docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-ws:latest
       working-directory: ./
