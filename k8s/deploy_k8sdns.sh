@@ -34,7 +34,7 @@ if [ ! -d "$K8S_DIR" ]; then
 fi
 
 # --- Define DNS Name (replace with your actual domain) ---
-DNS_NAME="darkseek.yourdomain.com"
+DNS_NAME="darkseekblu.com"
 
 # --- Change to Directory ---
 cd "$K8S_DIR"
