@@ -12,8 +12,8 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
       - HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN}
-      - DATABASE_URL="postgresql://admin:Gfysjqb@localhost:5432/darkseekdb"
-      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
     depends_on:
       - db
       - redis
@@ -30,8 +30,8 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - GOOGLE_CSE_ID=${GOOGLE_CSE_ID}
       - HUGGINGFACEHUB_API_TOKEN=${HUGGINGFACEHUB_API_TOKEN}
-      - DATABASE_URL="postgresql://admin:Gfysjqb@localhost:5432/darkseekdb"
-      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
       - MQTT_BROKER_HOST=${MQTT_BROKER_HOST}
       - MQTT_BROKER_PORT=${MQTT_BROKER_PORT}
       - MQTT_TLS=${MQTT_TLS}
@@ -51,16 +51,16 @@ services:
     environment:
       - WEBSOCKET_URI=ws://darkseek-backend-ws:8000/ws/
       - MQTT_URI=http://darkseek-backend-mqtt:8001
-      - MQTT_BROKER_HOST=test.mosquitto.org
-      - MQTT_BROKER_PORT=8885
+      - MQTT_BROKER_HOST=${MQTT_BROKER_HOST}
+      - MQTT_BROKER_PORT=${MQTT_BROKER_PORT}
       - MQTT_TLS=true
 
   db:
     image: postgres:15
     environment:
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=Gfysjqb
-      - POSTGRES_DB=darkseekdb
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
