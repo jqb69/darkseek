@@ -34,6 +34,34 @@ jobs:
         sudo curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
         sudo chmod +x /usr/local/bin/docker-compose
         sudo ln -s /usr/local/bin/docker-compose /usr/bin/docker-compose
+    - name: Set environment variables from secrets
+      run: |
+        sed -i '/^GOOGLE_API_KEY=/d' .env
+        echo "GOOGLE_API_KEY=${{ secrets.GOOGLE_API_KEY }}" >> .env
+        sed -i '/^GOOGLE_CSE_ID=/d' .env
+        echo "GOOGLE_CSE_ID=${{ secrets.GOOGLE_CSE_ID }}" >> .env
+        sed -i '/^HUGGINGFACEHUB_API_TOKEN=/d' .env
+        echo "HUGGINGFACEHUB_API_TOKEN=${{ secrets.HUGGINGFACEHUB_API_TOKEN }}" >> .env
+        sed -i '/^DATABASE_URL=/d' .env
+        echo "DATABASE_URL=${{ secrets.DATABASE_URL }}" >> .env
+        sed -i '/^REDIS_URL=/d' .env
+        echo "REDIS_URL=${{ secrets.REDIS_URL }}" >> .env
+        sed -i '/^MQTT_BROKER_HOST=/d' .env
+        echo "MQTT_BROKER_HOST=${{ secrets.MQTT_BROKER_HOST }}" >> .env
+        sed -i '/^MQTT_BROKER_PORT=/d' .env
+        echo "MQTT_BROKER_PORT=${{ secrets.MQTT_BROKER_PORT }}" >> .env
+        sed -i '/^MQTT_TLS=/d' .env
+        echo "MQTT_TLS=${{ secrets.MQTT_TLS }}" >> .env
+        sed -i '/^MQTT_USERNAME=/d' .env
+        echo "MQTT_USERNAME=${{ secrets.MQTT_USERNAME }}" >> .env
+        sed -i '/^MQTT_PASSWORD=/d' .env
+        echo "MQTT_PASSWORD=${{ secrets.MQTT_PASSWORD }}" >> .env
+        sed -i '/^POSTGRES_USER=/d' .env
+        echo "POSTGRES_USER=${{ secrets.POSTGRES_USER }}" >> .env
+        sed -i '/^POSTGRES_PASSWORD=/d' .env
+        echo "POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}" >> .env
+        sed -i '/^POSTGRES_DB=/d' .env
+        echo "POSTGRES_DB=${{ secrets.POSTGRES_DB }}" >> .env
 
     - name: Install Backend Requirements
       run: |
