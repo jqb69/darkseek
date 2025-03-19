@@ -10,10 +10,10 @@ metadata:
 spec:
   tls:
   - hosts:
-    - darkseek.yourdomain.com
+    - darkseekblu.com
     secretName: darkseek-tls
   rules:
-  - host: darkseek.yourdomain.com
+  - host: darkseekblu.com
     http:
       paths:
       - path: /ws/
