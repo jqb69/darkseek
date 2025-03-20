@@ -1,3 +1,4 @@
+#no dns
 name: Deploy to GKE Without DNS
 
 on:
