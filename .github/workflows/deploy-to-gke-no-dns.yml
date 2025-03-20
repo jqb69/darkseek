@@ -31,7 +31,7 @@ jobs:
 
     - name: Configure kubectl
       run: |
-          echo "${{ secrets.GCP_SA_KEY }}" > /home/runner/work/darkseek/darkseek/gcloud.json
+          echo "${{ secrets.GCP_SA_KEY }}" | base64 --decode > /home/runner/work/darkseek/darkseek/gcloud.json
           gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
           gcloud container clusters get-credentials [CLUSTER_NAME] --zone [ZONE] --project ${{ secrets.GCP_PROJECT_ID }}
       env:
