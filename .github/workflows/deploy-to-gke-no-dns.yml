@@ -23,6 +23,38 @@ jobs:
       with:
         project_id: ${{ secrets.GCP_PROJECT_ID }}
 
+    - name: Validate GCP_SA_KEY
+      run: |
+        echo "${{ secrets.GCP_SA_KEY }}" > /home/runner/work/darkseek/darkseek/gcloud.json
+        python -c "
+            import json, sys, os
+            
+            json_file_path = '/home/runner/work/darkseek/darkseek/gcloud.json'
+            
+            if not os.path.exists(json_file_path):
+                print(f'Error: JSON file not found at {json_file_path}')
+                sys.exit(1)
+            
+            try:
+                with open(json_file_path, 'r') as f:
+                    data = json.load(f)
+            except json.JSONDecodeError as e:
+                print(f'Error: Invalid JSON format in GCP_SA_KEY: {e}') # Include the specific JSONDecodeError message
+                sys.exit(1)
+            
+            required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email', 'client_id', 'auth_uri', 'token_uri', 'auth_provider_x509_cert_url', 'client_x509_cert_url']
+            missing_keys = []
+            for key in required_keys:
+                if key not in data:
+                    missing_keys.append(key)
+            
+            if missing_keys:
+                print(f'Error: Missing required keys in GCP_SA_KEY: {', '.join(missing_keys)}')
+                sys.exit(1)
+            
+            print('GCP_SA_KEY validation successful!') # Add a success message for clarity
+            "
+    
     - name: Install kubectl
       run: |
         curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
@@ -31,7 +63,6 @@ jobs:
 
     - name: Configure kubectl
       run: |
-          echo "${{ secrets.GCP_SA_KEY }}" | base64 --decode > /home/runner/work/darkseek/darkseek/gcloud.json
           gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
           gcloud container clusters get-credentials [CLUSTER_NAME] --zone [ZONE] --project ${{ secrets.GCP_PROJECT_ID }}
       env:
