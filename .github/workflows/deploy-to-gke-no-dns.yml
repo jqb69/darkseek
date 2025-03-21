@@ -33,10 +33,23 @@ jobs:
         else
           echo "GCP_SA_KEY is set"
         fi
-
-    - name: Validate GCP_SA_KEY
+    - name: Check for encrypted service account file
+      id: check-file
       run: |
-        echo "${{ secrets.GCP_SA_KEY }}" > /home/runner/work/darkseek/darkseek/gcloud.json
+        if [ ! -f ./gitcloudsa.json ]; then
+          echo "Error: ./gitcloudsa.json not found"
+          exit 1
+        fi
+
+    - name: Read base64 content
+      id: read-content
+      run: |
+        CONTENT=$(cat ./gitcloudsa.json)
+        echo "$CONTENT" | base64 --decode > /home/runner/work/darkseek/darkseek/gcloud.json
+
+
+    - name: Validate JSON structure
+      run: |
         python -c "
         import json, sys, os
         
@@ -53,11 +66,10 @@ jobs:
             print(f'Error: Invalid JSON format in GCP_SA_KEY: {e}')
             sys.exit(1)
         
-        required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email', 'client_id', 'auth_uri', 'token_uri', 'auth_provider_x509_cert_url', 'client_x509_cert_url']
-        missing_keys = []
-        for key in required_keys:
-            if key not in data:
-                missing_keys.append(key)
+        required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 
+                        'client_email', 'client_id', 'auth_uri', 'token_uri',
+                        'auth_provider_x509_cert_url', 'client_x509_cert_url']
+        missing_keys = [key for key in required_keys if key not in data]
         
         if missing_keys:
             error_message = 'Error: Missing required keys in GCP_SA_KEY: '
@@ -67,8 +79,10 @@ jobs:
             print(error_message)
             sys.exit(1)
         
-        print('GCP_SA_KEY validation successful!')
+        print('GCP service account key validation successful!')
         "
+
+    
     
     - name: Install kubectl
       run: |
