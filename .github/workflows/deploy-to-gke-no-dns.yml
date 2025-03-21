@@ -1,4 +1,5 @@
 #no dns
+#no dns
 name: Deploy to GKE Without DNS
 
 on:
@@ -49,7 +50,7 @@ jobs:
             with open(json_file_path, 'r') as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
-            print(f'Error: Invalid JSON format in GCP_SA_KEY: {e}') # Include the specific JSONDecodeError message
+            print(f'Error: Invalid JSON format in GCP_SA_KEY: {e}')
             sys.exit(1)
         
         required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email', 'client_id', 'auth_uri', 'token_uri', 'auth_provider_x509_cert_url', 'client_x509_cert_url']
@@ -59,10 +60,14 @@ jobs:
                 missing_keys.append(key)
         
         if missing_keys:
-            print(f'Error: Missing required keys in GCP_SA_KEY: {", ".join(missing_keys)}')
+            error_message = 'Error: Missing required keys in GCP_SA_KEY: '
+            for key in missing_keys:
+                error_message += key + ', '
+            error_message = error_message[:-2]  # Remove the last comma and space
+            print(error_message)
             sys.exit(1)
         
-        print('GCP_SA_KEY validation successful!') # Add a success message for clarity
+        print('GCP_SA_KEY validation successful!')
         "
     
     - name: Install kubectl
