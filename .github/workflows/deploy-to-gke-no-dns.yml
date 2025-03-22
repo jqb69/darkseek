@@ -92,12 +92,15 @@ jobs:
         
     - name: Verify GKE cluster location
       run: |
+        if [ -z "${{  secrets.GCP_CLUSTER_ZONE}}" ]; then
+          echo "GCP_CLUSTER_ZONE is not set or is empty!"
+          exit 1
         gcloud container clusters list --zone "${{ secrets.GCP_CLUSTER_ZONE }}"
 
     - name: Configure kubectl
       run: |
-          gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
-          gcloud container clusters get-credentials "${{ secrets.GCP_CLUSTER_NAME }}" --zone "${{ secrets.GCP_CLUSTER_ZONE }}" --project ${{ secrets.GCP_PROJECT_ID }}
+        gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
+        gcloud container clusters get-credentials "${{ secrets.GCP_CLUSTER_NAME }}" --zone "${{ secrets.GCP_CLUSTER_ZONE }}" --project ${{ secrets.GCP_PROJECT_ID }}
       env:
         GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
 
