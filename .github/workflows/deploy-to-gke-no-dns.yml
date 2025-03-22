@@ -48,6 +48,7 @@ jobs:
         echo "$CONTENT" | base64 --decode > /home/runner/work/darkseek/darkseek/gcloud.json
 
 
+
     - name: Validate JSON structure
       run: |
         python -c "
@@ -83,17 +84,20 @@ jobs:
         "
 
     
-    
     - name: Install kubectl
       run: |
         curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
         chmod +x ./kubectl
         sudo mv ./kubectl /usr/local/bin/kubectl
+        
+    - name: Verify GKE cluster location
+      run: |
+        gcloud container clusters list --zone "${{ secrets.GCP_CLUSTER_ZONE }}"
 
     - name: Configure kubectl
       run: |
           gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
-          gcloud container clusters get-credentials [CLUSTER_NAME] --zone [ZONE] --project ${{ secrets.GCP_PROJECT_ID }}
+          gcloud container clusters get-credentials "${{ secrets.GCP_CLUSTER_NAME }}" --zone "${{ secrets.GCP_CLUSTER_ZONE }}" --project ${{ secrets.GCP_PROJECT_ID }}
       env:
         GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
 
