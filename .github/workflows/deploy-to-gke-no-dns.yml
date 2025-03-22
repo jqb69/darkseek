@@ -1,5 +1,4 @@
 #no dns
-#no dns
 name: Deploy to GKE Without DNS
 
 on:
@@ -92,10 +91,13 @@ jobs:
         
     - name: Verify GKE cluster location
       run: |
-        if [ -z "${{  secrets.GCP_CLUSTER_ZONE}}" ]; then
+        if [ -z "${{ secrets.GCP_CLUSTER_ZONE }}" ]; then
           echo "GCP_CLUSTER_ZONE is not set or is empty!"
           exit 1
-        gcloud container clusters list --zone "${{ secrets.GCP_CLUSTER_ZONE }}"
+        else
+          echo "GCP_CLUSTER_ZONE is set"
+          gcloud container clusters list --zone "${{ secrets.GCP_CLUSTER_ZONE }}"
+        fi
 
     - name: Configure kubectl
       run: |
