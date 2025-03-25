@@ -26,16 +26,16 @@ jobs:
 
     - name: Check if GCP_SA_KEY secret is set (Using -v test)
       run: |
-        if ! test -v GCP_SA_KEY_ENV; then # Check if the *environment variable* is set
-          echo "GCP_SA_KEY is NOT set as environment variable!"
+        if [[ -z "$GCP_SA_KEY_ENV" ]]; then  # Using [[ ]] for more robust string comparison
+          echo "GCP_SA_KEY is set as env variable BUT is empty or not set!"
+          if [[ -z "${{ secrets.GCP_SA_KEY }}" ]]; then # Double check secret directly
+              echo "GCP_SA_KEY secret itself is also empty or not set!"
+          else
+              echo "GCP_SA_KEY secret itself is NOT empty (but env var might be the issue)!"
+          fi
           exit 1
         else
-          if [ -z "$GCP_SA_KEY_ENV" ]; then # Then check if the env variable is empty
-             echo "GCP_SA_KEY is set as env variable BUT is empty!"
-             exit 1
-          else
-             echo "GCP_SA_KEY is set as environment variable and is NOT empty"
-          fi
+          echo "GCP_SA_KEY is set as environment variable and is NOT empty"
         fi
       env:
         GCP_SA_KEY_ENV: ${{ secrets.GCP_SA_KEY }} # Expose secret as environment variable
