@@ -24,14 +24,22 @@ jobs:
       with:
         project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-    - name: Check if GCP_SA_KEY secret is set
+    - name: Check if GCP_SA_KEY secret is set (Using -v test)
       run: |
-        if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then
-          echo "GCP_SA_KEY is not set or is empty"
+        if ! test -v GCP_SA_KEY_ENV; then # Check if the *environment variable* is set
+          echo "GCP_SA_KEY is NOT set as environment variable!"
           exit 1
         else
-          echo "GCP_SA_KEY is set"
+          if [ -z "$GCP_SA_KEY_ENV" ]; then # Then check if the env variable is empty
+             echo "GCP_SA_KEY is set as env variable BUT is empty!"
+             exit 1
+          else
+             echo "GCP_SA_KEY is set as environment variable and is NOT empty"
+          fi
         fi
+      env:
+        GCP_SA_KEY_ENV: ${{ secrets.GCP_SA_KEY }} # Expose secret as environment variable
+
     - name: Check for encrypted service account file
       id: check-file
       run: |
