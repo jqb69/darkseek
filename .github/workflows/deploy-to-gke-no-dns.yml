@@ -1,4 +1,4 @@
-#no dns
+#no deplpoy-to-gke-no-dns.yml
 name: Deploy to GKE Without DNS
 
 on:
@@ -94,13 +94,13 @@ jobs:
         if [ -z "${{ secrets.GKE_CLUSTER_NAME }}" ]; then
           echo "GKE_CLUSTER_NAME is not set or is empty!"
           exit 1
-        fi  
+        fi
         if [ -z "${{ secrets.GKE_CLUSTER_ZONE }}" ]; then
           echo "GKE_CLUSTER_ZONE is not set or is empty!"
           exit 1
         else
           echo "GKE_CLUSTER_ZONE is set"
-          gcloud container clusters list --zone="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}
+          gcloud container clusters list --zone="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}"
         fi
 
     - name: Configure kubectl
