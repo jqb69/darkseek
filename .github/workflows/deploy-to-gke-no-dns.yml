@@ -98,6 +98,10 @@ jobs:
         chmod +x ./kubectl
         sudo mv ./kubectl /usr/local/bin/kubectl
         
+    - name: Apply RBAC Configuration
+      run: |
+        kubectl apply -f ./k8s/darkseek-rbac.yaml
+        
     - name: Verify GKE cluster location
       run: |
         if [ -z "${{ secrets.GKE_CLUSTER_NAME }}" ]; then
