@@ -27,18 +27,19 @@ jobs:
     - name: Check if GCP_SA_KEY secret is set
       run: |
         if [[ -z "${GCP_SA_KEY_ENV}" ]]; then
-          echo "GCP_SA_KEY is set as env variable BUT is empty or not set!"
-          if [[ -z "${{ secrets.GCP_SA_KEY }}" ]]; then
+          echo "GCP_SA_KEY_ENV is set as env variable BUT is empty or not set!"
+          if [[ -z "${GCP_SA_KEY}" ]]; then
             echo "GCP_SA_KEY secret itself is also empty or not set!"
           else
             echo "GCP_SA_KEY secret itself is NOT empty (but env var might be the issue)!"
           fi
           exit 1
         else
-          echo "GCP_SA_KEY is set as environment variable and is NOT empty"
+          echo "GCP_SA_KEY_ENV is set as environment variable and is NOT empty"
         fi
       env:
         GCP_SA_KEY_ENV: ${{ secrets.GCP_SA_KEY }}
+        GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}  # Add this line to access the secret in the script
 
     - name: Check for encrypted service account file
       id: check-file
