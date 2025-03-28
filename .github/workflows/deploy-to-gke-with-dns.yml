@@ -1,4 +1,5 @@
-name: Deploy to GKE With DNS
+#no deplpoy-to-gke-no-dns.yml
+name: Deploy to GKE Without DNS
 
 on:
   push:
@@ -22,42 +23,133 @@ jobs:
       uses: google-github-actions/setup-gcloud@v2
       with:
         project_id: ${{ secrets.GCP_PROJECT_ID }}
-        service_account_key: ${{ secrets.GCP_SA_KEY }}
 
+    - name: Check if GCP_SA_KEY secret is set
+      run: |
+        if [[ -z "${GCP_SA_KEY_ENV}" ]]; then
+          echo "GCP_SA_KEY_ENV is set as env variable BUT is empty or not set!"
+          if [[ -z "${GCP_SA_KEY}" ]]; then
+            echo "GCP_SA_KEY secret itself is also empty or not set!"
+          else
+            echo "GCP_SA_KEY secret itself is NOT empty (but env var might be the issue)!"
+          fi
+          exit 1
+        else
+          echo "GCP_SA_KEY_ENV is set as environment variable and is NOT empty"
+        fi
+        
+        if [[ -z "${CLUSTER_NAME_ENV}" ]]; then
+                echo "GKE_CLUSTER_NAME secret itself is also empty or not set!"
+        else
+              echo "GKE_CLUSTER_NAME is ${CLUSTER_NAME_ENV}"
+        fi
+        
+        if [[ -z "${CLUSTER_ZONE_ENV}" ]]; then
+            echo "GKE_CLUSTER_ZONE secret itself is also empty or not set!"
+        else
+          echo "GKE_CLUSTER_ZONE is ${CLUSTER_ZONE_ENV}"
+        fi
+      env:
+        CLUSTER_NAME_ENV: ${{ secrets.GKE_CLUSTER_NAME }}
+        CLUSTER_ZONE_ENV: ${{ secrets.GKE_CLUSTER_ZONE }}
+        GCP_SA_KEY_ENV: ${{ secrets.GCP_SA_KEY }}
+        GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}  # Add this line to access the secret in the script
+
+    - name: Check for encrypted service account file
+      id: check-file
+      run: |
+        if [ ! -f ./gitcloudsa.json ]; then
+          echo "Error: ./gitcloudsa.json not found"
+          exit 1
+        fi
+
+    - name: Read base64 content
+      id: read-content
+      run: |
+        CONTENT=$(cat ./gitcloudsa.json)
+        echo "$CONTENT" | base64 --decode > /home/runner/work/darkseek/darkseek/gcloud.json
+
+
+
+    - name: Validate JSON structure
+      run: |
+        python -c "
+        import json, sys, os
+        
+        json_file_path = '/home/runner/work/darkseek/darkseek/gcloud.json'
+        
+        if not os.path.exists(json_file_path):
+            print(f'Error: JSON file not found at {json_file_path}')
+            sys.exit(1)
+        
+        try:
+            with open(json_file_path, 'r') as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f'Error: Invalid JSON format in GCP_SA_KEY: {e}')
+            sys.exit(1)
+        
+        required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 
+                        'client_email', 'client_id', 'auth_uri', 'token_uri',
+                        'auth_provider_x509_cert_url', 'client_x509_cert_url']
+        missing_keys = [key for key in required_keys if key not in data]
+        
+        if missing_keys:
+            error_message = 'Error: Missing required keys in GCP_SA_KEY: '
+            for key in missing_keys:
+                error_message += key + ', '
+            error_message = error_message[:-2]  # Remove the last comma and space
+            print(error_message)
+            sys.exit(1)
+        
+        print('GCP service account key validation successful!')
+        "
+
+    
     - name: Install kubectl
       run: |
         curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
         chmod +x ./kubectl
         sudo mv ./kubectl /usr/local/bin/kubectl
-
-   - name: Configure kubectl
-        run: |
-          echo "${{ secrets.GCP_SA_KEY }}" > /home/runner/work/darkseek/darkseek/gcloud.json
-          gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
-          gcloud container clusters get-credentials [CLUSTER_NAME] --zone [ZONE] --project ${{ secrets.GCP_PROJECT_ID }}
-
-    - name: Generate Secret Manifest
+        
+    
+        
+    - name: Verify GKE cluster location
       run: |
-        cat <<EOF > ./k8s/secret.yaml
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: darkseek-secrets
-        type: Opaque
-        data:
-          GOOGLE_API_KEY: $(echo -n "${{ secrets.GOOGLE_API_KEY }}" | base64)
-          GOOGLE_CSE_ID: $(echo -n "${{ secrets.GOOGLE_CSE_ID }}" | base64)
-          HUGGINGFACEHUB_API_TOKEN: $(echo -n "${{ secrets.HUGGINGFACEHUB_API_TOKEN }}" | base64)
-          POSTGRES_USER: $(echo -n "${{ secrets.POSTGRES_USER }}" | base64)
-          POSTGRES_PASSWORD: $(echo -n "${{ secrets.POSTGRES_PASSWORD }}" | base64)
-          POSTGRES_DB: $(echo -n "${{ secrets.POSTGRES_DB }}" | base64)
-        EOF
+        if [ -z "${{ secrets.GKE_CLUSTER_NAME }}" ]; then
+          echo "GKE_CLUSTER_NAME is not set or is empty!"
+          exit 1
+        fi
+        if [ -z "${{ secrets.GKE_CLUSTER_ZONE }}" ]; then
+          echo "GKE_CLUSTER_ZONE is not set or is empty!"
+          exit 1
+        else
+          echo "GKE_CLUSTER_ZONE is set = $CLUSTER_ZONE_ENV"
+          gcloud container clusters list --zone="${CLUSTER_ZONE_ENV}" --project="${PROJECT_ID_ENV}"
+        fi
+      env:
+        PROJECT_ID_ENV: ${{ secrets.GCP_PROJECT_ID }}
+        CLUSTER_ZONE_ENV: ${{ secrets.GKE_CLUSTER_ZONE }}
 
-    - name: Install Ingress-Nginx Controller
+    - name: Configure kubectl
       run: |
-        kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+        gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
+        gcloud container clusters get-credentials "${{ secrets.GKE_CLUSTER_NAME }}" --zone="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}"
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
 
-    - name: Deploy to GKE with DNS
+    - name: Deploy to GKE
       run: |
-        chmod +x ./k8s/deploy_k8sdns.sh
-        ./k8s/deploy_k8sdns.sh
+        chmod +x ./k8s/deploy_k8s.sh
+        ./k8s/deploy_k8s.sh
+      env:
+        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+        HUGGINGFACEHUB_API_TOKEN: ${{ secrets.HUGGINGFACEHUB_API_TOKEN }}
+        DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        REDIS_URL: ${{ secrets.REDIS_URL }}
+        MQTT_BROKER_HOST: ${{ secrets.MQTT_BROKER_HOST }}
+        MQTT_BROKER_PORT: ${{ secrets.MQTT_BROKER_PORT }}
+        MQTT_TLS: ${{ secrets.MQTT_TLS }}
+        MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
+        MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
