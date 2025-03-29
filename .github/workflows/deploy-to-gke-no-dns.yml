@@ -24,7 +24,7 @@ jobs:
       with:
         project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-    - name: Check if GCP_SA_KEY secret is set
+    - name: Check if GCP_SA_KEY secret and GKE_CLUSTER_ZONE is set
       run: |
         if [[ -z "${GCP_SA_KEY_ENV}" ]]; then
           echo "GCP_SA_KEY_ENV is set as env variable BUT is empty or not set!"
@@ -37,7 +37,23 @@ jobs:
         else
           echo "GCP_SA_KEY_ENV is set as environment variable and is NOT empty"
         fi
+        
+        if [[ -z "${CLUSTER_NAME_ENV}" ]]; then
+            echo "GKE_CLUSTER_NAME secret itself is also empty or not set!"
+            exit 1
+        else
+            echo "GKE_CLUSTER_NAME is ${CLUSTER_NAME_ENV}"
+        fi
+        
+        if [[ -z "${CLUSTER_ZONE_ENV}" ]]; then
+            echo "GKE_CLUSTER_ZONE secret itself is also empty or not set!"
+            exit 1
+        else
+          echo "GKE_CLUSTER_ZONE is ${CLUSTER_ZONE_ENV}"
+        fi
       env:
+        CLUSTER_NAME_ENV: ${{ secrets.GKE_CLUSTER_NAME }}
+        CLUSTER_ZONE_ENV: ${{ secrets.GKE_CLUSTER_ZONE }}
         GCP_SA_KEY_ENV: ${{ secrets.GCP_SA_KEY }}
         GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}  # Add this line to access the secret in the script
 
@@ -98,7 +114,7 @@ jobs:
         chmod +x ./kubectl
         sudo mv ./kubectl /usr/local/bin/kubectl
         
-  
+    
         
     - name: Verify GKE cluster location
       run: |
@@ -110,9 +126,12 @@ jobs:
           echo "GKE_CLUSTER_ZONE is not set or is empty!"
           exit 1
         else
-          echo "GKE_CLUSTER_ZONE is set"
-          gcloud container clusters list --zone="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}"
+          echo "GKE_CLUSTER_ZONE is set = $CLUSTER_ZONE_ENV"
+          gcloud container clusters list --zone="${CLUSTER_ZONE_ENV}" --project="${PROJECT_ID_ENV}"
         fi
+      env:
+        PROJECT_ID_ENV: ${{ secrets.GCP_PROJECT_ID }}
+        CLUSTER_ZONE_ENV: ${{ secrets.GKE_CLUSTER_ZONE }}
 
     - name: Configure kubectl
       run: |
