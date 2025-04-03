@@ -72,6 +72,7 @@ jobs:
         echo "$CONTENT" | base64 --decode > /home/runner/work/darkseek/darkseek/gcloud.json
 
     - name: Check if GCP_SA_KEY secret is set (Simplest Test - Hardcoded String)
+      id: simple-test
       run: |
         if [ -z "" ]; then
           echo "It's empty (hardcoded empty string)"
