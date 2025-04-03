@@ -71,6 +71,13 @@ jobs:
         CONTENT=$(cat ./gitcloudsa.json)
         echo "$CONTENT" | base64 --decode > /home/runner/work/darkseek/darkseek/gcloud.json
 
+    - name: Check if GCP_SA_KEY secret is set (Simplest Test - Hardcoded String)
+      run: |
+        if [ -z "" ]; then
+          echo "It's empty (hardcoded empty string)"
+        else
+          echo "It's NOT empty (hardcoded empty string)"
+        fi
 
 
     - name: Validate JSON structure
