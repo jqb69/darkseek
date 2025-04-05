@@ -9,10 +9,22 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}
+      GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
+      
+    - name: Load environment variables
+      run: |
+        echo "GCP_SA_KEY=${GCP_SA_KEY}" >> $GITHUB_ENV
+        echo "GCP_PROJECT_ID=${GCP_PROJECT_ID}" >> $GITHUB_ENV
+        echo "GKE_CLUSTER_ZONE=${GKE_CLUSTER_ZONE}" >> $GITHUB_ENV
+        echo "GKE_CLUSTER_NAME=${GKE_CLUSTER_NAME}" >> $GITHUB_ENV  
 
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
@@ -24,38 +36,38 @@ jobs:
       with:
         project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-    - name: Check if GCP_SA_KEY secret and GKE_CLUSTER_ZONE is set
+    - name: Check if all required secrets are set
       run: |
-        if [[ -z "${GCP_SA_KEY_ENV}" ]]; then
-          echo "GCP_SA_KEY_ENV is set as env variable BUT is empty or not set!"
-          if [[ -z "${GCP_SA_KEY}" ]]; then
-            echo "GCP_SA_KEY secret itself is also empty or not set!"
-          else
-            echo "GCP_SA_KEY secret itself is NOT empty (but env var might be the issue)!"
-          fi
+        if [[ -z "${GCP_SA_KEY}" ]]; then
+          echo "GCP_SA_KEY is set as env variable BUT is empty or not set!"
           exit 1
         else
-          echo "GCP_SA_KEY_ENV is set as environment variable and is NOT empty"
+          echo "GCP_SA_KEY is set as environment variable and is NOT empty"
         fi
         
-        if [[ -z "${CLUSTER_NAME_ENV}" ]]; then
+        if [[ -z "${GCP_PROJECT_ID}" ]]; then
+          echo "GCP_PROJECT_ID is not set or is empty!"
+          exit 1
+        fi
+        else
+            echo "{GCP_PROJECT_ID is ${{GCP_PROJECT_ID}"
+        fi
+        
+        if [[ -z "${GKE_CLUSTER_NAME}" ]]; then
             echo "GKE_CLUSTER_NAME secret itself is also empty or not set!"
             exit 1
         else
-            echo "GKE_CLUSTER_NAME is ${CLUSTER_NAME_ENV}"
+            echo "GKE_CLUSTER_NAME is ${GKE_CLUSTER_NAME}"
         fi
         
-        if [[ -z "${CLUSTER_ZONE_ENV}" ]]; then
+        if [[ -z "${GKE_CLUSTER_ZONE}" ]]; then
             echo "GKE_CLUSTER_ZONE secret itself is also empty or not set!"
             exit 1
         else
-          echo "GKE_CLUSTER_ZONE is ${CLUSTER_ZONE_ENV}"
+          echo "GKE_CLUSTER_ZONE is ${GKE_CLUSTER_ZONE}"
         fi
-      env:
-        CLUSTER_NAME_ENV: ${{ secrets.GKE_CLUSTER_NAME }}
-        CLUSTER_ZONE_ENV: ${{ secrets.GKE_CLUSTER_ZONE }}
-        GCP_SA_KEY_ENV: ${{ secrets.GCP_SA_KEY }}
-        GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}  # Add this line to access the secret in the script
+        
+        echo "All required secrets are set"
 
     - name: Check for encrypted service account file
       id: check-file
@@ -72,7 +84,6 @@ jobs:
         echo "$CONTENT" | base64 --decode > /home/runner/work/darkseek/darkseek/gcloud.json
 
     - name: Check if GCP_SA_KEY secret is set (Simplest Test - Hardcoded String)
-      id: simple-test
       run: |
         if [ -z "" ]; then
           echo "It's empty (hardcoded empty string)"
@@ -126,27 +137,24 @@ jobs:
         
     - name: Verify GKE cluster location
       run: |
-        if [ -z "${{ secrets.GKE_CLUSTER_NAME }}" ]; then
+        if [ -z "${GKE_CLUSTER_NAME}" ]; then
           echo "GKE_CLUSTER_NAME is not set or is empty!"
           exit 1
         fi
-        if [ -z "${{ secrets.GKE_CLUSTER_ZONE }}" ]; then
+        if [ -z "${GKE_CLUSTER_ZONE}" ]; then
           echo "GKE_CLUSTER_ZONE is not set or is empty!"
           exit 1
         else
-          echo "GKE_CLUSTER_ZONE is set = $CLUSTER_ZONE_ENV"
-          gcloud container clusters list --zone="${CLUSTER_ZONE_ENV}" --project="${PROJECT_ID_ENV}"
+          echo "GKE_CLUSTER_ZONE is set = ${GKE_CLUSTER_ZONE}"
+          gcloud container clusters list --zone="${GKE_CLUSTER_ZONE}" --project="${GCP_PROJECT_ID}"
         fi
-      env:
-        PROJECT_ID_ENV: ${{ secrets.GCP_PROJECT_ID }}
-        CLUSTER_ZONE_ENV: ${{ secrets.GKE_CLUSTER_ZONE }}
+      
 
     - name: Configure kubectl
       run: |
         gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
-        gcloud container clusters get-credentials "${{ secrets.GKE_CLUSTER_NAME }}" --zone="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}"
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
+        gcloud container clusters get-credentials "${GKE_CLUSTER_NAME}" --zone="${GKE_CLUSTER_ZONE}" --project="${GCP_PROJECT_ID}"
+     
 
     - name: Deploy to GKE
       run: |
