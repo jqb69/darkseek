@@ -26,7 +26,7 @@ jobs:
 
     - name: Check if all required secrets are set
       run: |
-       if [[ -z "${{env.GCP_SA_KEY}}" ]]; then
+        if [[ -z "${{env.GCP_SA_KEY}}" ]]; then
           echo "GCP_SA_KEY is not set or is empty!"
           exit 1
         fi
@@ -46,6 +46,7 @@ jobs:
         echo "GKE_CLUSTER_ZONE is set to ${{env.GKE_CLUSTER_ZONE}}"
         echo "GKE_CLUSTER_NAME is set to ${{env.GKE_CLUSTER_NAME}}"
       env:
+        GCP_SA_KEY: ${{secrets.GCP_SA_KEY}}
         GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
         GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
         GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
