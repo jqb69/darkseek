@@ -9,12 +9,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}
-      GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
-
+   
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
@@ -22,33 +17,38 @@ jobs:
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
+        credentials_json: ${{secrets.GCP_SA_KEY}}
+        
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
       with:
-        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        project_id: ${{secrets.GCP_PROJECT_ID}}
 
     - name: Check if all required secrets are set
       run: |
-       if [[ -z "${GCP_SA_KEY}" ]]; then
+       if [[ -z "${{env.GCP_SA_KEY}}" ]]; then
           echo "GCP_SA_KEY is not set or is empty!"
           exit 1
         fi
-        if [[ -z "${GCP_PROJECT_ID}" ]]; then
+        if [[ -z "${{env.GCP_PROJECT_ID}}" ]]; then
           echo "GCP_PROJECT_ID is not set or is empty!"
           exit 1
         fi
-        if [[ -z "${GKE_CLUSTER_ZONE}" ]]; then
+        if [[ -z "${{env.GKE_CLUSTER_ZONE}}" ]]; then
           echo "GKE_CLUSTER_ZONE is not set or is empty!"
           exit 1
         fi
-        if [[ -z "${GKE_CLUSTER_NAME}" ]]; then
+        if [[ -z "${{env.GKE_CLUSTER_NAME}}" ]]; then
           echo "GKE_CLUSTER_NAME is not set or is empty!"
           exit 1
         fi
         echo "All required secrets are set"
-        echo "GKE_CLUSTER_ZONE is set to ${GKE_CLUSTER_ZONE}"
-        echo "GKE_CLUSTER_NAME is set to ${GKE_CLUSTER_NAME}"
+        echo "GKE_CLUSTER_ZONE is set to ${{env.GKE_CLUSTER_ZONE}}"
+        echo "GKE_CLUSTER_NAME is set to ${{env.GKE_CLUSTER_NAME}}"
+      env:
+        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
+        GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
+        GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
 
     - name: Check for encrypted service account file
       id: check-file
@@ -118,41 +118,44 @@ jobs:
         
     - name: Verify GKE cluster location
       run: |
-        if [ -z "${GKE_CLUSTER_NAME}" ]; then
+        if [ -z "${{env.GKE_CLUSTER_NAME}}" ]; then
           echo "GKE_CLUSTER_NAME is not set or is empty!"
           exit 1
         fi
-        if [ -z "${GKE_CLUSTER_ZONE}" ]; then
+        if [ -z "${{env.GKE_CLUSTER_ZONE}}" ]; then
           echo "GKE_CLUSTER_ZONE is not set or is empty!"
           exit 1
         else
-          echo "GKE_CLUSTER_ZONE is set = ${GKE_CLUSTER_ZONE}"
-          gcloud container clusters list --zone="${GKE_CLUSTER_ZONE}" --project="${GCP_PROJECT_ID}"
+          echo "GKE_CLUSTER_ZONE is set = ${{env.GKE_CLUSTER_ZONE}}"
+          gcloud container clusters list --zone="${{env.GKE_CLUSTER_ZONE}}" --project="${{env.GCP_PROJECT_ID}}"
         fi
       env:
-        GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-        GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}
-        GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
+        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
+        GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
+        GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
       
 
     - name: Configure kubectl
       run: |
         gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
-        gcloud container clusters get-credentials "${GKE_CLUSTER_NAME}" --zone="${GKE_CLUSTER_ZONE}" --project="${GCP_PROJECT_ID}"
-     
+        gcloud container clusters get-credentials "${{env.GKE_CLUSTER_NAME}}" --zone="${{env.GKE_CLUSTER_ZONE}}" --project="${{env.GCP_PROJECT_ID}}"
+      env:
+        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
+        GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
+        GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
 
     - name: Deploy to GKE
       run: |
         chmod +x ./k8s/deploy_k8s.sh
         ./k8s/deploy_k8s.sh
       env:
-        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-        GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
-        HUGGINGFACEHUB_API_TOKEN: ${{ secrets.HUGGINGFACEHUB_API_TOKEN }}
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        REDIS_URL: ${{ secrets.REDIS_URL }}
-        MQTT_BROKER_HOST: ${{ secrets.MQTT_BROKER_HOST }}
-        MQTT_BROKER_PORT: ${{ secrets.MQTT_BROKER_PORT }}
-        MQTT_TLS: ${{ secrets.MQTT_TLS }}
-        MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
-        MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
+        GOOGLE_API_KEY: ${{secrets.GOOGLE_API_KEY}}
+        GOOGLE_CSE_ID: ${{secrets.GOOGLE_CSE_ID}}
+        HUGGINGFACEHUB_API_TOKEN: ${{secrets.HUGGINGFACEHUB_API_TOKEN}}
+        DATABASE_URL: ${{secrets.DATABASE_URL}}
+        REDIS_URL: ${{secrets.REDIS_URL}}
+        MQTT_BROKER_HOST: ${{secrets.MQTT_BROKER_HOST}}
+        MQTT_BROKER_PORT: ${{secrets.MQTT_BROKER_PORT}}
+        MQTT_TLS: ${{secrets.MQTT_TLS }}
+        MQTT_USERNAME: ${{secrets.MQTT_USERNAME}}
+        MQTT_PASSWORD: ${{secrets.MQTT_PASSWORD}}
