@@ -129,6 +129,10 @@ jobs:
           echo "GKE_CLUSTER_ZONE is set = ${GKE_CLUSTER_ZONE}"
           gcloud container clusters list --zone="${GKE_CLUSTER_ZONE}" --project="${GCP_PROJECT_ID}"
         fi
+      env:
+        GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}
+        GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
       
 
     - name: Configure kubectl
