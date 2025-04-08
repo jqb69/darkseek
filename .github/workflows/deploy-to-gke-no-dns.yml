@@ -1,4 +1,4 @@
-# no dns
+#no deplpoy-to-gke-no-dns.yml
 name: Deploy to GKE Without DNS
 
 on:
@@ -9,55 +9,76 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}
+      GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Load environment variables
-      run: |
-        echo "GCP_SA_KEY=${{ secrets.GCP_SA_KEY }}" >> $GITHUB_ENV
-        echo "GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}" >> $GITHUB_ENV
-        echo "GKE_CLUSTER_ZONE=${{ secrets.GKE_CLUSTER_ZONE }}" >> $GITHUB_ENV
-        echo "GKE_CLUSTER_NAME=${{ secrets.GKE_CLUSTER_NAME }}" >> $GITHUB_ENV  
-
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
+        credentials_json: ${GCP_SA_KEY}
 
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
       with:
-        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        project_id: ${GCP_PROJECT_ID}
 
     - name: Check if all required secrets are set
       run: |
-        if [[ -z "${{ secrets.GCP_SA_KEY }}" ]]; then
+       if [[ -z "${GCP_SA_KEY}" ]]; then
           echo "GCP_SA_KEY is not set or is empty!"
           exit 1
         fi
-        if [[ -z "${{ secrets.GCP_PROJECT_ID }}" ]]; then
+        if [[ -z "${GCP_PROJECT_ID}" ]]; then
           echo "GCP_PROJECT_ID is not set or is empty!"
           exit 1
         fi
-        if [[ -z "${{ secrets.GKE_CLUSTER_ZONE }}" ]]; then
+        if [[ -z "${GKE_CLUSTER_ZONE}" ]]; then
           echo "GKE_CLUSTER_ZONE is not set or is empty!"
           exit 1
         fi
-        if [[ -z "${{ secrets.GKE_CLUSTER_NAME }}" ]]; then
+        if [[ -z "${GKE_CLUSTER_NAME}" ]]; then
           echo "GKE_CLUSTER_NAME is not set or is empty!"
           exit 1
         fi
         echo "All required secrets are set"
-        echo "GKE_CLUSTER_ZONE is set to ${{ secrets.GKE_CLUSTER_ZONE }}"
-        echo "GKE_CLUSTER_NAME is set to ${{ secrets.GKE_CLUSTER_NAME }}"
+        echo "GKE_CLUSTER_ZONE is set to ${GKE_CLUSTER_ZONE}"
+        echo "GKE_CLUSTER_NAME is set to ${GKE_CLUSTER_NAME}"
 
-    - name: Validate GCP_SA_KEY
+    - name: Check for encrypted service account file
+      id: check-file
       run: |
-        echo "${{ secrets.GCP_SA_KEY }}" > /home/runner/work/darkseek/darkseek/gcloud.json
+        if [ ! -f ./gitcloudsa.json ]; then
+          echo "Error: ./gitcloudsa.json not found"
+          exit 1
+        fi
+
+    - name: Read base64 content
+      id: read-content
+      run: |
+        CONTENT=$(cat ./gitcloudsa.json)
+        echo "$CONTENT" | base64 --decode > /home/runner/work/darkseek/darkseek/gcloud.json
+
+    - name: Check if GCP_SA_KEY secret is set (Simplest Test - Hardcoded String)
+      run: |
+        if [ -z "" ]; then
+          echo "It's empty (hardcoded empty string)"
+        else
+          echo "It's NOT empty (hardcoded empty string)"
+        fi
+
+
+    - name: Validate JSON structure
+      run: |
         python -c "
         import json, sys, os
+        
         json_file_path = '/home/runner/work/darkseek/darkseek/gcloud.json'
         
         if not os.path.exists(json_file_path):
@@ -71,16 +92,22 @@ jobs:
             print(f'Error: Invalid JSON format in GCP_SA_KEY: {e}')
             sys.exit(1)
         
-        required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 'client_email', 'client_id', 'auth_uri', 'token_uri', 'auth_provider_x509_cert_url', 'client_x509_cert_url']
+        required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 
+                        'client_email', 'client_id', 'auth_uri', 'token_uri',
+                        'auth_provider_x509_cert_url', 'client_x509_cert_url']
         missing_keys = [key for key in required_keys if key not in data]
         
         if missing_keys:
-            error_message = 'Error: Missing required keys in GCP_SA_KEY: ' + ', '.join(missing_keys)
+            error_message = 'Error: Missing required keys in GCP_SA_KEY: '
+            for key in missing_keys:
+                error_message += key + ', '
+            error_message = error_message[:-2]  # Remove the last comma and space
             print(error_message)
             sys.exit(1)
         
         print('GCP service account key validation successful!')
         "
+
     
     - name: Install kubectl
       run: |
@@ -88,13 +115,15 @@ jobs:
         chmod +x ./kubectl
         sudo mv ./kubectl /usr/local/bin/kubectl
         
+    
+        
     - name: Verify GKE cluster location
       run: |
-        if [ -z "${{ secrets.GKE_CLUSTER_NAME }}" ]; then
+        if [ -z "${GKE_CLUSTER_NAME}" ]; then
           echo "GKE_CLUSTER_NAME is not set or is empty!"
           exit 1
         fi
-        if [ -z "${{ secrets.GKE_CLUSTER_ZONE }}" ]; then
+        if [ -z "${GKE_CLUSTER_ZONE}" ]; then
           echo "GKE_CLUSTER_ZONE is not set or is empty!"
           exit 1
         else
@@ -102,11 +131,13 @@ jobs:
           gcloud container clusters list --zone="${GKE_CLUSTER_ZONE}" --project="${GCP_PROJECT_ID}"
         fi
       
+
     - name: Configure kubectl
       run: |
         gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
         gcloud container clusters get-credentials "${GKE_CLUSTER_NAME}" --zone="${GKE_CLUSTER_ZONE}" --project="${GCP_PROJECT_ID}"
      
+
     - name: Deploy to GKE
       run: |
         chmod +x ./k8s/deploy_k8s.sh
