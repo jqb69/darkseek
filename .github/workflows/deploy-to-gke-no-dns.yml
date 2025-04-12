@@ -12,7 +12,7 @@ jobs:
    
     steps:
     - name: Validate Workflow Syntax
-      uses: ibiqlik/action-yamllint@latest
+      uses: frenck/action-yamllint@v1
       with:
        file: .github/workflows/deploy-to-gke-no-dns.yml
        
