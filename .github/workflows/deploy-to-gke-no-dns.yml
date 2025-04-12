@@ -32,25 +32,13 @@ jobs:
     - name: Check if all required secrets are set
       id: gcp_secrets_check
       run: |
-        if [[ -z "$GCP_SA_KEY" ]]; then
-          echo "GCP_SA_KEY is not set or is empty!"
+        required_secrets=("GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
+        for secret in "${required_secrets[@]}"; do
+          if [[ -z "${!secret}" ]]; then
+          echo "Error: $secret not set"
           exit 1
-        fi
-
-        if [[ -z "$GCP_PROJECT_ID" ]]; then
-          echo "GCP_PROJECT_ID is not set or is empty!"
-          exit 1
-        fi
-
-        if [[ -z "$GKE_CLUSTER_ZONE" ]]; then
-          echo "GKE_CLUSTER_ZONE is not set or is empty!"
-          exit 1
-        fi
-
-        if [[ -z "$GKE_CLUSTER_NAME" ]]; then
-          echo "GKE_CLUSTER_NAME is not set or is empty!"
-          exit 1
-        fi
+          fi
+        done
 
         echo "All required secrets are set"
         echo "GKE_CLUSTER_ZONE is set to $GKE_CLUSTER_ZONE"
@@ -80,31 +68,37 @@ jobs:
    
     - name: Validate JSON structure
       run: |
-         python -c "import json, sys, os; \
-         json_file_path = '/home/runner/work/darkseek/darkseek/gcloud.json'; \
-         if not os.path.exists(json_file_path): \
-           print(f'Error: JSON file not found at {json_file_path}'); \
-           sys.exit(1); \
-         try: \
-           with open(json_file_path, 'r') as f: \
-             data = json.load(f); \
-         except json.JSONDecodeError as e: \
-           print(f'Error: Invalid JSON format: {e}'); \
-           sys.exit(1); \
-            
-         required_keys = ['type', 'project_id', 'private_key_id', 'private_key', \
-         'client_email', 'client_id', 'auth_uri', 'token_uri', \
-         'auth_provider_x509_cert_url', 'client_x509_cert_url']; \
-         missing_keys = [key for key in required_keys if key not in data]; \
-         if missing_keys: \
-           error_message = 'Error: Missing required keys in GCP_SA_KEY: ' \
-           for key in missing_keys: \
-              error_message += key + ', ' \
-           error_message = error_message[:-2]  # Remove the last comma and space \
-           print(error_message) \
-           sys.exit(1); \
-           
-         print('Validation successful')"
+        python -c "
+        import json, sys, os
+        
+        json_file_path = '/home/runner/work/darkseek/darkseek/gcloud.json'
+        
+        if not os.path.exists(json_file_path):
+            print(f'Error: JSON file not found at {json_file_path}')
+            sys.exit(1)
+        
+        try:
+            with open(json_file_path, 'r') as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f'Error: Invalid JSON format in GCP_SA_KEY: {e}')
+            sys.exit(1)
+        
+        required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 
+                        'client_email', 'client_id', 'auth_uri', 'token_uri',
+                        'auth_provider_x509_cert_url', 'client_x509_cert_url']
+        missing_keys = [key for key in required_keys if key not in data]
+        
+        if missing_keys:
+            error_message = 'Error: Missing required keys in GCP_SA_KEY: '
+            for key in missing_keys:
+                error_message += key + ', '
+            error_message = error_message[:-2]  # Remove the last comma and space
+            print(error_message)
+            sys.exit(1)
+        
+        print('GCP service account key validation successful!')
+        "
 
     
     - name: Install kubectl
@@ -117,7 +111,7 @@ jobs:
         
     - name: Verify GKE cluster location
       run: |
-        required_secrets=("GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
+        required_secrets=("GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
         for secret in "${required_secrets[@]}"; do
           if [[ -z "${!secret}" ]]; then
           echo "Error: $secret not set"
