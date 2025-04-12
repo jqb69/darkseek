@@ -122,7 +122,7 @@ jobs:
         echo "GKE_CLUSTER_ZONE is set = $GKE_CLUSTER_ZONE"
         echo "Running as: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
         echo "Project: $(gcloud config get-value project)"
-        gcloud container clusters list --zone="${{env.GKE_CLUSTER_ZONE}}" --project="${{env.GCP_PROJECT_ID}}"
+        gcloud container clusters list --zone="$GKE_CLUSTER_ZONE" --project="$GCP_PROJECT_ID"
         
       env:
         GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
