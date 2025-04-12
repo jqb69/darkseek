@@ -110,9 +110,17 @@ jobs:
        
     - name: Check IAM Roles
       run: |
-        SERVICE_ACCOUNT=$(jq -r '.client_email' < /home/runner/work/_temp/gha-creds-*.json)
-        echo "Roles for $SERVICE_ACCOUNT:"
-        gcloud projects get-iam-policy "$GCP_PROJECT_ID" --filter="bindings.members:$SERVICE_ACCOUNT" --format='table(bindings.role)' 
+        if [ -z "$GOOGLE_GHA_CREDS_PATH" ]; then
+          echo "Error: GOOGLE_GHA_CREDS_PATH is not set."
+          exit 1
+        fi
+        
+        if [ ! -f "$GOOGLE_GHA_CREDS_PATH" ]; then
+           echo "Error: Credentials file not found at $GOOGLE_GHA_CREDS_PATH"
+           exit 1
+        fi
+        SERVICE_ACCOUNT=$(jq -r '.client_email' < "$GOOGLE_GHA_CREDS_PATH")
+        echo "Service Account: $SERVICE_ACCOUNT"
       env:
         GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
         
