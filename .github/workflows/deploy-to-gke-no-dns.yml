@@ -83,14 +83,15 @@ jobs:
          python -c "import json, sys, os; \
          json_file_path = '/home/runner/work/darkseek/darkseek/gcloud.json'; \
          if not os.path.exists(json_file_path): \
-          print(f'Error: JSON file not found at {json_file_path}'); \
-          sys.exit(1); \
+           print(f'Error: JSON file not found at {json_file_path}'); \
+           sys.exit(1); \
          try: \
-          with open(json_file_path, 'r') as f: \
-            data = json.load(f); \
+           with open(json_file_path, 'r') as f: \
+             data = json.load(f); \
          except json.JSONDecodeError as e: \
-            print(f'Error: Invalid JSON format: {e}'); \
-            sys.exit(1); \
+           print(f'Error: Invalid JSON format: {e}'); \
+           sys.exit(1); \
+            
          required_keys = ['type', 'project_id', 'private_key_id', 'private_key', \
          'client_email', 'client_id', 'auth_uri', 'token_uri', \
          'auth_provider_x509_cert_url', 'client_x509_cert_url']; \
@@ -98,10 +99,11 @@ jobs:
          if missing_keys: \
            error_message = 'Error: Missing required keys in GCP_SA_KEY: ' \
            for key in missing_keys: \
-             error_message += key + ', ' \
+              error_message += key + ', ' \
            error_message = error_message[:-2]  # Remove the last comma and space \
            print(error_message) \
            sys.exit(1); \
+           
          print('Validation successful')"
 
     
