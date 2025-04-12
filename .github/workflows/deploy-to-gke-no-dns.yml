@@ -41,6 +41,7 @@ jobs:
         done
 
         echo "All required secrets are set"
+        echo "GCP_PROJECT_ID: $GCP_PROJECT_ID"
         echo "GKE_CLUSTER_ZONE is set to $GKE_CLUSTER_ZONE"
         echo "GKE_CLUSTER_NAME is set to $GKE_CLUSTER_NAME"
       env:
@@ -106,8 +107,14 @@ jobs:
         curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
         chmod +x ./kubectl
         sudo mv ./kubectl /usr/local/bin/kubectl
-        
-    
+       
+    - name: Check IAM Roles
+      run: |
+        SERVICE_ACCOUNT=$(jq -r '.client_email' < /home/runner/work/_temp/gha-creds-*.json)
+        echo "Roles for $SERVICE_ACCOUNT:"
+        gcloud projects get-iam-policy "$GCP_PROJECT_ID" --filter="bindings.members:$SERVICE_ACCOUNT" --format='table(bindings.role)' 
+      env:
+        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
         
     - name: Verify GKE cluster location
       run: |
