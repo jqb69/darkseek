@@ -9,51 +9,45 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
+   
     steps:
+    - name: Validate Workflow Syntax
+      uses: frenck/action-yamllint@v1
+      with:
+       file: .github/workflows/deploy-to-gke-no-dns.yml
+       
     - name: Checkout repository
       uses: actions/checkout@v3
-
+      
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
-
+        credentials_json: ${{secrets.GCP_SA_KEY}}
+        
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
       with:
-        project_id: ${{ secrets.GCP_PROJECT_ID }}
+        project_id: ${{secrets.GCP_PROJECT_ID}}
 
-    - name: Check if GCP_SA_KEY secret is set
+    - name: Check if all required secrets are set
+      id: gcp_secrets_check
       run: |
-        if [[ -z "${GCP_SA_KEY_ENV}" ]]; then
-          echo "GCP_SA_KEY_ENV is set as env variable BUT is empty or not set!"
-          if [[ -z "${GCP_SA_KEY}" ]]; then
-            echo "GCP_SA_KEY secret itself is also empty or not set!"
-          else
-            echo "GCP_SA_KEY secret itself is NOT empty (but env var might be the issue)!"
-          fi
+        required_secrets=("GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
+        for secret in "${required_secrets[@]}"; do
+          if [[ -z "${!secret}" ]]; then
+          echo "Error: $secret not set"
           exit 1
-        else
-          echo "GCP_SA_KEY_ENV is set as environment variable and is NOT empty"
-        fi
-        
-        if [[ -z "${CLUSTER_NAME_ENV}" ]]; then
-                echo "GKE_CLUSTER_NAME secret itself is also empty or not set!"
-        else
-              echo "GKE_CLUSTER_NAME is ${CLUSTER_NAME_ENV}"
-        fi
-        
-        if [[ -z "${CLUSTER_ZONE_ENV}" ]]; then
-            echo "GKE_CLUSTER_ZONE secret itself is also empty or not set!"
-        else
-          echo "GKE_CLUSTER_ZONE is ${CLUSTER_ZONE_ENV}"
-        fi
+          fi
+        done
+
+        echo "All required secrets are set"
+        echo "GKE_CLUSTER_ZONE is set to $GKE_CLUSTER_ZONE"
+        echo "GKE_CLUSTER_NAME is set to $GKE_CLUSTER_NAME"
       env:
-        CLUSTER_NAME_ENV: ${{ secrets.GKE_CLUSTER_NAME }}
-        CLUSTER_ZONE_ENV: ${{ secrets.GKE_CLUSTER_ZONE }}
-        GCP_SA_KEY_ENV: ${{ secrets.GCP_SA_KEY }}
-        GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}  # Add this line to access the secret in the script
+        GCP_SA_KEY: ${{secrets.GCP_SA_KEY}}
+        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
+        GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
+        GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
 
     - name: Check for encrypted service account file
       id: check-file
@@ -63,14 +57,15 @@ jobs:
           exit 1
         fi
 
-    - name: Read base64 content
-      id: read-content
+    - name: Decode service account
+      id: decode-content
       run: |
-        CONTENT=$(cat ./gitcloudsa.json)
-        echo "$CONTENT" | base64 --decode > /home/runner/work/darkseek/darkseek/gcloud.json
+        base64 -di ./gitcloudsa.json > /home/runner/work/darkseek/darkseek/gcloud.json || {
+         echo "Invalid base64 encoding"
+         exit 
+        }
 
-
-
+   
     - name: Validate JSON structure
       run: |
         python -c "
@@ -116,40 +111,45 @@ jobs:
         
     - name: Verify GKE cluster location
       run: |
-        if [ -z "${{ secrets.GKE_CLUSTER_NAME }}" ]; then
-          echo "GKE_CLUSTER_NAME is not set or is empty!"
+        required_secrets=("GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
+        for secret in "${required_secrets[@]}"; do
+          if [[ -z "${!secret}" ]]; then
+          echo "Error: $secret not set"
           exit 1
-        fi
-        if [ -z "${{ secrets.GKE_CLUSTER_ZONE }}" ]; then
-          echo "GKE_CLUSTER_ZONE is not set or is empty!"
-          exit 1
-        else
-          echo "GKE_CLUSTER_ZONE is set = $CLUSTER_ZONE_ENV"
-          gcloud container clusters list --zone="${CLUSTER_ZONE_ENV}" --project="${PROJECT_ID_ENV}"
-        fi
+          fi
+        done
+        
+        echo "GKE_CLUSTER_ZONE is set = $GKE_CLUSTER_ZONE"
+        echo "Running as: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
+        echo "Project: $(gcloud config get-value project)"
+        gcloud container clusters list --zone="${{env.GKE_CLUSTER_ZONE}}" --project="${{env.GCP_PROJECT_ID}}"
+        
       env:
-        PROJECT_ID_ENV: ${{ secrets.GCP_PROJECT_ID }}
-        CLUSTER_ZONE_ENV: ${{ secrets.GKE_CLUSTER_ZONE }}
+        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
+        GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
+        GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
+      
 
     - name: Configure kubectl
-      run: |
-        gcloud auth activate-service-account --key-file=/home/runner/work/darkseek/darkseek/gcloud.json
-        gcloud container clusters get-credentials "${{ secrets.GKE_CLUSTER_NAME }}" --zone="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}"
+      run: |    
+        gcloud container clusters get-credentials "${{env.GKE_CLUSTER_NAME}}" --zone="${{env.GKE_CLUSTER_ZONE}}" --project="${{env.GCP_PROJECT_ID}}"
       env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
+        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
+        GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
+        GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
 
     - name: Deploy to GKE
       run: |
         chmod +x ./k8s/deploy_k8s.sh
         ./k8s/deploy_k8s.sh
       env:
-        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-        GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
-        HUGGINGFACEHUB_API_TOKEN: ${{ secrets.HUGGINGFACEHUB_API_TOKEN }}
-        DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        REDIS_URL: ${{ secrets.REDIS_URL }}
-        MQTT_BROKER_HOST: ${{ secrets.MQTT_BROKER_HOST }}
-        MQTT_BROKER_PORT: ${{ secrets.MQTT_BROKER_PORT }}
-        MQTT_TLS: ${{ secrets.MQTT_TLS }}
-        MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
-        MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
+        GOOGLE_API_KEY: ${{secrets.GOOGLE_API_KEY}}
+        GOOGLE_CSE_ID: ${{secrets.GOOGLE_CSE_ID}}
+        HUGGINGFACEHUB_API_TOKEN: ${{secrets.HUGGINGFACEHUB_API_TOKEN}}
+        DATABASE_URL: ${{secrets.DATABASE_URL}}
+        REDIS_URL: ${{secrets.REDIS_URL}}
+        MQTT_BROKER_HOST: ${{secrets.MQTT_BROKER_HOST}}
+        MQTT_BROKER_PORT: ${{secrets.MQTT_BROKER_PORT}}
+        MQTT_TLS: ${{secrets.MQTT_TLS}}
+        MQTT_USERNAME: ${{secrets.MQTT_USERNAME}}
+        MQTT_PASSWORD: ${{secrets.MQTT_PASSWORD}}
