@@ -50,57 +50,7 @@ jobs:
         GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
         GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
 
-    - name: Check for encrypted service account file
-      id: check-file
-      run: |
-        if [ ! -f ./gitcloudsa.json ]; then
-          echo "Error: ./gitcloudsa.json not found"
-          exit 1
-        fi
-
-    - name: Decode service account
-      id: decode-content
-      run: |
-        base64 -di ./gitcloudsa.json > /home/runner/work/darkseek/darkseek/gcloud.json || {
-         echo "Invalid base64 encoding"
-         exit 
-        }
-
    
-    - name: Validate JSON structure
-      run: |
-        python -c "
-        import json, sys, os
-        
-        json_file_path = '/home/runner/work/darkseek/darkseek/gcloud.json'
-        
-        if not os.path.exists(json_file_path):
-            print(f'Error: JSON file not found at {json_file_path}')
-            sys.exit(1)
-        
-        try:
-            with open(json_file_path, 'r') as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            print(f'Error: Invalid JSON format in GCP_SA_KEY: {e}')
-            sys.exit(1)
-        
-        required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 
-                        'client_email', 'client_id', 'auth_uri', 'token_uri',
-                        'auth_provider_x509_cert_url', 'client_x509_cert_url']
-        missing_keys = [key for key in required_keys if key not in data]
-        
-        if missing_keys:
-            error_message = 'Error: Missing required keys in GCP_SA_KEY: '
-            for key in missing_keys:
-                error_message += key + ', '
-            error_message = error_message[:-2]  # Remove the last comma and space
-            print(error_message)
-            sys.exit(1)
-        
-        print('GCP service account key validation successful!')
-        "
-
     
     - name: Install kubectl
       run: |
