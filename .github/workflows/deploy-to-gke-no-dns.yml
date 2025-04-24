@@ -52,13 +52,16 @@ jobs:
 
    
     
-    - name: Install kubectl
+    - name: Install kubectl and gke-gcloud-auth-plugin
       run: |
         curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
         chmod +x ./kubectl
         sudo mv ./kubectl /usr/local/bin/kubectl
+        # Install gke-gcloud-auth-plugin
+        gcloud components install gke-gcloud-auth-plugin --quiet
+        gke-gcloud-auth-plugin --version
        
-    - name: Check IAM Roles
+    - name: Verify Service Account
       run: |
         if [ -z "$GOOGLE_GHA_CREDS_PATH" ]; then
           echo "Error: GOOGLE_GHA_CREDS_PATH is not set."
@@ -71,9 +74,7 @@ jobs:
         fi
         SERVICE_ACCOUNT=$(jq -r '.client_email' < "$GOOGLE_GHA_CREDS_PATH")
         echo "Service Account: $SERVICE_ACCOUNT"
-      env:
-        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
-        
+   
     - name: List all clusters
       id: list-clusters
       run: gcloud container clusters list --project="${{env.GCP_PROJECT_ID}}"
