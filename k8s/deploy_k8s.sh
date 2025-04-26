@@ -76,11 +76,11 @@ kubectl apply -f db-pvc.yaml
 
 # --- Wait for Deployments to Be Ready ---
 echo "Waiting for deployments to be ready..."
-kubectl wait --for=condition=available --timeout=300s deployment/darkseek-backend-ws
-kubectl wait --for=condition=available --timeout=300s deployment/darkseek-backend-mqtt
-kubectl wait --for=condition=available --timeout=300s deployment/darkseek-frontend
-kubectl wait --for=condition=available --timeout=300s deployment/darkseek-db
-kubectl wait --for=condition=available --timeout=300s deployment/darkseek-redis
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-ws
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-mqtt
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-frontend
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-db
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-redis
 
 # --- Patch ConfigMap with External IPs ---
 echo "Fetching external IPs..."
