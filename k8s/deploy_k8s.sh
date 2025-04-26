@@ -84,13 +84,16 @@ kubectl wait --for=condition=available --timeout=600s deployment/darkseek-redis
 
 # --- Patch ConfigMap with External IPs ---
 echo "Fetching external IPs..."
-WS_IP=$(kubectl get service darkseek-backend-ws -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "pending")
-MQTT_IP=$(kubectl get service darkseek-backend-mqtt -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "pending")
-if [ "$WS_IP" != "pending" ] && [ "$MQTT_IP" != "pending" ]; then
-  kubectl patch configmap darkseek-config -p "{\"data\":{\"WEBSOCKET_URI\":\"wss://$WS_IP:443/ws/\",\"MQTT_URI\":\"https://$MQTT_IP:443\"}}"
-else
-  echo "Warning: External IPs not yet assigned. ConfigMap not updated."
-fi
+for i in {1..5}; do
+  WS_IP=$(kubectl get service darkseek-backend-ws -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "pending")
+  MQTT_IP=$(kubectl get service darkseek-backend-mqtt -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "pending")
+  if [ "$WS_IP" != "pending" ] && [ "$MQTT_IP" != "pending" ]; then
+    kubectl patch configmap darkseek-config -p "{\"data\":{\"WEBSOCKET_URI\":\"wss://$WS_IP:443/ws/\",\"MQTT_URI\":\"https://$MQTT_IP:443\"}}"
+    break
+  fi
+  echo "Waiting for IPs ($i/5)..."
+  sleep 30
+done
 
 # --- Display Service External IPs ---
 echo "Deployment completed. Fetching external IPs..."
