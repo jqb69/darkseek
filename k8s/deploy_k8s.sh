@@ -23,6 +23,98 @@ check_kubectl() {
   fi
 }
 
+# --- Validate Required Environment Variables ---
+check_env_vars() {
+  echo "Validating required environment variables..."
+  required_vars=(
+    "GOOGLE_API_KEY"
+    "GOOGLE_CSE_ID"
+    "HUGGINGFACEHUB_API_TOKEN"
+    "DATABASE_URL"
+    "REDIS_URL"
+    "MQTT_BROKER_HOST"
+    "MQTT_BROKER_PORT"
+    "MQTT_TLS"
+    "MQTT_USERNAME"
+    "MQTT_PASSWORD"
+  )
+  for var in "${required_vars[@]}"; do
+    if [ -z "${!var}" ]; then
+      echo "Error: Environment variable '$var' is not set." >&2
+      exit 1
+    fi
+  done
+  echo "All required environment variables are set."
+}
+
+# --- Validate Kubernetes Manifest Files ---
+check_manifest_files() {
+  echo "Validating Kubernetes manifest files..."
+  required_files=(
+    "configmap.yaml"
+    "backend-ws-deployment.yaml"
+    "backend-mqtt-deployment.yaml"
+    "frontend-deployment.yaml"
+    "db-deployment.yaml"
+    "redis-deployment.yaml"
+    "backend-ws-service.yaml"
+    "backend-mqtt-service.yaml"
+    "frontend-service.yaml"
+    "db-service.yaml"
+    "redis-service.yaml"
+    "db-pvc.yaml"
+  )
+  for file in "${required_files[@]}"; do
+    if [ ! -f "$K8S_DIR/$file" ]; then
+      echo "Error: Required manifest file '$file' not found in '$K8S_DIR'." >&2
+      exit 1
+    fi
+  done
+  echo "All required manifest files are present."
+}
+
+# --- Check Pod Statuses After Deployment ---
+check_pod_statuses() {
+  echo "Checking pod statuses for all deployments..."
+  deployments=(
+    "darkseek-backend-ws"
+    "darkseek-backend-mqtt"
+    "darkseek-frontend"
+    "darkseek-db"
+    "darkseek-redis"
+  )
+  all_healthy=true
+  for deployment in "${deployments[@]}"; do
+    echo "Checking pods for deployment '$deployment'..."
+    pod_status=$(kubectl get pods -n default -l app=$deployment -o jsonpath='{range .items[*]}{.metadata.name}:{.status.phase}:{.status.containerStatuses[*].ready}{"\n"}{end}')
+    if [ -z "$pod_status" ]; then
+      echo "Error: No pods found for deployment '$deployment'." >&2
+      all_healthy=false
+      continue
+    fi
+    while IFS= read -r line; do
+      pod_name=$(echo "$line" | cut -d':' -f1)
+      phase=$(echo "$line" | cut -d':' -f2)
+      ready=$(echo "$line" | cut -d':' -f3)
+      if [ "$phase" != "Running" ] || [ "$ready" != "true" ]; then
+        echo "Warning: Pod '$pod_name' is not healthy (Phase: $phase, Ready: $ready)." >&2
+        echo "Pod details for '$pod_name':"
+        kubectl describe pod "$pod_name" -n default
+        echo "Logs for '$pod_name':"
+        kubectl logs "$pod_name" -n default --all-containers=true || echo "No logs available."
+        all_healthy=false
+      else
+        echo "Pod '$pod_name' is healthy."
+      fi
+    done <<< "$pod_status"
+  done
+  if [ "$all_healthy" = false ]; then
+    echo "Error: Some pods are not healthy. Check above details for troubleshooting." >&2
+    exit 1
+  fi
+  echo "All pods are healthy."
+}
+
 echo "Checking for kubectl..."
 check_kubectl
 
@@ -32,6 +124,10 @@ if [ ! -d "$K8S_DIR" ]; then
   echo "Error: Kubernetes manifest directory '$K8S_DIR' not found." >&2
   exit 1
 fi
+
+# --- Validate Prerequisites ---
+check_env_vars
+check_manifest_files
 
 # --- Change to Directory ---
 cd "$K8S_DIR"
@@ -76,11 +172,14 @@ kubectl apply -f db-pvc.yaml
 
 # --- Wait for Deployments to Be Ready ---
 echo "Waiting for deployments to be ready..."
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-ws
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-mqtt
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-frontend
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-db
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-redis
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-ws || { echo "Error: Deployment 'darkseek-backend-ws' failed to become ready."; exit 1; }
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-mqtt || { echo "Error: Deployment 'darkseek-backend-mqtt' failed to become ready."; exit 1; }
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-frontend || { echo "Error: Deployment 'darkseek-frontend' failed to become ready."; exit 1; }
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-db || { echo "Error: Deployment 'darkseek-db' failed to become ready."; exit 1; }
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-redis || { echo "Error: Deployment 'darkseek-redis' failed to become ready."; exit 1; }
+
+# --- Check Pod Statuses ---
+check_pod_statuses
 
 # --- Patch ConfigMap with External IPs ---
 echo "Fetching external IPs..."
@@ -94,6 +193,9 @@ for i in {1..5}; do
   echo "Waiting for IPs ($i/5)..."
   sleep 30
 done
+if [ "$WS_IP" = "pending" ] || [ "$MQTT_IP" = "pending" ]; then
+  echo "Warning: External IPs not assigned after retries. ConfigMap not updated." >&2
+fi
 
 # --- Display Service External IPs ---
 echo "Deployment completed. Fetching external IPs..."
