@@ -9,7 +9,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-   
+    environment: .darkseek_env # Specify the .darkseek environment here
     steps:
     - name: Validate Workflow Syntax
       uses: frenck/action-yamllint@v1
