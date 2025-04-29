@@ -27,3 +27,10 @@ spec:
         - name: DATABASE_URL
           value: "postgresql://$(kubectl get secret darkseek-secrets -o jsonpath='{.data.POSTGRES_USER}' | base64 -d):$(kubectl get secret darkseek-secrets -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)@darkseek-db:5432/$(kubectl get secret darkseek-secrets -o jsonpath='{.data.POSTGRES_DB}' | base64 -d)"
         # REDIS_URL is now sourced from darkseek-secrets via envFrom, no need to hardcode
+        resources:
+          requests:
+            cpu: "100m"    # Minimum CPU needed
+            memory: "256Mi" # Minimum memory needed
+          limits:
+            cpu: "500m"    # Maximum CPU allowed
+            memory: "512Mi" # Maximum memory allowed
