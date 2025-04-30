@@ -37,15 +37,16 @@ spec:
         volumeMounts:
         - name: postgres-data
           mountPath: /var/lib/postgresql/data
-      volumes:
-      - name: postgres-data
-        persistentVolumeClaim:
-          claimName: darkseek-postgres-pvc
-      resources:
+        resources:
           requests:
             cpu: "100m"    # Minimum CPU needed
             memory: "256Mi" # Minimum memory needed
           limits:
             cpu: "500m"    # Maximum CPU allowed
-            memory: "512Mi" # Maximum memory allowed    
+            memory: "512Mi" # Maximum memory allowed      
+      volumes:
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: darkseek-postgres-pvc
+     
           
