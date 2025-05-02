@@ -68,6 +68,9 @@ kubectl create secret generic darkseek-secrets \
   --from-literal=MQTT_TLS="${MQTT_TLS}" \
   --from-literal=MQTT_USERNAME="${MQTT_USERNAME}" \
   --from-literal=MQTT_PASSWORD="${MQTT_PASSWORD}" \
+  --from-literal=POSTGRES_USER="${POSTGRES_USER}" \
+  --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
+  --from-literal=POSTGRES_DB="${POSTGRES_DB}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # Deployment files (shared across DNS and no-DNS)
