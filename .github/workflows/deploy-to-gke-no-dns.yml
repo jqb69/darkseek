@@ -125,3 +125,9 @@ jobs:
         MQTT_TLS: ${{secrets.MQTT_TLS}}
         MQTT_USERNAME: ${{secrets.MQTT_USERNAME}}
         MQTT_PASSWORD: ${{secrets.MQTT_PASSWORD}}
+        POSTGRES_USER: ${{secrets.POSTGRES_USER}}
+        POSTGRES_PASSWORD: ${{secrets.POSTGRES_PASSWORD}}
+        POSTGRES_DB: $${secrets.POSTGRES_DB}}
+        
+        
+        
