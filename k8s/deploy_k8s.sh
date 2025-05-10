@@ -175,7 +175,7 @@ echo "Waiting for deployments to be ready..."
 kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-ws || { echo "Error: Deployment 'darkseek-backend-ws' failed to become ready."; exit 1; }
 kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-mqtt || { echo "Error: Deployment 'darkseek-backend-mqtt' failed to become ready."; exit 1; }
 kubectl wait --for=condition=available --timeout=600s deployment/darkseek-frontend || { echo "Error: Deployment 'darkseek-frontend' failed to become ready."; exit 1; }
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-db || { echo "Error: Deployment 'darkseek-db' failed to become ready."; exit 1; }
+kubectl wait --for=condition=available --timeout=900s deployment/darkseek-db || { echo "Error: Deployment 'darkseek-db' failed to become ready."; exit 1; }
 kubectl wait --for=condition=available --timeout=600s deployment/darkseek-redis || { echo "Error: Deployment 'darkseek-redis' failed to become ready."; exit 1; }
 
 # --- Check Pod Statuses ---
