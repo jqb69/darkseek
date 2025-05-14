@@ -50,7 +50,7 @@ spec:
             - pg_isready
             - -U
             - admin
-          initialDelaySeconds: 30
+          initialDelaySeconds: 60
           periodSeconds: 10
           timeoutSeconds: 5
         livenessProbe:
@@ -59,7 +59,7 @@ spec:
             - pg_isready
             - -U
             - admin
-          initialDelaySeconds: 60
+          initialDelaySeconds: 120
           periodSeconds: 20
           timeoutSeconds: 5
       volumes:
