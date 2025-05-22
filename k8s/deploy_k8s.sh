@@ -1,3 +1,4 @@
+# ./k8s/deploy_k8s.sh
 #!/bin/bash
 
 # --- Deploy DarkSeek to GKE (Without DNS) ---
@@ -37,6 +38,9 @@ check_env_vars() {
     "MQTT_TLS"
     "MQTT_USERNAME"
     "MQTT_PASSWORD"
+    "POSTGRES_USER"
+    "POSTGRES_PASSWORD"
+    "POSTGRES_DB"
   )
   for var in "${required_vars[@]}"; do
     if [ -z "${!var}" ]; then
@@ -71,6 +75,65 @@ check_manifest_files() {
     fi
   done
   echo "All required manifest files are present."
+}
+
+# --- Check Database Initialization ---
+check_db_initialization() {
+  echo "Checking PostgreSQL initialization for 'darkseek-db'..."
+  local timeout=300
+  local interval=10
+  local elapsed=0
+
+  # Wait for a darkseek-db pod to be Running
+  while [ $elapsed -lt $timeout ]; do
+    pod_name=$(kubectl get pods -n default -l app=darkseek-db -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    if [ -n "$pod_name" ]; then
+      pod_phase=$(kubectl get pod "$pod_name" -n default -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+      if [ "$pod_phase" = "Running" ]; then
+        echo "Pod '$pod_name' is Running. Checking database status..."
+        break
+      fi
+    fi
+    echo "Waiting for 'darkseek-db' pod to be Running ($elapsed/$timeout seconds)..."
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  if [ $elapsed -ge $timeout ] || [ -z "$pod_name" ]; then
+    echo "Error: No 'darkseek-db' pod reached Running state within $timeout seconds." >&2
+    echo "Diagnostics:"
+    kubectl get pods -n default -l app=darkseek-db
+    if [ -n "$pod_name" ]; then
+      kubectl describe pod "$pod_name" -n default
+      kubectl logs "$pod_name" -n default || echo "No logs available."
+    fi
+    echo "Likely server-side issue: Check GKE cluster resources, PVC binding, or node availability."
+    exit 1
+  fi
+
+  # Check if PostgreSQL is accepting connections
+  if kubectl exec "$pod_name" -n default -- pg_isready -U admin; then
+    echo "PostgreSQL is accepting connections."
+  else
+    echo "Error: PostgreSQL is not accepting connections." >&2
+    echo "Diagnostics:"
+    kubectl describe pod "$pod_name" -n default
+    kubectl logs "$pod_name" -n default || echo "No logs available."
+    echo "Likely client-side issue: Check POSTGRES_USER, POSTGRES_PASSWORD, or database configuration in secrets."
+    exit 1
+  fi
+
+  # Attempt a simple query to verify database functionality
+  if kubectl exec "$pod_name" -n default -- psql -U admin -d darkseekdb -c "SELECT 1;" >/dev/null 2>&1; then
+    echo "Database 'darkseekdb' is initialized and functional."
+  else
+    echo "Error: Failed to query database 'darkseekdb'." >&2
+    echo "Diagnostics:"
+    kubectl describe pod "$pod_name" -n default
+    kubectl logs "$pod_name" -n default || echo "No logs available."
+    echo "Likely client-side issue: Check POSTGRES_DB, user permissions, or existing data in PVC."
+    exit 1
+  fi
 }
 
 # --- Check Pod Statuses After Deployment ---
@@ -151,6 +214,9 @@ kubectl create secret generic darkseek-secrets \
   --from-literal=MQTT_TLS="${MQTT_TLS}" \
   --from-literal=MQTT_USERNAME="${MQTT_USERNAME}" \
   --from-literal=MQTT_PASSWORD="${MQTT_PASSWORD}" \
+  --from-literal=POSTGRES_USER="${POSTGRES_USER}" \
+  --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
+  --from-literal=POSTGRES_DB="${POSTGRES_DB}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 # Deployment files
@@ -169,6 +235,9 @@ kubectl apply -f redis-service.yaml
 
 # Persistent volume claim for DB
 kubectl apply -f db-pvc.yaml
+
+# --- Check Database Initialization ---
+check_db_initialization
 
 # --- Wait for Deployments to Be Ready ---
 echo "Waiting for deployments to be ready..."
