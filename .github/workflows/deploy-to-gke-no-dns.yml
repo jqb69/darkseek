@@ -1,11 +1,11 @@
-#no deplpoy-to-gke-no-dns.yml 
-name: Deploy to GKE Without DNS *#
+#no deplpoy-to-gke-no-dns.yml
+name: Deploy to GKE Without DNS
 
 on:
   push:
     branches:
       - main
-      
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -104,7 +104,7 @@ jobs:
 
     - name: Configure kubectl
       run: |    
-        gcloud container clusters get-credentials "${{env.GKE_CLUSTER_NAME}}" --region="${{env.GKE_CLUSTER_ZONE}}" --project="${{env.GCP_PROJECT_ID}}"
+        gcloud container clusters get-credentials "$GKE_CLUSTER_NAME" --region="$GKE_CLUSTER_ZONE" --project="$GCP_PROJECT_ID"
       env:
         GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
         GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
