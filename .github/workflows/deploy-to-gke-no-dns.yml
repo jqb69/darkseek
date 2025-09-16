@@ -1,11 +1,11 @@
-#no deplpoy-to-gke-no-dns.yml
-name: Deploy to GKE Without DNS
+#no deplpoy-to-gke-no-dns.yml 
+name: Deploy to GKE Without DNS *#
 
 on:
   push:
     branches:
       - main
-
+      
 jobs:
   deploy:
     runs-on: ubuntu-latest
