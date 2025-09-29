@@ -24,7 +24,10 @@ spec:
             name: darkseek-secrets
         env:
         - name: DATABASE_URL
-          value: "postgresql://$(kubectl get secret darkseek-secrets -o jsonpath='{.data.POSTGRES_USER}' | base64 -d):$(kubectl get secret darkseek-secrets -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)@darkseek-db:5432/$(kubectl get secret darkseek-secrets -o jsonpath='{.data.POSTGRES_DB}' | base64 -d)"
+          valueFrom:
+            secretKeyRef:
+              name: darkseek-secrets
+              key: DATABASE_URL
         # REDIS_URL is now sourced from darkseek-secrets via envFrom, no need to hardcode
         resources:
           requests:
