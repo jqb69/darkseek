@@ -249,9 +249,15 @@ apply_with_retry db-service.yaml
 apply_with_retry redis-service.yaml
 
 apply_with_retry db-pvc.yaml
-
 # --- Troubleshoot PVC/PV binding if PVC not Bound ---
 pvc_name="postgres-pvc"
+deployment_name="darkseek-db"
+
+dep_claim=$(kubectl get deployment $deployment_name -o jsonpath='{.spec.template.spec.volumes[?(@.name=="postgres-data")].persistentVolumeClaim.claimName}')
+if [ "$dep_claim" != "$pvc_name" ]; then
+  fatal "Deployment $deployment_name is referencing PVC $dep_claim, but PVC is named $pvc_name. Fix db-deployment.yaml."
+fi
+
 pvc_status=$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
 if [ "$pvc_status" != "Bound" ]; then
   log "PVC '$pvc_name' status: $pvc_status"
