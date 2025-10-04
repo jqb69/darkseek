@@ -208,7 +208,7 @@ check_pod_statuses() {
   local all_healthy=true
   for deployment in "${deployments[@]}"; do
     log "Checking pods for deployment '$deployment'..."
-    pod_status=$(kubectl get pods -n "$NAMESPACE" -l app="$deployment" -o jsonpath='{range .items[*]}{.metadata.name}:{.status.phase}:{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null || ec[...]
+    pod_status=$(kubectl get pods -n "$NAMESPACE" -l app="$deployment" -o jsonpath='{range .items[*]}{.metadata.name}:{.status.phase}:{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null || echo "")
     if [ -z "$pod_status" ]; then
       echo "  -> No pods found for '$deployment'." >&2
       all_healthy=false
