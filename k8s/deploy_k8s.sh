@@ -1,4 +1,3 @@
-# ./k8s/deploy_k8s.sh
 #!/bin/bash
 
 # --- Deploy DarkSeek to GKE (Without DNS) ---
@@ -13,6 +12,17 @@ APPLY_SLEEP=3
 # --- Utilities ---
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 fatal() { echo "ERROR: $*" >&2; exit 1; }
+
+# --- Error handler: run diagnostics on failure ---
+on_error() {
+  local exit_code=$?
+  # avoid recursion if troubleshoot_k8s itself fails
+  log "Script failed (exit code: $exit_code). Running cluster troubleshooting..."
+  # run diagnostics but don't mask the original exit code
+  troubleshoot_k8s || true
+  return $exit_code
+}
+trap 'on_error' ERR
 
 # --- Check for kubectl and install if not present ---
 check_kubectl() {
@@ -62,7 +72,7 @@ check_manifest_files() {
   log "All required manifest files are present."
 }
 
-# --- Troubleshooting helper ---
+# --- Troubleshooting helper (existing) ---
 troubleshoot_pvc_and_nodes() {
   # Usage: troubleshoot_pvc_and_nodes <pvc-name> <deployment-name-or-label>
   local pvc_name="${1:-postgres-pvc}"
@@ -88,7 +98,7 @@ troubleshoot_pvc_and_nodes() {
   kubectl describe nodes | grep -E 'Name:|Taints:|Unschedulable|Allocatable' -A3 -B1 || true
 
   log "6) Check if any pod is holding the PVC (ReadWriteOnce conflicts):"
-  kubectl get pods -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.volumes[*].persistentVolumeClaim.claimName}{"\n"}{end}' | grep -E "\b$pvc_name\b" || echo "  -> No pod currently listing the PVC."
+  kubectl get pods -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.volumes[*].persistentVolumeClaim.claimName}{"\n"}{end}' | grep -E "\b$pvc_name\b" || echo "  -> No pod cur[...]
 
   log "7) Optional: scale deployment to 0 then back to 1 to force reschedule (commented by default)."
   echo "To perform scale restart run: troubleshoot_pvc_and_nodes_scale_restart \"$deployment\""
@@ -101,6 +111,41 @@ troubleshoot_pvc_and_nodes_scale_restart() {
   sleep 3
   kubectl scale deployment "$deployment" -n "$NAMESPACE" --replicas=1
   log "Scale restart requested for '$deployment'."
+}
+
+# --- NEW: compact troubleshooting wrapper to run on script failure ---
+troubleshoot_k8s() {
+  log "=== begin automated troubleshoot_k8s ==="
+  log "NAMESPACE=$NAMESPACE"
+  log "1) PVC list:"
+  kubectl get pvc -n "$NAMESPACE" || true
+
+  log "2) Describe PVC 'db-pvc' (if present):"
+  kubectl describe pvc db-pvc -n "$NAMESPACE" || true
+
+  log "3) List PVs:"
+  kubectl get pv || true
+
+  log "4) Pods for darkseek-db and describe first pod:"
+  kubectl get pods -n "$NAMESPACE" -l app=darkseek-db -o wide || true
+  POD=$(kubectl get pods -n "$NAMESPACE" -l app=darkseek-db -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  if [ -n "$POD" ]; then
+    log "Describing pod $POD:"
+    kubectl describe pod "$POD" -n "$NAMESPACE" || true
+    log "Collecting logs from $POD:"
+    kubectl logs "$POD" -n "$NAMESPACE" --all-containers=true || true
+  else
+    log "No darkseek-db pod found to describe/log."
+  fi
+
+  log "5) Last 30 cluster events (namespace):"
+  kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp' | tail -n 30 || true
+
+  log "6) Node status and taints:"
+  kubectl get nodes -o wide || true
+  kubectl describe nodes | grep -E 'Name:|Taints:|Unschedulable|Allocatable' -A3 -B1 || true
+
+  log "=== end automated troubleshoot_k8s ==="
 }
 
 # --- Check Database Initialization (improved) ---
@@ -163,7 +208,7 @@ check_pod_statuses() {
   local all_healthy=true
   for deployment in "${deployments[@]}"; do
     log "Checking pods for deployment '$deployment'..."
-    pod_status=$(kubectl get pods -n "$NAMESPACE" -l app="$deployment" -o jsonpath='{range .items[*]}{.metadata.name}:{.status.phase}:{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null || echo "")
+    pod_status=$(kubectl get pods -n "$NAMESPACE" -l app="$deployment" -o jsonpath='{range .items[*]}{.metadata.name}:{.status.phase}:{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null || ec[...]
     if [ -z "$pod_status" ]; then
       echo "  -> No pods found for '$deployment'." >&2
       all_healthy=false
