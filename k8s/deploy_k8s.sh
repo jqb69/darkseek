@@ -98,7 +98,7 @@ troubleshoot_pvc_and_nodes() {
   kubectl describe nodes | grep -E 'Name:|Taints:|Unschedulable|Allocatable' -A3 -B1 || true
 
   log "6) Check if any pod is holding the PVC (ReadWriteOnce conflicts):"
-  kubectl get pods -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.volumes[*].persistentVolumeClaim.claimName}{"\n"}{end}' | grep -E "\b$pvc_name\b" || echo "  -> No pod cur[...]
+  kubectl get pods -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.volumes[*].persistentVolumeClaim.claimName}{"\n"}{end}' | grep -E "\b$pvc_name\b" || echo "  -> No pod cur[...]"
 
   log "7) Optional: scale deployment to 0 then back to 1 to force reschedule (commented by default)."
   echo "To perform scale restart run: troubleshoot_pvc_and_nodes_scale_restart \"$deployment\""
