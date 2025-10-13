@@ -1,18 +1,25 @@
 #darkseek app/backend/Dockefile.mqtt 
-FROM python:3.11-slim
+# Build Stage
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
-
-# Install system dependencies
+# Install system dependencies 
 RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
+
 # Copy requirements and install Python dependencies
 COPY ./app/backend/requirements.txt .
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Fix: Copy entire app folder as /app/app
-COPY ./app /app/app
+# Final Stage
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy only necessary files from the builder stage
+COPY --from=builder /app /app
 ENV PYTHONPATH=/app
+
 EXPOSE 8001 8885
 
 CMD ["uvicorn", "app.backend.mainmqtt:app", "--host", "0.0.0.0", "--port", "8001"]
