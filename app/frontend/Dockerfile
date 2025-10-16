@@ -1,12 +1,17 @@
 # app/frontend/Dockerfile
 FROM python:3.11-slim
-WORKDIR /app
-# install build deps, then install Python deps
+
+# Set working directory
+WORKDIR /app/frontend
+# Install build dependencies (e.g., gcc)
 RUN apt-get update && apt-get install -y gcc && rm -rf /var/lib/apt/lists/*
-COPY ./app/frontend/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
-# Copy the frontend code into /app/frontend so the path is /app/frontend/...
-COPY ./app/frontend /app/frontend
+# Copy the requirements and install them
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+# Copy the application code
+COPY . .
+# Expose the port that Streamlit will run on
 EXPOSE 8501
-# Run streamlit relative to WORKDIR=/app — path points to frontend/streamlit_app.py
-CMD ["streamlit", "run", "frontend/streamlit_app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+# Run the Streamlit app
+CMD ["streamlit", "run", "streamlit_app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+
