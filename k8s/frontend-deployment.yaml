@@ -16,6 +16,7 @@ spec:
       containers:
       - name: frontend
         image: gcr.io/ascendant-lore-452208-b6/darkseek-frontend:latest
+        imagePullPolicy: Always # Ensure latest image is pulled
         ports:
         - containerPort: 8501
         envFrom:
