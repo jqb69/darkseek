@@ -1,4 +1,3 @@
-#no deploy-to-gke-no-dns.yml
 name: Deploy to GKE Without DNS
 
 on:
@@ -8,7 +7,7 @@ on:
 
 jobs:
   deploy:
-    timeout-minutes: 30 
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     environment: .darkseek_env  # Remove if not defined
     steps:
@@ -20,8 +19,8 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{secrets.DOCKERHUB_USERNAME}}
-          password: ${{secrets.DOCKERHUB_TOKEN}}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Pre-pull BuildKit (retry)
         run: |
@@ -31,7 +30,7 @@ jobs:
               break
             fi
             echo "Retry $i/3 failed, waiting..."
-            sleep $((i*10))
+            sleep $((i * 10))
             if [ $i -eq 3 ]; then
               echo "Error: Failed to pull moby/buildkit:buildx-stable-1 after 3 retries"
               exit 1
@@ -48,76 +47,56 @@ jobs:
         run: |
           echo "Running tests..."
           if [ -d "tests" ]; then
-             pytest tests/ || { echo 'Tests failed, aborting deployment.'; exit 1; }
+            pytest tests/ || { echo 'Tests failed, aborting deployment.'; exit 1; }
           else
-             echo "No tests directory found, skipping tests."
+            echo "No tests directory found, skipping tests."
           fi
-         
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{secrets.GCP_SA_KEY}}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{secrets.GCP_PROJECT_ID}}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Check if all required secrets are set
         run: |
           REQUIRED_SECRETS=("GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
           for secret in "${REQUIRED_SECRETS[@]}"; do
-              if [[ -z "${{ secrets[$secret] }}" ]]; then
-                echo "Error: $secret is not set."
-                exit 1
-              fi
+            if [[ -z "${{ secrets[secret] }}" ]]; then
+              echo "Error: $secret is not set."
+              exit 1
+            fi
           done
           echo "All required secrets are set."
-        env:
-          GCP_SA_KEY: ${{secrets.GCP_SA_KEY}}
-          GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
-          GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
-          GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
           
       - name: Verify Service Account
         run: |
           if [ -z "$GOOGLE_GHA_CREDS_PATH" ]; then
-             echo "Error: GOOGLE_GHA_CREDS_PATH is not set."
-             exit 1
+            echo "Error: GOOGLE_GHA_CREDS_PATH is not set."
+            exit 1
           fi
             
           if [ ! -f "$GOOGLE_GHA_CREDS_PATH" ]; then
-              echo "Error: Credentials file not found at $GOOGLE_GHA_CREDS_PATH"
-              exit 1
+            echo "Error: Credentials file not found at $GOOGLE_GHA_CREDS_PATH"
+            exit 1
           fi
           SERVICE_ACCOUNT=$(jq -r '.client_email' < "$GOOGLE_GHA_CREDS_PATH")
           echo "Service Account: $SERVICE_ACCOUNT"
-   
+
       - name: List all clusters
         id: list-clusters
-        run: gcloud container clusters list --project="${{env.GCP_PROJECT_ID}}"
-        env:
-          GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}    
+        run: gcloud container clusters list --project="${{ secrets.GCP_PROJECT_ID }}"
         
       - name: Verify GKE cluster location
         run: |
-            required_secrets=("GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
-            for secret in "${required_secrets[@]}"; do
-              if [[ -z "${!secret}" ]]; then
-              echo "Error: $secret not set"
-              exit 1
-              fi
-            done
-            
-            echo "GKE_CLUSTER_ZONE is set = $GKE_CLUSTER_ZONE"
+            echo "GKE_CLUSTER_ZONE: $GKE_CLUSTER_ZONE"
             echo "Running as: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
             echo "Project: $(gcloud config get-value project)"
-            gcloud container clusters list --region="$GKE_CLUSTER_ZONE" --project="$GCP_PROJECT_ID"
-            
-        env:
-            GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
-            GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
-            GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}      
+            gcloud container clusters list --region="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}"
 
       - name: Install kubectl and gke-gcloud-auth-plugin
         run: |
@@ -131,14 +110,9 @@ jobs:
                 chmod +x ./kubectl
                 mv ./kubectl /usr/local/bin/kubectl
                 echo "kubectl installed successfully."
-              else
-                echo "Error: Failed to download kubectl from $KUBECTL_URL"
-                exit 1
-              fi
-          else
-              echo "kubectl is already installed."
-          fi
-            
+              fi    
+          fi     
+          
           echo "Installing gke-gcloud-auth-plugin..."
           if gcloud components install gke-gcloud-auth-plugin --quiet; then
               echo "gke-gcloud-auth-plugin installed successfully."
@@ -149,7 +123,8 @@ jobs:
         
           echo "Checking gke-gcloud-auth-plugin version..."
           gke-gcloud-auth-plugin --version
-
+            
+                
       - name: Configure kubectl
         run: |
           gcloud container clusters get-credentials "${{secrets.GKE_CLUSTER_NAME}}" --region="${{secrets.GKE_CLUSTER_ZONE}" --project="${{secrets.GCP_PROJECT_ID}}"      
@@ -204,7 +179,9 @@ jobs:
         run: |
           kubectl get deployments -n default
           kubectl get pods -n default
-          kubectl logs -n default -l app=darkseek-frontend --tail=50      
+          kubectl logs -n default -l app=darkseek-frontend --tail=50  
+          kubectl logs -n default -l app=darkseek-backend-ws --tail=50
+          kubectl logs -n default -l app=darkseek-backend-mqtt --tail=50
 
       - name: Rollback Deployment
         if: failure()
@@ -226,4 +203,5 @@ jobs:
                 echo "Notification sent successfully."
               fi
           }
-          send_notification
+          send_notification        
+             
