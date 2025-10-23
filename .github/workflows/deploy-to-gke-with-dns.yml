@@ -1,4 +1,4 @@
-#no deplpoy-to-gke-no-dns.yml
+#no deploy-to-gke-no-dns.yml
 name: Deploy to GKE Without DNS
 
 on:
@@ -8,148 +8,215 @@ on:
 
 jobs:
   deploy:
+    timeout-minutes: 30 
     runs-on: ubuntu-latest
-   
+    environment: .darkseek_env  # Remove if not defined
     steps:
-    - name: Validate Workflow Syntax
-      uses: frenck/action-yamllint@v1
-      with:
-       file: .github/workflows/deploy-to-gke-no-dns.yml
-       
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      
-    - name: Authenticate to Google Cloud
-      uses: google-github-actions/auth@v2
-      with:
-        credentials_json: ${{secrets.GCP_SA_KEY}}
-        
-    - name: Set up Google Cloud SDK
-      uses: google-github-actions/setup-gcloud@v2
-      with:
-        project_id: ${{secrets.GCP_PROJECT_ID}}
+      - name: Validate Workflow Syntax
+        uses: frenck/action-yamllint@v1
+        with:
+          file: .github/workflows/deploy-to-gke-no-dns.yml
 
-    - name: Check if all required secrets are set
-      id: gcp_secrets_check
-      run: |
-        required_secrets=("GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
-        for secret in "${required_secrets[@]}"; do
-          if [[ -z "${!secret}" ]]; then
-          echo "Error: $secret not set"
-          exit 1
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{secrets.DOCKERHUB_USERNAME}}
+          password: ${{secrets.DOCKERHUB_TOKEN}}
+
+      - name: Pre-pull BuildKit (retry)
+        run: |
+          for i in 1 2 3; do
+            if docker pull moby/buildkit:buildx-stable-1; then
+              echo "Successfully pulled BuildKit image"
+              break
+            fi
+            echo "Retry $i/3 failed, waiting..."
+            sleep $((i*10))
+            if [ $i -eq 3 ]; then
+              echo "Error: Failed to pull moby/buildkit:buildx-stable-1 after 3 retries"
+              exit 1
+            fi
+          done
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Tests
+        run: |
+          echo "Running tests..."
+          if [ -d "tests" ]; then
+             pytest tests/ || { echo 'Tests failed, aborting deployment.'; exit 1; }
+          else
+             echo "No tests directory found, skipping tests."
           fi
-        done
+         
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{secrets.GCP_SA_KEY}}
 
-        echo "All required secrets are set"
-        echo "GKE_CLUSTER_ZONE is set to $GKE_CLUSTER_ZONE"
-        echo "GKE_CLUSTER_NAME is set to $GKE_CLUSTER_NAME"
-      env:
-        GCP_SA_KEY: ${{secrets.GCP_SA_KEY}}
-        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
-        GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
-        GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{secrets.GCP_PROJECT_ID}}
 
-    - name: Check for encrypted service account file
-      id: check-file
-      run: |
-        if [ ! -f ./gitcloudsa.json ]; then
-          echo "Error: ./gitcloudsa.json not found"
-          exit 1
-        fi
-
-    - name: Decode service account
-      id: decode-content
-      run: |
-        base64 -di ./gitcloudsa.json > /home/runner/work/darkseek/darkseek/gcloud.json || {
-         echo "Invalid base64 encoding"
-         exit 
-        }
-
+      - name: Check if all required secrets are set
+        run: |
+          REQUIRED_SECRETS=("GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
+          for secret in "${REQUIRED_SECRETS[@]}"; do
+              if [[ -z "${{ secrets[$secret] }}" ]]; then
+                echo "Error: $secret is not set."
+                exit 1
+              fi
+          done
+          echo "All required secrets are set."
+        env:
+          GCP_SA_KEY: ${{secrets.GCP_SA_KEY}}
+          GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
+          GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
+          GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
+          
+      - name: Verify Service Account
+        run: |
+          if [ -z "$GOOGLE_GHA_CREDS_PATH" ]; then
+             echo "Error: GOOGLE_GHA_CREDS_PATH is not set."
+             exit 1
+          fi
+            
+          if [ ! -f "$GOOGLE_GHA_CREDS_PATH" ]; then
+              echo "Error: Credentials file not found at $GOOGLE_GHA_CREDS_PATH"
+              exit 1
+          fi
+          SERVICE_ACCOUNT=$(jq -r '.client_email' < "$GOOGLE_GHA_CREDS_PATH")
+          echo "Service Account: $SERVICE_ACCOUNT"
    
-    - name: Validate JSON structure
-      run: |
-        python -c "
-        import json, sys, os
+      - name: List all clusters
+        id: list-clusters
+        run: gcloud container clusters list --project="${{env.GCP_PROJECT_ID}}"
+        env:
+          GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}    
         
-        json_file_path = '/home/runner/work/darkseek/darkseek/gcloud.json'
-        
-        if not os.path.exists(json_file_path):
-            print(f'Error: JSON file not found at {json_file_path}')
-            sys.exit(1)
-        
-        try:
-            with open(json_file_path, 'r') as f:
-                data = json.load(f)
-        except json.JSONDecodeError as e:
-            print(f'Error: Invalid JSON format in GCP_SA_KEY: {e}')
-            sys.exit(1)
-        
-        required_keys = ['type', 'project_id', 'private_key_id', 'private_key', 
-                        'client_email', 'client_id', 'auth_uri', 'token_uri',
-                        'auth_provider_x509_cert_url', 'client_x509_cert_url']
-        missing_keys = [key for key in required_keys if key not in data]
-        
-        if missing_keys:
-            error_message = 'Error: Missing required keys in GCP_SA_KEY: '
-            for key in missing_keys:
-                error_message += key + ', '
-            error_message = error_message[:-2]  # Remove the last comma and space
-            print(error_message)
-            sys.exit(1)
-        
-        print('GCP service account key validation successful!')
-        "
+      - name: Verify GKE cluster location
+        run: |
+            echo "GKE_CLUSTER_ZONE: $GKE_CLUSTER_ZONE"
+            echo "Running as: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
+            echo "Project: $(gcloud config get-value project)"
+            gcloud container clusters list --region="$GKE_CLUSTER_ZONE" --project="$GCP_PROJECT_ID"
+        env:
+            GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+            GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}
+            GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}    
 
-    
-    - name: Install kubectl
-      run: |
-        curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
-        chmod +x ./kubectl
-        sudo mv ./kubectl /usr/local/bin/kubectl
-        
-    
-        
-    - name: Verify GKE cluster location
-      run: |
-        required_secrets=("GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
-        for secret in "${required_secrets[@]}"; do
-          if [[ -z "${!secret}" ]]; then
-          echo "Error: $secret not set"
-          exit 1
+      - name: Install kubectl and gke-gcloud-auth-plugin
+        run: |
+          echo "Checking for existing kubectl installation..."
+          if ! command -v kubectl &> /dev/null; then
+              echo "kubectl not found. Proceeding with installation..."
+              KUBECTL_URL="https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+              
+              echo "Downloading kubectl from $KUBECTL_URL..."
+              if curl -fLO "$KUBECTL_URL"; then
+                chmod +x ./kubectl
+                mv ./kubectl /usr/local/bin/kubectl
+                echo "kubectl installed successfully."
+              else
+                echo "Error: Failed to download kubectl from $KUBECTL_URL"
+                exit 1
+              fi
+          else
+              echo "kubectl is already installed."
           fi
-        done
+            
+          echo "Installing gke-gcloud-auth-plugin..."
+          if gcloud components install gke-gcloud-auth-plugin --quiet; then
+              echo "gke-gcloud-auth-plugin installed successfully."
+          else
+              echo "Error: Failed to install gke-gcloud-auth-plugin."
+              exit 1
+          fi
         
-        echo "GKE_CLUSTER_ZONE is set = $GKE_CLUSTER_ZONE"
-        echo "Running as: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
-        echo "Project: $(gcloud config get-value project)"
-        gcloud container clusters list --zone="${{env.GKE_CLUSTER_ZONE}}" --project="${{env.GCP_PROJECT_ID}}"
-        
-      env:
-        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
-        GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
-        GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
+          echo "Checking gke-gcloud-auth-plugin version..."
+          gke-gcloud-auth-plugin --version
+
+      - name: Configure kubectl
+        run: |
+          gcloud container clusters get-credentials "${{secrets.GKE_CLUSTER_NAME}}" --region="${{secrets.GKE_CLUSTER_ZONE}" --project="${{secrets.GCP_PROJECT_ID}}"      
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app/frontend
+          file: ./app/frontend/Dockerfile
+          push: true
+          tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-frontend:latest
+
+      - name: Build and push backend-ws
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app/backend
+          file: ./app/backend/Dockerfile.ws
+          push: true
+          tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-ws:latest
+
+      - name: Build and push backend-mqtt
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app/backend
+          file: ./app/backend/Dockerfile.mqtt
+          push: true
+          tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest
+
       
 
-    - name: Configure kubectl
-      run: |    
-        gcloud container clusters get-credentials "${{env.GKE_CLUSTER_NAME}}" --zone="${{env.GKE_CLUSTER_ZONE}}" --project="${{env.GCP_PROJECT_ID}}"
-      env:
-        GCP_PROJECT_ID: ${{secrets.GCP_PROJECT_ID}}
-        GKE_CLUSTER_ZONE: ${{secrets.GKE_CLUSTER_ZONE}}
-        GKE_CLUSTER_NAME: ${{secrets.GKE_CLUSTER_NAME}}
+      - name: Deploy to GKE
+        run: |
+          echo "Deploying to GKE..."
+          chmod +x ./k8s/deploy_k8s.sh
+          ./k8s/deploy_k8s.sh || { echo 'Deployment failed, rolling back...'; exit 1; }
+        env:
+          GOOGLE_API_KEY: ${{secrets.GOOGLE_API_KEY}}
+          GOOGLE_CSE_ID: ${{secrets.GOOGLE_CSE_ID}}
+          HUGGINGFACEHUB_API_TOKEN: ${{secrets.HUGGINGFACEHUB_API_TOKEN}}
+          DATABASE_URL: ${{secrets.DATABASE_URL}}
+          REDIS_URL: ${{secrets.REDIS_URL}}
+          MQTT_BROKER_HOST: ${{secrets.MQTT_BROKER_HOST}}
+          MQTT_BROKER_PORT: ${{secrets.MQTT_BROKER_POR}}
+          MQTT_TLS: ${{ secrets.MQTT_TLS }}
+          MQTT_USERNAME: ${{secrets.MQTT_USERNAME}}
+          MQTT_PASSWORD: ${{secrets.MQTT_PASSWORD}}
+          POSTGRES_USER: ${{secrets.POSTGRES_USER}}
+          POSTGRES_PASSWORD: ${{secrets.POSTGRES_PASSWORD}}
+          POSTGRES_DB: ${{secrets.POSTGRES_DB}}
+          
+      - name: Verify Deployment
+        run: |
+          kubectl get deployments -n default
+          kubectl get pods -n default
+          kubectl logs -n default -l app=darkseek-frontend --tail=50  
+          kubectl logs -n default -l app=darkseek-backend-ws --tail=50
+          kubectl logs -n default -l app=darkseek-backend-mqtt --tail=50
 
-    - name: Deploy to GKE
-      run: |
-        chmod +x ./k8s/deploy_k8s.sh
-        ./k8s/deploy_k8s.sh
-      env:
-        GOOGLE_API_KEY: ${{secrets.GOOGLE_API_KEY}}
-        GOOGLE_CSE_ID: ${{secrets.GOOGLE_CSE_ID}}
-        HUGGINGFACEHUB_API_TOKEN: ${{secrets.HUGGINGFACEHUB_API_TOKEN}}
-        DATABASE_URL: ${{secrets.DATABASE_URL}}
-        REDIS_URL: ${{secrets.REDIS_URL}}
-        MQTT_BROKER_HOST: ${{secrets.MQTT_BROKER_HOST}}
-        MQTT_BROKER_PORT: ${{secrets.MQTT_BROKER_PORT}}
-        MQTT_TLS: ${{secrets.MQTT_TLS}}
-        MQTT_USERNAME: ${{secrets.MQTT_USERNAME}}
-        MQTT_PASSWORD: ${{secrets.MQTT_PASSWORD}}
+      - name: Rollback Deployment
+        if: failure()
+        run: |
+          echo "Rolling back to previous version..."
+          chmod +x ./k8s/rollback_k8s.sh
+          ./k8s/rollback_k8s.sh || { echo 'Rollback failed.'; exit 1; }
+
+      - name: Notify Failure
+        if: failure()
+        run: |
+          send_notification() {
+              local STATUS_MESSAGE="Deployment failed: ${{ github.workflow }} on ${{ github.ref }}"
+              local RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H 'Content-type: application/json' \
+                             --data "{\"text\":\"$STATUS_MESSAGE\"}" ${{ secrets.SLACK_WEBHOOK_URL }})
+              if [[ "$RESPONSE" -ne 200 ]]; then
+                echo "Failed to send notification. HTTP Response Code: $RESPONSE"
+              else
+                echo "Notification sent successfully."
+              fi
+          }
+          send_notification
