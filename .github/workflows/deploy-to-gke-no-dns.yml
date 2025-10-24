@@ -1,4 +1,3 @@
-#no deploy-to-gke-no-dns.yml
 name: Deploy to GKE Without DNS
 
 on:
@@ -12,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: .darkseek_env
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Validate Workflow Syntax
         uses: frenck/action-yamllint@v1
         with:
@@ -38,8 +40,23 @@ jobs:
           if [ -z "${{ secrets.POSTGRES_USER }}" ]; then echo "Error: POSTGRES_USER is not set."; exit 1; fi
           if [ -z "${{ secrets.POSTGRES_PASSWORD }}" ]; then echo "Error: POSTGRES_PASSWORD is not set."; exit 1; fi
           if [ -z "${{ secrets.POSTGRES_DB }}" ]; then echo "Error: POSTGRES_DB is not set."; exit 1; fi
-          if [ -z "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then echo "Error: SLACK_WEBHOOK_URL is not set."; exit 1; fi
+          if [ -z "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then echo "Warning: SLACK_WEBHOOK_URL is not set, notifications will be skipped."; fi
           echo "All required secrets are set."
+        shell: bash
+
+      - name: Debug k8s directory
+        run: |
+          echo "Current directory: $(pwd)"
+          ls -la .
+          ls -la k8s/
+          if [ -f "./k8s/rollback_k8s.sh" ]; then
+            echo "rollback_k8s.sh found"
+            chmod +x ./k8s/rollback_k8s.sh
+          else
+            echo "Error: rollback_k8s.sh not found in k8s/"
+            exit 1
+          fi
+        shell: bash
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -61,12 +78,10 @@ jobs:
               exit 1
             fi
           done
+        shell: bash
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
       - name: Run Tests
         run: |
@@ -76,6 +91,7 @@ jobs:
           else
             echo "No tests directory found, skipping tests."
           fi
+        shell: bash
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -99,10 +115,12 @@ jobs:
           fi
           SERVICE_ACCOUNT=$(jq -r '.client_email' "$GOOGLE_GHA_CREDS_PATH")
           echo "Service Account: $SERVICE_ACCOUNT"
+        shell: bash
 
       - name: List all clusters
         id: list-clusters
         run: gcloud container clusters list --project="${{ secrets.GCP_PROJECT_ID }}"
+        shell: bash
 
       - name: Verify GKE cluster location
         run: |
@@ -114,6 +132,7 @@ jobs:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}
           GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
+        shell: bash
 
       - name: Install kubectl and gke-gcloud-auth-plugin
         run: |
@@ -142,10 +161,12 @@ jobs:
           fi
           echo "Checking gke-gcloud-auth-plugin version..."
           gke-gcloud-auth-plugin --version
+        shell: bash
 
       - name: Configure kubectl
         run: |
           gcloud container clusters get-credentials "${{ secrets.GKE_CLUSTER_NAME }}" --region="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}"
+        shell: bash
 
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
@@ -190,6 +211,7 @@ jobs:
           POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+        shell: bash
 
       - name: Verify Deployment
         run: |
@@ -198,25 +220,37 @@ jobs:
           kubectl logs -n default -l app=darkseek-frontend --tail=50
           kubectl logs -n default -l app=darkseek-backend-ws --tail=50
           kubectl logs -n default -l app=darkseek-backend-mqtt --tail=50
+        shell: bash
 
       - name: Rollback Deployment
         if: failure()
         run: |
           echo "Rolling back to previous version..."
-          chmod +x ./k8s/rollback_k8s.sh
-          ./k8s/rollback_k8s.sh || { echo 'Rollback failed.'; exit 1; }
+          if [ -f "./k8s/rollback_k8s.sh" ]; then
+            chmod +x ./k8s/rollback_k8s.sh
+            ./k8s/rollback_k8s.sh || { echo 'Rollback failed.'; exit 1; }
+          else
+            echo "Error: rollback_k8s.sh not found, skipping rollback."
+            exit 1
+          fi
+        shell: bash
 
       - name: Notify Failure
         if: failure()
         run: |
-          send_notification() {
-            local STATUS_MESSAGE="Deployment failed: ${{ github.workflow }} on ${{ github.ref }}"
-            local RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H 'Content-type: application/json' \
-              --data "{\"text\":\"$STATUS_MESSAGE\"}" ${{ secrets.SLACK_WEBHOOK_URL }})
-            if [[ "$RESPONSE" -ne 200 ]]; then
-              echo "Failed to send notification. HTTP Response Code: $RESPONSE"
-            else
-              echo "Notification sent successfully."
-            fi
-          }
-          send_notification
+          if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+            send_notification() {
+              local STATUS_MESSAGE="Deployment failed: ${{ github.workflow }} on ${{ github.ref }}"
+              local RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H 'Content-type: application/json' \
+                --data "{\"text\":\"$STATUS_MESSAGE\"}" "${{ secrets.SLACK_WEBHOOK_URL }}")
+              if [[ "$RESPONSE" -ne 200 ]]; then
+                echo "Failed to send notification. HTTP Response Code: $RESPONSE"
+              else
+                echo "Notification sent successfully."
+              fi
+            }
+            send_notification
+          else
+            echo "SLACK_WEBHOOK_URL not set, skipping notification."
+          fi
+        shell: bash
