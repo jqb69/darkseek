@@ -19,21 +19,26 @@ jobs:
 
       - name: Check if all required secrets are set
         run: |
-          REQUIRED_SECRETS=(
-            "GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME"
-            "DOCKERHUB_USERNAME" "DOCKERHUB_TOKEN" "GOOGLE_API_KEY" "GOOGLE_CSE_ID"
-            "HUGGINGFACEHUB_API_TOKEN" "DATABASE_URL" "REDIS_URL" "MQTT_BROKER_HOST"
-            "MQTT_BROKER_PORT" "MQTT_TLS" "MQTT_USERNAME" "MQTT_PASSWORD"
-            "POSTGRES_USER" "POSTGRES_PASSWORD" "POSTGRES_DB" "SLACK_WEBHOOK_URL"
-          )
-          for secret in "${REQUIRED_SECRETS[@]}"; do
-            # Use eval to access the secret value dynamically
-            eval "SECRET_VALUE=\${{ secrets.\$secret }}"
-            if [[ -z "$SECRET_VALUE" ]]; then
-              echo "Error: $secret is not set."
-              exit 1
-            fi
-          done
+          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then echo "Error: GCP_SA_KEY is not set."; exit 1; fi
+          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then echo "Error: GCP_PROJECT_ID is not set."; exit 1; fi
+          if [ -z "${{ secrets.GKE_CLUSTER_ZONE }}" ]; then echo "Error: GKE_CLUSTER_ZONE is not set."; exit 1; fi
+          if [ -z "${{ secrets.GKE_CLUSTER_NAME }}" ]; then echo "Error: GKE_CLUSTER_NAME is not set."; exit 1; fi
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ]; then echo "Error: DOCKERHUB_USERNAME is not set."; exit 1; fi
+          if [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then echo "Error: DOCKERHUB_TOKEN is not set."; exit 1; fi
+          if [ -z "${{ secrets.GOOGLE_API_KEY }}" ]; then echo "Error: GOOGLE_API_KEY is not set."; exit 1; fi
+          if [ -z "${{ secrets.GOOGLE_CSE_ID }}" ]; then echo "Error: GOOGLE_CSE_ID is not set."; exit 1; fi
+          if [ -z "${{ secrets.HUGGINGFACEHUB_API_TOKEN }}" ]; then echo "Error: HUGGINGFACEHUB_API_TOKEN is not set."; exit 1; fi
+          if [ -z "${{ secrets.DATABASE_URL }}" ]; then echo "Error: DATABASE_URL is not set."; exit 1; fi
+          if [ -z "${{ secrets.REDIS_URL }}" ]; then echo "Error: REDIS_URL is not set."; exit 1; fi
+          if [ -z "${{ secrets.MQTT_BROKER_HOST }}" ]; then echo "Error: MQTT_BROKER_HOST is not set."; exit 1; fi
+          if [ -z "${{ secrets.MQTT_BROKER_PORT }}" ]; then echo "Error: MQTT_BROKER_PORT is not set."; exit 1; fi
+          if [ -z "${{ secrets.MQTT_TLS }}" ]; then echo "Error: MQTT_TLS is not set."; exit 1; fi
+          if [ -z "${{ secrets.MQTT_USERNAME }}" ]; then echo "Error: MQTT_USERNAME is not set."; exit 1; fi
+          if [ -z "${{ secrets.MQTT_PASSWORD }}" ]; then echo "Error: MQTT_PASSWORD is not set."; exit 1; fi
+          if [ -z "${{ secrets.POSTGRES_USER }}" ]; then echo "Error: POSTGRES_USER is not set."; exit 1; fi
+          if [ -z "${{ secrets.POSTGRES_PASSWORD }}" ]; then echo "Error: POSTGRES_PASSWORD is not set."; exit 1; fi
+          if [ -z "${{ secrets.POSTGRES_DB }}" ]; then echo "Error: POSTGRES_DB is not set."; exit 1; fi
+          if [ -z "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then echo "Error: SLACK_WEBHOOK_URL is not set."; exit 1; fi
           echo "All required secrets are set."
 
       - name: Log in to Docker Hub
