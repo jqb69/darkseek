@@ -1,6 +1,6 @@
 ---
-# deploy-to-gke-no-dns.yml
 # Deploy to GKE Without DNS
+# deploy_to_gke_no_dns.yaml
 name: Deploy to GKE Without DNS
 
 on:
@@ -24,7 +24,8 @@ jobs:
 
       - name: Check required secrets
         run: |
-          if [[ -z "${{ secrets.GCP_SA_KEY }}" || -z "${{ secrets.GCP_PROJECT_ID }}" || \
+          if [[ -z "${{ secrets.GCP_SA_KEY }}" || \
+              -z "${{ secrets.GCP_PROJECT_ID }}" || \
               -z "${{ secrets.GKE_CLUSTER_ZONE }}" || \
               -z "${{ secrets.GKE_CLUSTER_NAME }}" ]]; then
             echo "Error: Required secrets not set"
