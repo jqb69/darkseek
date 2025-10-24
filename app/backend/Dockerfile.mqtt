@@ -1,6 +1,5 @@
 # app/backend/Dockerfile.mqtt
 FROM python:3.11-slim
-
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
@@ -8,5 +7,6 @@ COPY app/backend/requirements.txt ./backend/
 RUN pip install --no-cache-dir -r backend/requirements.txt
 COPY app/backend/ ./backend/
 ENV PYTHONPATH=/app
-EXPOSE 8001  # Remove 8885 unless needed for MQTT
+# Expose port 8001 for Uvicorn; 8885 removed as not needed for MQTT
+EXPOSE 8001
 CMD ["uvicorn", "backend/mainmqtt:app", "--host", "0.0.0.0", "--port", "8001"]
