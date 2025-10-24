@@ -1,0 +1,4 @@
+extends: default
+rules:
+  truthy: disable
+  line-length: { max: 80 }
