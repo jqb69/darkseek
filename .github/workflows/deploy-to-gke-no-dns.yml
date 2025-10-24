@@ -1,5 +1,4 @@
-#no deploy-to-gke-no-dns.yml
-name: Deploy to GKE With DNS
+name: Deploy to GKE Without DNS
 
 on:
   push:
@@ -10,12 +9,11 @@ jobs:
   deploy:
     timeout-minutes: 30
     runs-on: ubuntu-latest
-    environment: .darkseek_env  # Remove if not defined
     steps:
       - name: Validate Workflow Syntax
         uses: frenck/action-yamllint@v1
         with:
-          file: .github/workflows/deploy-to-gke-with-dns.yml  # Updated to match actual file
+          file: .github/workflows/deploy-to-gke-no-dns.yml
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
