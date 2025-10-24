@@ -1,5 +1,5 @@
 ---
-# Deploy to GKE Without DNS
+# deploy-to-gke-no-dns.yml
 # Deploy to GKE Without DNS
 name: Deploy to GKE Without DNS
 
@@ -24,8 +24,10 @@ jobs:
 
       - name: Check required secrets
         run: |
-          if [[ -z "${{ secrets.GCP_SA_KEY }}" || -z "${{ secrets.GCP_PROJECT_ID }}" || -z "${{ secrets.GKE_CLUSTER_ZONE }}" || -z "${{ secrets.GKE_CLUSTER_NAME }}" ]]; then
-            echo "Error: One or more required secrets not set"
+          if [[ -z "${{ secrets.GCP_SA_KEY }}" || -z "${{ secrets.GCP_PROJECT_ID }}" || \
+              -z "${{ secrets.GKE_CLUSTER_ZONE }}" || \
+              -z "${{ secrets.GKE_CLUSTER_NAME }}" ]]; then
+            echo "Error: Required secrets not set"
             exit 1
           fi
           echo "GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}"
@@ -47,12 +49,9 @@ jobs:
 
       - name: Log in to Docker Hub
         run: |
-          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
-            echo "Docker Hub credentials not set, skipping login"
-          else
-            echo "Logging in to Docker Hub..."
-            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
-          fi
+          echo "Logging in to Docker Hub..."
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" \
+            --password-stdin
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -138,7 +137,8 @@ jobs:
           echo "Checking for existing kubectl..."
           if ! command -v kubectl &> /dev/null; then
             echo "kubectl not found, installing..."
-            KUBECTL_URL="https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+            KUBECTL_URL="https://storage.googleapis.com/kubernetes-release/release/$(curl -s \
+              https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
             echo "Downloading kubectl..."
             if curl -fLO "$KUBECTL_URL"; then
               chmod +x ./kubectl
@@ -218,7 +218,7 @@ jobs:
             chmod +x ./k8s/rollback_k8s.sh
             ./k8s/rollback_k8s.sh || { echo "Rollback failed"; exit 1; }
           else
-            echo "Error: rollback_k8s.sh not found, skipping rollback"
+            echo "Error: rollback_k8s.sh not found"
             exit 1
           fi
         shell: bash
