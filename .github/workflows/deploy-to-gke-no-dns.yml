@@ -46,11 +46,8 @@ jobs:
         shell: bash
 
       - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         run: |
-          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
-            echo "Error: Docker Hub credentials are not set."
-            exit 1
-          fi
           echo "Logging in to Docker Hub..."
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
         shell: bash
@@ -110,15 +107,19 @@ jobs:
 
       - name: List all clusters
         id: list-clusters
-        run: gcloud container clusters list --project="${{ secrets.GCP_PROJECT_ID }}"
+        run: |
+          gcloud container clusters list \
+            --project="${{ secrets.GCP_PROJECT_ID }}"
         shell: bash
 
       - name: Verify GKE cluster location
         run: |
           echo "GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}"
-          echo "Running as: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
+          echo "Running as: $(gcloud auth list \
+            --filter=status:ACTIVE --format='value(account)')"
           echo "Project: $(gcloud config get-value project)"
-          gcloud container clusters list --region="${{ secrets.GKE_CLUSTER_ZONE }}" \
+          gcloud container clusters list \
+            --region="${{ secrets.GKE_CLUSTER_ZONE }}" \
             --project="${{ secrets.GCP_PROJECT_ID }}"
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -157,7 +158,8 @@ jobs:
 
       - name: Configure kubectl
         run: |
-          gcloud container clusters get-credentials "${{ secrets.GKE_CLUSTER_NAME }}" \
+          gcloud container clusters get-credentials \
+            "${{ secrets.GKE_CLUSTER_NAME }}" \
             --region="${{ secrets.GKE_CLUSTER_ZONE }}" \
             --project="${{ secrets.GCP_PROJECT_ID }}"
         shell: bash
