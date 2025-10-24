@@ -1,3 +1,4 @@
+#no deploy-to-gke-no-dns.yml
 name: Deploy to GKE Without DNS
 
 on:
@@ -66,7 +67,7 @@ jobs:
         run: |
           REQUIRED_SECRETS=("GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
           for secret in "${REQUIRED_SECRETS[@]}"; do
-            if [[ -z "${{ secrets[secret] }}" ]]; then
+            if [[ -z "${{ secrets[$secret] }}" ]]; then
               echo "Error: $secret is not set."
               exit 1
             fi
@@ -93,10 +94,14 @@ jobs:
         
       - name: Verify GKE cluster location
         run: |
-            echo "GKE_CLUSTER_ZONE: $GKE_CLUSTER_ZONE"
-            echo "Running as: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
-            echo "Project: $(gcloud config get-value project)"
-            gcloud container clusters list --region="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}"
+          echo "GKE_CLUSTER_ZONE: $GKE_CLUSTER_ZONE"
+          echo "Running as: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
+          echo "Project: $(gcloud config get-value project)"
+          gcloud container clusters list --region="$GKE_CLUSTER_ZONE" --project="$GCP_PROJECT_ID"
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}
+          GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
 
       - name: Install kubectl and gke-gcloud-auth-plugin
         run: |
@@ -127,7 +132,7 @@ jobs:
                 
       - name: Configure kubectl
         run: |
-          gcloud container clusters get-credentials "${{secrets.GKE_CLUSTER_NAME}}" --region="${{secrets.GKE_CLUSTER_ZONE}" --project="${{secrets.GCP_PROJECT_ID}}"      
+          gcloud container clusters get-credentials "${{ secrets.GKE_CLUSTER_NAME }}" --region="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}      
 
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
@@ -161,19 +166,19 @@ jobs:
           chmod +x ./k8s/deploy_k8s.sh
           ./k8s/deploy_k8s.sh || { echo 'Deployment failed, rolling back...'; exit 1; }
         env:
-          GOOGLE_API_KEY: ${{secrets.GOOGLE_API_KEY}}
-          GOOGLE_CSE_ID: ${{secrets.GOOGLE_CSE_ID}}
-          HUGGINGFACEHUB_API_TOKEN: ${{secrets.HUGGINGFACEHUB_API_TOKEN}}
-          DATABASE_URL: ${{secrets.DATABASE_URL}}
-          REDIS_URL: ${{secrets.REDIS_URL}}
-          MQTT_BROKER_HOST: ${{secrets.MQTT_BROKER_HOST}}
-          MQTT_BROKER_PORT: ${{secrets.MQTT_BROKER_POR}}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          HUGGINGFACEHUB_API_TOKEN: ${{ secrets.HUGGINGFACEHUB_API_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          MQTT_BROKER_HOST: ${{ secrets.MQTT_BROKER_HOST }}
+          MQTT_BROKER_PORT: ${{ secrets.MQTT_BROKER_PORT }}
           MQTT_TLS: ${{ secrets.MQTT_TLS }}
-          MQTT_USERNAME: ${{secrets.MQTT_USERNAME}}
-          MQTT_PASSWORD: ${{secrets.MQTT_PASSWORD}}
-          POSTGRES_USER: ${{secrets.POSTGRES_USER}}
-          POSTGRES_PASSWORD: ${{secrets.POSTGRES_PASSWORD}}
-          POSTGRES_DB: ${{secrets.POSTGRES_DB}}
+          MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
+          MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
           
       - name: Verify Deployment
         run: |
@@ -204,4 +209,3 @@ jobs:
               fi
           }
           send_notification        
-             
