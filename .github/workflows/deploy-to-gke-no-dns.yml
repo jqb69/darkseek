@@ -1,5 +1,5 @@
 #no deploy-to-gke-no-dns.yml
-name: Deploy to GKE Without DNS
+name: Deploy to GKE With DNS
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
       - name: Validate Workflow Syntax
         uses: frenck/action-yamllint@v1
         with:
-          file: .github/workflows/deploy-to-gke-no-dns.yml
+          file: .github/workflows/deploy-to-gke-with-dns.yml  # Updated to match actual file
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -65,40 +65,38 @@ jobs:
 
       - name: Check if all required secrets are set
         run: |
-            REQUIRED_SECRETS=("GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
-            for secret in "${REQUIRED_SECRETS[@]}"; do
-              if [[ -z "${{ secrets[$secret] }}" ]]; then
-                echo "Error: $secret is not set."
-                exit 1
-              fi
-            done
-            echo "All required secrets are set."
+          REQUIRED_SECRETS=("GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
+          for secret in "${REQUIRED_SECRETS[@]}"; do
+            if [[ -z "${{ secrets[$secret] }}" ]]; then
+              echo "Error: $secret is not set."
+              exit 1
+            fi
+          done
+          echo "All required secrets are set."
 
-          
       - name: Verify Service Account
         run: |
           if [ -z "$GOOGLE_GHA_CREDS_PATH" ]; then
             echo "Error: GOOGLE_GHA_CREDS_PATH is not set."
             exit 1
           fi
-            
           if [ ! -f "$GOOGLE_GHA_CREDS_PATH" ]; then
             echo "Error: Credentials file not found at $GOOGLE_GHA_CREDS_PATH"
             exit 1
           fi
-          SERVICE_ACCOUNT=$(jq -r '.client_email' < "$GOOGLE_GHA_CREDS_PATH")
+          SERVICE_ACCOUNT=$(jq -r '.client_email' "$GOOGLE_GHA_CREDS_PATH")
           echo "Service Account: $SERVICE_ACCOUNT"
 
       - name: List all clusters
         id: list-clusters
         run: gcloud container clusters list --project="${{ secrets.GCP_PROJECT_ID }}"
-        
+
       - name: Verify GKE cluster location
         run: |
           echo "GKE_CLUSTER_ZONE: $GKE_CLUSTER_ZONE"
           echo "Running as: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
           echo "Project: $(gcloud config get-value project)"
-          gcloud container clusters list --region="$GKE_CLUSTER_ZONE" --project="$GCP_PROJECT_ID"
+          gcloud container clusters list --region="$GKE_CLUSTER_ZONE" --project="${{ secrets.GCP_PROJECT_ID }}"
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}
@@ -108,32 +106,33 @@ jobs:
         run: |
           echo "Checking for existing kubectl installation..."
           if ! command -v kubectl &> /dev/null; then
-              echo "kubectl not found. Proceeding with installation..."
-              KUBECTL_URL="https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
-              
-              echo "Downloading kubectl from $KUBECTL_URL..."
-              if curl -fLO "$KUBECTL_URL"; then
-                chmod +x ./kubectl
-                mv ./kubectl /usr/local/bin/kubectl
-                echo "kubectl installed successfully."
-              fi    
-          fi     
-          
+            echo "kubectl not found. Proceeding with installation..."
+            KUBECTL_URL="https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+            echo "Downloading kubectl from $KUBECTL_URL..."
+            if curl -fLO "$KUBECTL_URL"; then
+              chmod +x ./kubectl
+              sudo mv ./kubectl /usr/local/bin/kubectl
+              echo "kubectl installed successfully."
+            else
+              echo "Error: Failed to download kubectl from $KUBECTL_URL"
+              exit 1
+            fi
+          else
+            echo "kubectl is already installed."
+          fi
           echo "Installing gke-gcloud-auth-plugin..."
           if gcloud components install gke-gcloud-auth-plugin --quiet; then
-              echo "gke-gcloud-auth-plugin installed successfully."
+            echo "gke-gcloud-auth-plugin installed successfully."
           else
-              echo "Error: Failed to install gke-gcloud-auth-plugin."
-              exit 1
+            echo "Error: Failed to install gke-gcloud-auth-plugin."
+            exit 1
           fi
-        
           echo "Checking gke-gcloud-auth-plugin version..."
           gke-gcloud-auth-plugin --version
-            
-                
+
       - name: Configure kubectl
         run: |
-          gcloud container clusters get-credentials "${{ secrets.GKE_CLUSTER_NAME }}" --region="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}      
+          gcloud container clusters get-credentials "${{ secrets.GKE_CLUSTER_NAME }}" --region="${{ secrets.GKE_CLUSTER_ZONE }}" --project="${{ secrets.GCP_PROJECT_ID }}"
 
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
@@ -159,8 +158,6 @@ jobs:
           push: true
           tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest
 
-      
-
       - name: Deploy to GKE
         run: |
           echo "Deploying to GKE..."
@@ -180,12 +177,12 @@ jobs:
           POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
-          
+
       - name: Verify Deployment
         run: |
           kubectl get deployments -n default
           kubectl get pods -n default
-          kubectl logs -n default -l app=darkseek-frontend --tail=50  
+          kubectl logs -n default -l app=darkseek-frontend --tail=50
           kubectl logs -n default -l app=darkseek-backend-ws --tail=50
           kubectl logs -n default -l app=darkseek-backend-mqtt --tail=50
 
@@ -200,13 +197,13 @@ jobs:
         if: failure()
         run: |
           send_notification() {
-              local STATUS_MESSAGE="Deployment failed: ${{ github.workflow }} on ${{ github.ref }}"
-              local RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H 'Content-type: application/json' \
-                             --data "{\"text\":\"$STATUS_MESSAGE\"}" ${{ secrets.SLACK_WEBHOOK_URL }})
-              if [[ "$RESPONSE" -ne 200 ]]; then
-                echo "Failed to send notification. HTTP Response Code: $RESPONSE"
-              else
-                echo "Notification sent successfully."
-              fi
+            local STATUS_MESSAGE="Deployment failed: ${{ github.workflow }} on ${{ github.ref }}"
+            local RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H 'Content-type: application/json' \
+              --data "{\"text\":\"$STATUS_MESSAGE\"}" ${{ secrets.SLACK_WEBHOOK_URL }})
+            if [[ "$RESPONSE" -ne 200 ]]; then
+              echo "Failed to send notification. HTTP Response Code: $RESPONSE"
+            else
+              echo "Notification sent successfully."
+            fi
           }
-          send_notification        
+          send_notification
