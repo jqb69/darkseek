@@ -46,11 +46,14 @@ jobs:
         shell: bash
 
       - name: Log in to Docker Hub
-        if: ${{ !isEmpty(secrets.DOCKERHUB_USERNAME) && !isEmpty(secrets.DOCKERHUB_TOKEN) }}
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "Error: Docker Hub credentials are not set."
+            exit 1
+          fi
+          echo "Logging in to Docker Hub..."
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+        shell: bash
 
       - name: Pre-pull BuildKit with retries
         run: |
