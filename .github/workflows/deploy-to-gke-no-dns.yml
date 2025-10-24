@@ -1,6 +1,5 @@
 ---
 # Deploy to GKE Without DNS
-# deploy_to_gke_no_dns.yaml
 name: Deploy to GKE Without DNS
 
 on:
