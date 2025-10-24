@@ -1,6 +1,6 @@
 ---
-# deploy-to-gke-no-dns.yaml
 # Deploy to GKE Without DNS
+# deploy-to-gke-no-dns.yaml
 name: Deploy to GKE Without DNS
 
 on:
@@ -17,34 +17,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate Workflow Syntax
+      - name: Validate workflow syntax
         uses: frenck/action-yamllint@v1
         with:
           file: .github/workflows/deploy-to-gke-no-dns.yml
 
       - name: Check required secrets
         run: |
-          if [ -z "${{ secrets.GCP_SA_KEY }}" ]; then echo "Error: GCP_SA_KEY not set"; exit 1; fi
-          if [ -z "${{ secrets.GCP_PROJECT_ID }}" ]; then echo "Error: GCP_PROJECT_ID not set"; exit 1; fi
-          if [ -z "${{ secrets.GKE_CLUSTER_ZONE }}" ]; then echo "Error: GKE_CLUSTER_ZONE not set"; exit 1; fi
-          if [ -z "${{ secrets.GKE_CLUSTER_NAME }}" ]; then echo "Error: GKE_CLUSTER_NAME not set"; exit 1; fi
-          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ]; then echo "Error: DOCKERHUB_USERNAME not set"; exit 1; fi
-          if [ -z "${{ secrets.DOCKERHUB_TOKEN }}" ]; then echo "Error: DOCKERHUB_TOKEN not set"; exit 1; fi
-          if [ -z "${{ secrets.GOOGLE_API_KEY }}" ]; then echo "Error: GOOGLE_API_KEY not set"; exit 1; fi
-          if [ -z "${{ secrets.GOOGLE_CSE_ID }}" ]; then echo "Error: GOOGLE_CSE_ID not set"; exit 1; fi
-          if [ -z "${{ secrets.HUGGINGFACEHUB_API_TOKEN }}" ]; then echo "Error: HUGGINGFACEHUB_API_TOKEN not set"; exit 1; fi
-          if [ -z "${{ secrets.DATABASE_URL }}" ]; then echo "Error: DATABASE_URL not set"; exit 1; fi
-          if [ -z "${{ secrets.REDIS_URL }}" ]; then echo "Error: REDIS_URL not set"; exit 1; fi
-          if [ -z "${{ secrets.MQTT_BROKER_HOST }}" ]; then echo "Error: MQTT_BROKER_HOST not set"; exit 1; fi
-          if [ -z "${{ secrets.MQTT_BROKER_PORT }}" ]; then echo "Error: MQTT_BROKER_PORT not set"; exit 1; fi
-          if [ -z "${{ secrets.MQTT_TLS }}" ]; then echo "Error: MQTT_TLS not set"; exit 1; fi
-          if [ -z "${{ secrets.MQTT_USERNAME }}" ]; then echo "Error: MQTT_USERNAME not set"; exit 1; fi
-          if [ -z "${{ secrets.MQTT_PASSWORD }}" ]; then echo "Error: MQTT_PASSWORD not set"; exit 1; fi
-          if [ -z "${{ secrets.POSTGRES_USER }}" ]; then echo "Error: POSTGRES_USER not set"; exit 1; fi
-          if [ -z "${{ secrets.POSTGRES_PASSWORD }}" ]; then echo "Error: POSTGRES_PASSWORD not set"; exit 1; fi
-          if [ -z "${{ secrets.POSTGRES_DB }}" ]; then echo "Error: POSTGRES_DB not set"; exit 1; fi
-          if [ -z "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then echo "Warning: SLACK_WEBHOOK_URL not set, notifications skipped"; fi
-          echo "All required secrets are set"
+          if [[ -z "${{ secrets.GCP_SA_KEY }}" || -z "${{ secrets.GCP_PROJECT_ID }}" || -z "${{ secrets.GKE_CLUSTER_ZONE }}" || -z "${{ secrets.GKE_CLUSTER_NAME }}" ]]; then
+            echo "Error: One or more required secrets not set"
+            exit 1
+          fi
+          echo "GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}"
         shell: bash
 
       - name: Debug k8s directory
@@ -62,6 +46,7 @@ jobs:
         shell: bash
 
       - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -113,7 +98,7 @@ jobs:
             exit 1
           fi
           if [ ! -f "$GOOGLE_GHA_CREDS_PATH" ]; then
-            echo "Error: Credentials file not found at $GOOGLE_GHA_CREDS_PATH"
+            echo "Error: Credentials file not found"
             exit 1
           fi
           SERVICE_ACCOUNT=$(jq -r '.client_email' "$GOOGLE_GHA_CREDS_PATH")
@@ -127,10 +112,10 @@ jobs:
 
       - name: Verify GKE cluster location
         run: |
-          echo "GKE_CLUSTER_ZONE: $GKE_CLUSTER_ZONE"
+          echo "GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}"
           echo "Running as: $(gcloud auth list --filter=status:ACTIVE --format='value(account)')"
           echo "Project: $(gcloud config get-value project)"
-          gcloud container clusters list --region="$GKE_CLUSTER_ZONE" \
+          gcloud container clusters list --region="${{ secrets.GKE_CLUSTER_ZONE }}" \
             --project="${{ secrets.GCP_PROJECT_ID }}"
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -140,11 +125,11 @@ jobs:
 
       - name: Install kubectl and gke-gcloud-auth-plugin
         run: |
-          echo "Checking for existing kubectl installation..."
+          echo "Checking for existing kubectl..."
           if ! command -v kubectl &> /dev/null; then
             echo "kubectl not found, installing..."
             KUBECTL_URL="https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
-            echo "Downloading kubectl from $KUBECTL_URL..."
+            echo "Downloading kubectl..."
             if curl -fLO "$KUBECTL_URL"; then
               chmod +x ./kubectl
               sudo mv ./kubectl /usr/local/bin/kubectl
@@ -158,7 +143,7 @@ jobs:
           fi
           echo "Installing gke-gcloud-auth-plugin..."
           if gcloud components install gke-gcloud-auth-plugin --quiet; then
-            echo "gke-gcloud-auth-plugin installed successfully"
+            echo "gke-gcloud-auth-plugin installed"
           else
             echo "Error: Failed to install gke-gcloud-auth-plugin"
             exit 1
@@ -203,20 +188,6 @@ jobs:
           echo "Deploying to GKE..."
           chmod +x ./k8s/deploy_k8s.sh
           ./k8s/deploy_k8s.sh || { echo "Deployment failed, rolling back..."; exit 1; }
-        env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
-          HUGGINGFACEHUB_API_TOKEN: ${{ secrets.HUGGINGFACEHUB_API_TOKEN }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
-          MQTT_BROKER_HOST: ${{ secrets.MQTT_BROKER_HOST }}
-          MQTT_BROKER_PORT: ${{ secrets.MQTT_BROKER_PORT }}
-          MQTT_TLS: ${{ secrets.MQTT_TLS }}
-          MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
-          MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
-          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
         shell: bash
 
       - name: Verify deployment
@@ -238,27 +209,5 @@ jobs:
           else
             echo "Error: rollback_k8s.sh not found, skipping rollback"
             exit 1
-          fi
-        shell: bash
-
-      - name: Notify failure
-        if: failure()
-        run: |
-          if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
-            send_notification() {
-              local STATUS_MESSAGE="Deployment failed: ${{ github.workflow }} on ${{ github.ref }}"
-              local RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                -H 'Content-type: application/json' \
-                --data "{\"text\":\"$STATUS_MESSAGE\"}" \
-                "${{ secrets.SLACK_WEBHOOK_URL }}")
-              if [ "$RESPONSE" -ne 200 ]; then
-                echo "Failed to send notification. HTTP Response Code: $RESPONSE"
-              else
-                echo "Notification sent successfully"
-              fi
-            }
-            send_notification
-          else
-            echo "SLACK_WEBHOOK_URL not set, skipping notification"
           fi
         shell: bash
