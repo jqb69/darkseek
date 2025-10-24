@@ -63,9 +63,15 @@ jobs:
 
       - name: Check if all required secrets are set
         run: |
-          REQUIRED_SECRETS=("GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME")
+          REQUIRED_SECRETS=(
+            "GCP_SA_KEY" "GCP_PROJECT_ID" "GKE_CLUSTER_ZONE" "GKE_CLUSTER_NAME"
+            "GOOGLE_API_KEY" "GOOGLE_CSE_ID" "HUGGINGFACEHUB_API_TOKEN"
+            "DATABASE_URL" "REDIS_URL" "MQTT_BROKER_HOST" "MQTT_BROKER_PORT"
+            "MQTT_TLS" "MQTT_USERNAME" "MQTT_PASSWORD" "POSTGRES_USER"
+            "POSTGRES_PASSWORD" "POSTGRES_DB"
+          )
           for secret in "${REQUIRED_SECRETS[@]}"; do
-            if [[ -z "${{ secrets[$secret] }}" ]]; then
+            if [[ -z "${{ secrets[`$secret`] }}" ]]; then
               echo "Error: $secret is not set."
               exit 1
             fi
@@ -198,10 +204,4 @@ jobs:
             local STATUS_MESSAGE="Deployment failed: ${{ github.workflow }} on ${{ github.ref }}"
             local RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H 'Content-type: application/json' \
               --data "{\"text\":\"$STATUS_MESSAGE\"}" ${{ secrets.SLACK_WEBHOOK_URL }})
-            if [[ "$RESPONSE" -ne 200 ]]; then
-              echo "Failed to send notification. HTTP Response Code: $RESPONSE"
-            else
-              echo "Notification sent successfully."
-            fi
-          }
-          send_notification
+            if [[ "$RESPONSE"
