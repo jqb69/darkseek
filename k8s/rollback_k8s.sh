@@ -1,5 +1,5 @@
-# k8s/rollback_k8s.sh
 #!/bin/bash
+# k8s/rollback_k8s.sh
 set -e
 echo "Rolling back deployments..."
 kubectl rollout undo deployment/darkseek-frontend -n default
