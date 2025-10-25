@@ -19,7 +19,7 @@ jobs:
       - name: Validate workflow syntax
         uses: frenck/action-yamllint@v1
         with:
-          file: .github/workflows/deploy-to-gke-no-dns.yml
+          path: .github/workflows/deploy-to-gke-no-dns.yml
 
       - name: Check required secrets
         run: |
