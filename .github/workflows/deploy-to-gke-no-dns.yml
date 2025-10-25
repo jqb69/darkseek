@@ -47,6 +47,16 @@ jobs:
           echo "GKE_CLUSTER_ZONE: $GKE_CLUSTER_ZONE"
         shell: bash
 
+      - name: Debug frontend directory
+        run: |
+          echo "Listing app/frontend/ contents:"
+          ls -la app/frontend/
+          echo "Listing app/frontend/static/ contents:"
+          ls -la app/frontend/static/ || echo "Error: app/frontend/static/ not found"
+          echo "Listing app/frontend/components/ contents:"
+          ls -la app/frontend/components/
+        shell: bash
+
       - name: Debug k8s directory
         run: |
           echo "Current directory: $(pwd)"
@@ -109,6 +119,12 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for GCR
+        run: |
+          echo "Configuring Docker for GCR..."
+          gcloud auth configure-docker gcr.io --quiet
+        shell: bash
 
       - name: Verify service account
         run: |
