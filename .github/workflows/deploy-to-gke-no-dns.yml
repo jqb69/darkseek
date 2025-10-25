@@ -22,15 +22,29 @@ jobs:
           path: .github/workflows/deploy-to-gke-no-dns.yml
 
       - name: Check required secrets
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}
+          GKE_CLUSTER_NAME: ${{ secrets.GKE_CLUSTER_NAME }}
         run: |
-          if [[ -z "${{ secrets.GCP_SA_KEY }}" || \
-              -z "${{ secrets.GCP_PROJECT_ID }}" || \
-              -z "${{ secrets.GKE_CLUSTER_ZONE }}" || \
-              -z "${{ secrets.GKE_CLUSTER_NAME }}" ]]; then
-            echo "Error: Required secrets not set"
+          if [ -z "$GCP_SA_KEY" ]; then
+            echo "Error: GCP_SA_KEY is not set"
             exit 1
           fi
-          echo "GKE_CLUSTER_ZONE: ${{ secrets.GKE_CLUSTER_ZONE }}"
+          if [ -z "$GCP_PROJECT_ID" ]; then
+            echo "Error: GCP_PROJECT_ID is not set"
+            exit 1
+          fi
+          if [ -z "$GKE_CLUSTER_ZONE" ]; then
+            echo "Error: GKE_CLUSTER_ZONE is not set"
+            exit 1
+          fi
+          if [ -z "$GKE_CLUSTER_NAME" ]; then
+            echo "Error: GKE_CLUSTER_NAME is not set"
+            exit 1
+          fi
+          echo "GKE_CLUSTER_ZONE: $GKE_CLUSTER_ZONE"
         shell: bash
 
       - name: Debug k8s directory
@@ -99,7 +113,7 @@ jobs:
       - name: Verify service account
         run: |
           if [ -z "$GOOGLE_GHA_CREDS_PATH" ]; then
-            echo "Error: GOOGLE_GHA_CREDS_PATH not set"
+            echo "Error: GOOGLE_GHA_CREDS_PATH is not set"
             exit 1
           fi
           if [ ! -f "$GOOGLE_GHA_CREDS_PATH" ]; then
