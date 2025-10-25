@@ -1,4 +1,5 @@
-#no deploy-to-gke-no-dns.yml
+---
+# no deploy-to-gke-no-dns.yml
 name: Deploy to GKE With DNS
 
 on:
