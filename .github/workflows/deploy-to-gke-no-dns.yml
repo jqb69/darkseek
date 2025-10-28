@@ -236,8 +236,8 @@ jobs:
           MQTT_BROKER_HOST: ${{ secrets.MQTT_BROKER_HOST }}
           MQTT_BROKER_PORT: ${{ secrets.MQTT_BROKER_PORT }}
           MQTT_TLS: ${{ secrets.MQTT_TLS }}
-          MQTT_USERNAME: ${{ secrets.USERNAME }}
-          MQTT_PASSWORD: ${{ secrets.PASSWORD }}
+          MQTT_USERNAME: ${{ secrets.MQTT_USERNAME }}
+          MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
         run: |
