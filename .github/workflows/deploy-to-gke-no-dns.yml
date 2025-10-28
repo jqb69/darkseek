@@ -233,6 +233,11 @@ jobs:
           REDIS_URL: ${{ secrets.REDIS_URL }}
           HUGGINGFACEHUB_API_TOKEN: ${{ secrets.HUGGINGFACEHUB_API_TOKEN }}
           POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          MQTT_BROKER_HOST: ${{ secrets.MQTT_BROKER_HOST }}
+          MQTT_BROKER_PORT: ${{ secrets.MQTT_BROKER_PORT }}
+          MQTT_TLS: ${{ secrets.MQTT_TLS }}
+          MQTT_USERNAME: ${{ secrets.USERNAME }}
+          MQTT_PASSWORD: ${{ secrets.PASSWORD }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
         run: |
