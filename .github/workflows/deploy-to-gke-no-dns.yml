@@ -1,5 +1,6 @@
 ---
 # Deploy to GKE Without DNS
+# deploy-to-gke-no-dns.yaml
 name: Deploy to GKE Without DNS
 
 on:
@@ -225,6 +226,13 @@ jobs:
           tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest
 
       - name: Deploy to GKE
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          HUGGINGFACEHUB_API_TOKEN: ${{ secrets.HUGGINGFACEHUB_API_TOKEN }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
         run: |
           echo "Deploying to GKE..."
           chmod +x ./k8s/deploy_k8s.sh
