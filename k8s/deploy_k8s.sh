@@ -69,7 +69,7 @@ check_manifest_files() {
   log "All required manifest files are present."
 }
 
-# --- SERVER-SIDE DRY-RUN VALIDATION ---
+# --- SERVER-SIDE DRY-RUN VALIDATION (uses ./ after cd) ---
 dryrun_server() {
   log "Running server-side dry-run validation on all manifests..."
   if ! kubectl apply -f "./" --dry-run=server --validate=true; then
@@ -93,7 +93,27 @@ apply_with_retry() {
   fatal "Failed to apply $file after $RETRY_APPLY attempts."
 }
 
-# --- Check Database Initialization (improved) ---
+# --- Troubleshooting ---
+troubleshoot_k8s() {
+  log "=== begin automated troubleshoot_k8s ==="
+  log "NAMESPACE=$NAMESPACE"
+  log "1) PVC list:"; kubectl get pvc -n "$NAMESPACE" || true
+  log "2) Describe PVC 'db-pvc':"; kubectl describe pvc db-pvc -n "$NAMESPACE" || true
+  log "3) List PVs:"; kubectl get pv || true
+  log "4) Pods for darkseek-db:"; kubectl get pods -n "$NAMESPACE" -l app=darkseek-db -o wide || true
+  POD=$(kubectl get pods -n "$NAMESPACE" -l app=darkseek-db -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  if [ -n "$POD" ]; then
+    log "Describing pod $POD:"; kubectl describe pod "$POD" -n "$NAMESPACE" || true
+    log "Logs from $POD:"; kubectl logs "$POD" -n "$NAMESPACE" --all-containers=true || true
+  else
+    log "No darkseek-db pod found."
+  fi
+  log "5) Last 30 events:"; kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp' | tail -n 30 || true
+  log "6) Node status:"; kubectl get nodes -o wide || true
+  log "=== end automated troubleshoot_k8s ==="
+}
+
+# --- Check Database Initialization ---
 check_db_initialization() {
   log "Checking PostgreSQL initialization for PVC '$1' (label $2)..."
   local pod_label="${2:-app=darkseek-db}"
@@ -101,7 +121,6 @@ check_db_initialization() {
   local interval=10
   local elapsed=0
   local pod_name=""
-
   while [ $elapsed -lt $timeout ]; do
     pod_name=$(kubectl get pods -n "$NAMESPACE" -l "$pod_label" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
     if [ -n "$pod_name" ]; then
@@ -115,56 +134,43 @@ check_db_initialization() {
     sleep $interval
     elapsed=$((elapsed + interval))
   done
-
   if [ -z "$pod_name" ]; then
-    fatal "No pod found for label '$pod_label' in namespace '$NAMESPACE'. Run troubleshoot_pvc_and_nodes to inspect PVC/PV and events."
+    fatal "No pod found for label '$pod_label'."
   fi
-
   if ! kubectl exec -n "$NAMESPACE" "$pod_name" -- pg_isready -U "${POSTGRES_USER:-admin}" >/dev/null 2>&1; then
-    log "pg_isready failed — dumping diagnostics..."
-    kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
+    log "pg_isready failed."; kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
     kubectl logs "$pod_name" -n "$NAMESPACE" --all-containers=true || true
-    fatal "Postgres is not accepting connections. Run troubleshoot_pvc_and_nodes postgres-pvc $pod_label"
+    fatal "Postgres not accepting connections."
   fi
   log "PostgreSQL is accepting connections."
-
   local user="${POSTGRES_USER:-admin}"
   local db="${POSTGRES_DB:-darkseekdb}"
   if kubectl exec -n "$NAMESPACE" "$pod_name" -- psql -U "$user" -d "$db" -c "SELECT 1;" >/dev/null 2>&1; then
-    log "Database '$db' is initialized and functional."
+    log "Database '$db' is functional."
   else
-    log "Simple query failed — dumping diagnostics..."
-    kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
+    log "Query failed."; kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
     kubectl logs "$pod_name" -n "$NAMESPACE" --all-containers=true || true
-    fatal "Failed to query database '$db'. Check POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB and PVC contents."
+    fatal "Failed to query database '$db'."
   fi
 }
 
-# --- Check Pod Statuses After Deployment ---
+# --- Check Pod Statuses ---
 check_pod_statuses() {
-  log "Checking pod statuses for deployments..."
-  deployments=(
-    "darkseek-backend-ws"
-    "darkseek-backend-mqtt"
-    "darkseek-frontend"
-    "darkseek-db"
-    "darkseek-redis"
-  )
+  log "Checking pod statuses..."
+  deployments=("darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis")
   local all_healthy=true
   for deployment in "${deployments[@]}"; do
-    log "Checking pods for deployment '$deployment'..."
+    log "Checking '$deployment'..."
     pod_status=$(kubectl get pods -n "$NAMESPACE" -l app="$deployment" -o jsonpath='{range .items[*]}{.metadata.name}:{.status.phase}:{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null || echo "")
     if [ -z "$pod_status" ]; then
-      echo "  -> No pods found for '$deployment'." >&2
-      all_healthy=false
-      continue
+      echo " -> No pods for '$deployment'." >&2; all_healthy=false; continue
     fi
     while IFS= read -r line; do
       pod_name=$(echo "$line" | cut -d':' -f1)
       phase=$(echo "$line" | cut -d':' -f2)
       ready=$(echo "$line" | cut -d':' -f3)
       if [ "$phase" != "Running" ] || [ "$ready" != "true" ]; then
-        echo "Warning: Pod '$pod_name' not healthy (Phase: $phase, Ready: $ready)." >&2
+        echo "Warning: Pod '$pod_name' unhealthy (Phase: $phase, Ready: $ready)." >&2
         kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
         kubectl logs "$pod_name" -n "$NAMESPACE" --all-containers=true || true
         all_healthy=false
@@ -173,57 +179,22 @@ check_pod_statuses() {
       fi
     done <<< "$pod_status"
   done
-
-  $all_healthy || fatal "Some pods are not healthy. See above diagnostics."
+  $all_healthy || fatal "Some pods are not healthy."
   log "All pods are healthy."
 }
 
-# --- Troubleshooting (keep your full version below) ---
-troubleshoot_k8s() {
-  log "=== begin automated troubleshoot_k8s ==="
-  log "NAMESPACE=$NAMESPACE"
-  log "1) PVC list:"
-  kubectl get pvc -n "$NAMESPACE" || true
-  log "2) Describe PVC 'db-pvc' (if present):"
-  kubectl describe pvc db-pvc -n "$NAMESPACE" || true
-  log "3) List PVs:"
-  kubectl get pv || true
-  log "4) Pods for darkseek-db and describe first pod:"
-  kubectl get pods -n "$NAMESPACE" -l app=darkseek-db -o wide || true
-  POD=$(kubectl get pods -n "$NAMESPACE" -l app=darkseek-db -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-  if [ -n "$POD" ]; then
-    log "Describing pod $POD:"
-    kubectl describe pod "$POD" -n "$NAMESPACE" || true
-    log "Collecting logs from $POD:"
-    kubectl logs "$POD" -n "$NAMESPACE" --all-containers=true || true
-  else
-    log "No darkseek-db pod found to describe/log."
-  fi
-  log "5) Last 30 cluster events (namespace):"
-  kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp' | tail -n 30 || true
-  log "6) Node status and taints:"
-  kubectl get nodes -o wide || true
-  kubectl describe nodes | grep -E 'Name:|Taints:|Unschedulable|Allocatable' -A3 -B1 || true
-  log "=== end automated troubleshoot_k8s ==="
-}
-
-# --- (Keep all your other functions: troubleshoot_pvc_and_nodes, check_db_initialization, etc.) ---
-# ... [your existing functions go here] ...
-
-# --- MAIN EXECUTION ---
+# --- MAIN ---
 log "Checking for kubectl..."
 check_kubectl
-[ ! -d "$K8S_DIR" ] && fatal "Kubernetes manifest directory '$K8S_DIR' not found."
+[ ! -d "$K8S_DIR" ] && fatal "Directory '$K8S_DIR' not found."
 check_env_vars
 check_manifest_files
 cd "$K8S_DIR"
 
 log "Deploying DarkSeek to GKE without DNS..."
 
-# Apply ConfigMap
 kubectl apply -f configmap.yaml
 
-# Create/Update Secret
 log "Creating or updating darkseek-secrets..."
 kubectl create secret generic darkseek-secrets \
   --from-literal=GOOGLE_API_KEY="${GOOGLE_API_KEY}" \
@@ -241,10 +212,10 @@ kubectl create secret generic darkseek-secrets \
   --from-literal=POSTGRES_DB="${POSTGRES_DB}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# === SERVER-SIDE DRY-RUN BEFORE ANY APPLY ===
+# DRY-RUN
 dryrun_server
 
-# === APPLY ALL MANIFESTS WITH RETRY ===
+# APPLY
 apply_with_retry backend-ws-deployment.yaml
 apply_with_retry backend-mqtt-deployment.yaml
 apply_with_retry frontend-deployment.yaml
@@ -257,55 +228,45 @@ apply_with_retry db-service.yaml
 apply_with_retry redis-service.yaml
 apply_with_retry db-pvc.yaml
 
-# --- (Rest of your script: PVC check, db init, wait, patch, etc.) ---
-
+# PVC & DB
 pvc_name="postgres-pvc"
 deployment_name="darkseek-db"
 dep_claim=$(kubectl get deployment $deployment_name -o jsonpath='{.spec.template.spec.volumes[?(@.name=="postgres-data")].persistentVolumeClaim.claimName}')
-if [ "$dep_claim" != "$pvc_name" ]; then
-  fatal "Deployment $deployment_name is referencing PVC $dep_claim, but PVC is named $pvc_name. Fix db-deployment.yaml."
-fi
+[ "$dep_claim" != "$pvc_name" ] && fatal "PVC mismatch: expected $pvc_name, got $dep_claim."
+
 pvc_status=$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
-if [ "$pvc_status" != "Bound" ]; then
-  log "PVC '$pvc_name' status: $pvc_status"
-  log "Running automated troubleshooting checks..."
-  troubleshoot_pvc_and_nodes "$pvc_name" "darkseek-db"
-  fatal "PVC '$pvc_name' is not Bound. Resolve PV/PVC issues and re-run the script."
-fi
+[ "$pvc_status" != "Bound" ] && { log "PVC '$pvc_name' not Bound."; troubleshoot_pvc_and_nodes "$pvc_name" "darkseek-db"; fatal "PVC not Bound."; }
 
 check_db_initialization "$pvc_name" "app=darkseek-db"
 
-log "Waiting for deployments to become available..."
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-ws || fatal "darkseek-backend-ws failed to become ready."
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-mqtt || fatal "darkseek-backend-mqtt failed to become ready."
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-frontend || fatal "darkseek-frontend failed to become ready."
-kubectl wait --for=condition=available --timeout=900s deployment/darkseek-db || fatal "darkseek-db failed to become ready."
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-redis || fatal "darkseek-redis failed to become ready."
+log "Waiting for deployments..."
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-ws || fatal "WS failed."
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-mqtt || fatal "MQTT failed."
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-frontend || fatal "Frontend failed."
+kubectl wait --for=condition=available --timeout=900s deployment/darkseek-db || fatal "DB failed."
+kubectl wait --for=condition=available --timeout=600s deployment/darkseek-redis || fatal "Redis failed."
 
 check_pod_statuses
 
 log "Fetching external IPs..."
-WS_IP=""
-MQTT_IP=""
+WS_IP="" MQTT_IP=""
 for i in {1..5}; do
   WS_IP=$(kubectl get service darkseek-backend-ws -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
   MQTT_IP=$(kubectl get service darkseek-backend-mqtt -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
-  if [ "$WS_IP" != "pending" ] && [ "$MQTT_IP" != "pending" ]; then
-    kubectl patch configmap darkseek-config -n "$NAMESPACE" -p "{\"data\":{\"WEBSOCKET_URI\":\"wss://$WS_IP:443/ws/\",\"MQTT_URI\":\"https://$MQTT_IP:443\"}}" || true
-    break
-  fi
-  log "Waiting for IPs ($i/5)..."
-  sleep 30
+  [ "$WS_IP" != "pending" ] && [ "$MQTT_IP" != "pending" ] && break
+  log "Waiting for IPs ($i/5)..."; sleep 30
 done
-if [ -z "$WS_IP" ] || [ "$WS_IP" = "pending" ] || [ -z "$MQTT_IP" ] || [ "$MQTT_IP" = "pending" ]; then
-  echo "Warning: External IPs not assigned after retries. ConfigMap not updated." >&2
-fi
 
-log "Deployment completed. Service list:"
+[ "$WS_IP" != "pending" ] && [ "$MQTT_IP" != "pending" ] && \
+  kubectl patch configmap darkseek-config -n "$NAMESPACE" -p "{\"data\":{\"WEBSOCKET_URI\":\"wss://$WS_IP:443/ws/\",\"MQTT_URI\":\"https://$MQTT_IP:443\"}}" || true
+
+[ -z "$WS_IP" ] || [ "$WS_IP" = "pending" ] || [ -z "$MQTT_IP" ] || [ "$MQTT_IP" = "pending" ] && \
+  echo "Warning: External IPs not assigned." >&2
+
+log "Deployment completed. Services:"
 kubectl get services -n "$NAMESPACE" -o wide
-log "DarkSeek deployed successfully to GKE (Without DNS)!"
-echo
-echo "Access services at (replace with assigned IPs):"
-echo " - WebSocket: wss://$WS_IP:443/ws/{session_id}"
-echo " - MQTT: https://$MQTT_IP:443/process_query/"
-echo " - Frontend: http://<frontend-ip>:8501"
+log "DarkSeek deployed successfully!"
+echo "Access:"
+echo "  WS: wss://$WS_IP:443/ws/{session_id}"
+echo "  MQTT: https://$MQTT_IP:443/process_query/"
+echo "  Frontend: http://<frontend-ip>:8501"
