@@ -72,7 +72,7 @@ check_manifest_files() {
 # --- SERVER-SIDE DRY-RUN VALIDATION ---
 dryrun_server() {
   log "Running server-side dry-run validation on all manifests..."
-  if ! kubectl apply -f "$K8S_DIR/" --dry-run=server --validate=true; then
+  if ! kubectl apply -f "./" --dry-run=server --validate=true; then
     fatal "Server-side validation failed. Fix YAML errors (e.g., value + valueFrom conflict)."
   fi
   log "Server-side dry-run passed. All manifests are valid."
