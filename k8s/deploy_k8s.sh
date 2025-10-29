@@ -83,10 +83,13 @@ troubleshoot_k8s() {
 }
 
 ensure_db_exists() {
-  log "Ensuring database '$POSTGRES_DB' exists..."
-  kubectl exec -n "$NAMESPACE" deployment/darkseek-db -- psql -U "$POSTGRES_USER" -tc "SELECT 1 FROM pg_database WHERE datname = '$POSTGRES_DB'" | grep -q 1 || \
-    kubectl exec -n "$NAMESPACE" deployment/darkseek-db -- psql -U "$POSTGRES_USER" -c "CREATE DATABASE \"$POSTGRES_DB\";"
-  log "Database '$POSTGRES_DB' confirmed."
+  log "Ensuring DB '$POSTGRES_DB' exists..."
+  if ! kubectl exec -n "$NAMESPACE" deployment/darkseek-db -- psql -U "$POSTGRES_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '$POSTGRES_DB'" | grep -q 1; then
+    log "Creating database '$POSTGRES_DB'..."
+    kubectl exec -n "$NAMESPACE" deployment/darkseek-db -- psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE \"$POSTGRES_DB\";"
+  else
+    log "Database '$POSTGRES_DB' already exists."
+  fi
 }
 
 check_db_initialization() {
@@ -100,15 +103,11 @@ check_db_initialization() {
     elapsed=$((elapsed + interval))
   done
   [ -z "$pod_name" ] && fatal "No pod found for $pod_label."
-
   kubectl exec -n "$NAMESPACE" "$pod_name" -- pg_isready -U "$POSTGRES_USER" >/dev/null 2>&1 || \
     { log "pg_isready failed."; kubectl describe pod "$pod_name"; kubectl logs "$pod_name"; fatal "Postgres not ready."; }
-
   log "PostgreSQL accepting connections."
-
   local user="$POSTGRES_USER" db="$POSTGRES_DB"
   [ -z "$db" ] && fatal "POSTGRES_DB not set."
-
   kubectl exec -n "$NAMESPACE" "$pod_name" -- psql -U "$user" -d "$db" -c "SELECT 1;" >/dev/null 2>&1 && \
     log "Database '$db' functional." || \
     { log "Query failed."; kubectl describe pod "$pod_name"; kubectl logs "$pod_name"; fatal "Cannot query '$db'."; }
