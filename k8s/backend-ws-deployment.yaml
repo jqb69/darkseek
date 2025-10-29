@@ -1,3 +1,4 @@
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,19 +17,18 @@ spec:
       - name: backend-ws
         image: gcr.io/ascendant-lore-452208-b6/darkseek-backend-ws:latest
         ports:
-        - containerPort: 8000
+          - containerPort: 8000
         envFrom:
-        - configMapRef:
-            name: darkseek-config
-        - secretRef:
-            name: darkseek-secrets
-        env:
-        - name: DATABASE_URL
-          valueFrom:
-            secretKeyRef:
+          - configMapRef:
+              name: darkseek-config
+          - secretRef:
               name: darkseek-secrets
-              key: DATABASE_URL
-        # REDIS_URL is now sourced from darkseek-secrets via envFrom, no need to hardcode
+        env:
+          - name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: darkseek-secrets
+                key: DATABASE_URL
         resources:
           requests:
             cpu: "100m"    # Minimum CPU needed
