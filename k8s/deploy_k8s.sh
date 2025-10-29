@@ -93,6 +93,91 @@ apply_with_retry() {
   fatal "Failed to apply $file after $RETRY_APPLY attempts."
 }
 
+# --- Check Database Initialization (improved) ---
+check_db_initialization() {
+  log "Checking PostgreSQL initialization for PVC '$1' (label $2)..."
+  local pod_label="${2:-app=darkseek-db}"
+  local timeout=300
+  local interval=10
+  local elapsed=0
+  local pod_name=""
+
+  while [ $elapsed -lt $timeout ]; do
+    pod_name=$(kubectl get pods -n "$NAMESPACE" -l "$pod_label" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    if [ -n "$pod_name" ]; then
+      pod_phase=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+      if [ "$pod_phase" = "Running" ]; then
+        log "Pod '$pod_name' is Running."
+        break
+      fi
+    fi
+    log "Waiting for pod ($elapsed/$timeout)..."
+    sleep $interval
+    elapsed=$((elapsed + interval))
+  done
+
+  if [ -z "$pod_name" ]; then
+    fatal "No pod found for label '$pod_label' in namespace '$NAMESPACE'. Run troubleshoot_pvc_and_nodes to inspect PVC/PV and events."
+  fi
+
+  if ! kubectl exec -n "$NAMESPACE" "$pod_name" -- pg_isready -U "${POSTGRES_USER:-admin}" >/dev/null 2>&1; then
+    log "pg_isready failed — dumping diagnostics..."
+    kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
+    kubectl logs "$pod_name" -n "$NAMESPACE" --all-containers=true || true
+    fatal "Postgres is not accepting connections. Run troubleshoot_pvc_and_nodes postgres-pvc $pod_label"
+  fi
+  log "PostgreSQL is accepting connections."
+
+  local user="${POSTGRES_USER:-admin}"
+  local db="${POSTGRES_DB:-darkseekdb}"
+  if kubectl exec -n "$NAMESPACE" "$pod_name" -- psql -U "$user" -d "$db" -c "SELECT 1;" >/dev/null 2>&1; then
+    log "Database '$db' is initialized and functional."
+  else
+    log "Simple query failed — dumping diagnostics..."
+    kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
+    kubectl logs "$pod_name" -n "$NAMESPACE" --all-containers=true || true
+    fatal "Failed to query database '$db'. Check POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB and PVC contents."
+  fi
+}
+
+# --- Check Pod Statuses After Deployment ---
+check_pod_statuses() {
+  log "Checking pod statuses for deployments..."
+  deployments=(
+    "darkseek-backend-ws"
+    "darkseek-backend-mqtt"
+    "darkseek-frontend"
+    "darkseek-db"
+    "darkseek-redis"
+  )
+  local all_healthy=true
+  for deployment in "${deployments[@]}"; do
+    log "Checking pods for deployment '$deployment'..."
+    pod_status=$(kubectl get pods -n "$NAMESPACE" -l app="$deployment" -o jsonpath='{range .items[*]}{.metadata.name}:{.status.phase}:{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null || echo "")
+    if [ -z "$pod_status" ]; then
+      echo "  -> No pods found for '$deployment'." >&2
+      all_healthy=false
+      continue
+    fi
+    while IFS= read -r line; do
+      pod_name=$(echo "$line" | cut -d':' -f1)
+      phase=$(echo "$line" | cut -d':' -f2)
+      ready=$(echo "$line" | cut -d':' -f3)
+      if [ "$phase" != "Running" ] || [ "$ready" != "true" ]; then
+        echo "Warning: Pod '$pod_name' not healthy (Phase: $phase, Ready: $ready)." >&2
+        kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
+        kubectl logs "$pod_name" -n "$NAMESPACE" --all-containers=true || true
+        all_healthy=false
+      else
+        log "Pod '$pod_name' is healthy."
+      fi
+    done <<< "$pod_status"
+  done
+
+  $all_healthy || fatal "Some pods are not healthy. See above diagnostics."
+  log "All pods are healthy."
+}
+
 # --- Troubleshooting (keep your full version below) ---
 troubleshoot_k8s() {
   log "=== begin automated troubleshoot_k8s ==="
@@ -173,6 +258,7 @@ apply_with_retry redis-service.yaml
 apply_with_retry db-pvc.yaml
 
 # --- (Rest of your script: PVC check, db init, wait, patch, etc.) ---
+
 pvc_name="postgres-pvc"
 deployment_name="darkseek-db"
 dep_claim=$(kubectl get deployment $deployment_name -o jsonpath='{.spec.template.spec.volumes[?(@.name=="postgres-data")].persistentVolumeClaim.claimName}')
