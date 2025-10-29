@@ -23,12 +23,6 @@ spec:
               name: darkseek-config
           - secretRef:
               name: darkseek-secrets
-        env:
-          - name: DATABASE_URL
-            valueFrom:
-              secretKeyRef:
-                name: darkseek-secrets
-                key: DATABASE_URL
         resources:
           requests:
             cpu: "100m"    # Minimum CPU needed
