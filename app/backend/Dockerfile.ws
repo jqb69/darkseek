@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc \
 RUN pip install --no-cache-dir --upgrade pip virtualenv
 RUN python -m virtualenv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
+RUN mkdir -p /app/backend
 COPY requirements.txt ./backend/
 RUN pip install --no-cache-dir -r backend/requirements.txt
 COPY backend/* ./backend/
