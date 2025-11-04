@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir --upgrade pip virtualenv
 RUN python -m virtualenv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 RUN mkdir -p /app/backend
-COPY requirements.txt /app/backend/
+COPY backend/requirements.txt /app/backend/
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 COPY backend/* /app/backend/
 ENV PYTHONPATH=/app
