@@ -1,4 +1,4 @@
-#app/backend/main.py
+# app/backend/main.py
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.search_api import search_manager
@@ -82,3 +82,8 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, db: Session 
             await heartbeat_task
         except asyncio.CancelledError:
             logger.info(f"Heartbeat task cancelled for session: {session_id}")
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}            
