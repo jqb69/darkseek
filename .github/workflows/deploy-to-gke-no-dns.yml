@@ -240,6 +240,7 @@ jobs:
           MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           echo "Deploying to GKE..."
           chmod +x ./k8s/deploy_k8s.sh
