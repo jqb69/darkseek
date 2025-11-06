@@ -1,4 +1,5 @@
 ---
+# k8s/backend-ws-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,7 +16,8 @@ spec:
     spec:
       containers:
       - name: backend-ws
-        image: gcr.io/ascendant-lore-452208-b6/darkseek-backend-ws:latest
+        image: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-ws:latest
+        imagePullPolicy: Always
         ports:
           - containerPort: 8000
         envFrom:
@@ -23,10 +25,22 @@ spec:
               name: darkseek-config
           - secretRef:
               name: darkseek-secrets
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
         resources:
           requests:
-            cpu: "100m"    # Minimum CPU needed
-            memory: "256Mi" # Minimum memory needed
+            cpu: "100m"
+            memory: "256Mi"
           limits:
-            cpu: "500m"    # Maximum CPU allowed
-            memory: "512Mi" # Maximum memory allowed
+            cpu: "500m"
+            memory: "512Mi"
