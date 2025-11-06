@@ -113,6 +113,17 @@ check_db_initialization() {
     { log "Query failed."; kubectl describe pod "$pod_name"; kubectl logs "$pod_name"; fatal "Cannot query '$db'."; }
 }
 
+verify_backend_ws_image() {
+  log "Verifying backend-ws image..."
+  local image
+  image=$(kubectl get deployment darkseek-backend-ws -n default \
+    -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "Not found")
+  if [ "$image" = "Not found" ]; then
+    fatal "Deployment darkseek-backend-ws not found or has no image."
+  fi
+  log "Deployed image: $image"
+}
+
 check_pod_statuses() {
   log "Checking pod health..."
   local all_healthy=true
@@ -167,7 +178,9 @@ kubectl create secret generic darkseek-secrets \
 dryrun_server
 
 apply_with_retry backend-ws-deployment.yaml
-apply_with_retry backend-mqtt-deployment.yaml
+apply_with_retry backend-mqtt-deployment.verify_backend_ws_image
+
+log "Waiting for deployments..."
 apply_with_retry frontend-deployment.yaml
 apply_with_retry db-deployment.yaml
 apply_with_retry redis-deployment.yaml
@@ -188,10 +201,13 @@ pvc_status=$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.p
 
 ensure_db_exists
 check_db_initialization "$pvc_name" "app=darkseek-db"
+verify_backend_ws_image
+
+
 
 log "Waiting for deployments..."
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-ws || fatal "WS failed."
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-backend-mqtt || fatal "MQTT failed."
+kubectl wait --for=condition=available --timeout=900s deployment/darkseek-backend-ws || fatal "WS failed."
+kubectl wait --for=condition=available --timeout=900s deployment/darkseek-backend-mqtt || fatal "MQTT failed."
 kubectl wait --for=condition=available --timeout=600s deployment/darkseek-frontend || fatal "Frontend failed."
 kubectl wait --for=condition=available --timeout=900s deployment/darkseek-db || fatal "DB failed."
 kubectl wait --for=condition=available --timeout=600s deployment/darkseek-redis || fatal "Redis failed."
