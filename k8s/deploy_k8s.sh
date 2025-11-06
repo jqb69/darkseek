@@ -124,6 +124,7 @@ verify_backend_ws_image() {
   log "Deployed image: $image"
 }
 
+
 check_pod_statuses() {
   log "Checking pod health..."
   local all_healthy=true
@@ -178,7 +179,7 @@ kubectl create secret generic darkseek-secrets \
 dryrun_server
 
 apply_with_retry backend-ws-deployment.yaml
-apply_with_retry backend-mqtt-deployment.verify_backend_ws_image
+apply_with_retry backend-mqtt-deployment.yaml
 
 log "Waiting for deployments..."
 apply_with_retry frontend-deployment.yaml
