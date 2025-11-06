@@ -174,6 +174,7 @@ kubectl create secret generic darkseek-secrets \
   --from-literal=POSTGRES_USER="${POSTGRES_USER}" \
   --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
   --from-literal=POSTGRES_DB="${POSTGRES_DB}" \
+  --from-literal=GCP_PROJECT_ID="${GCP_PROJECT_ID}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 dryrun_server
@@ -191,6 +192,10 @@ apply_with_retry frontend-service.yaml
 apply_with_retry db-service.yaml
 apply_with_retry redis-service.yaml
 apply_with_retry db-pvc.yaml
+
+log "Patching images with GCP_PROJECT_ID..."
+kubectl set image deployment/darkseek-backend-ws backend-ws=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-ws:latest -n default
+kubectl set image deployment/darkseek-backend-mqtt backend-mqtt=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-mqtt:latest -n default
 
 pvc_name="postgres-pvc"
 deployment_name="darkseek-db"
