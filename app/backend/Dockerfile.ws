@@ -9,7 +9,9 @@ ENV PATH="/app/venv/bin:$PATH"
 RUN mkdir -p /app/backend
 COPY backend/requirements.txt /app/backend/
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+
 COPY backend/* /app/backend/
-ENV PYTHONPATH=/app
+# Fix: Ensure app/ is in PYTHONPATH
+ENV PYTHONPATH=/app:/app/backend
 EXPOSE 8000
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
