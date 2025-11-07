@@ -124,6 +124,58 @@ verify_backend_ws_image() {
   log "Deployed image: $image"
 }
 
+# ----------------------------------------------------------------------
+#  DEBUG: wait for all deployments with detailed pod diagnostics
+# ----------------------------------------------------------------------
+wait_for_deployments() {
+  local deployments=(
+    "darkseek-backend-ws"
+    "darkseek-backend-mqtt"
+    "darkseek-frontend"
+    "darkseek-db"
+    "darkseek-redis"
+  )
+  local timeout=900   # increase from 600s – gives the pod more time to start
+  local interval=15
+
+  log "Waiting up to ${timeout}s for deployments to become Available..."
+  for dep in "${deployments[@]}"; do
+    log "=== Waiting for deployment/$dep ==="
+    if kubectl wait --for=condition=available --timeout=${timeout}s "deployment/$dep" -n "$NAMESPACE"; then
+      log "Deployment $dep is Available"
+      continue
+    fi
+
+    # ------------------------------------------------------------------
+    #  If we get here the wait timed-out → dump everything useful
+    # ------------------------------------------------------------------
+    log "WARNING: Deployment $dep did NOT become Available – dumping diagnostics..."
+
+    # 1. Pod list
+    log "Pods for $dep:"
+    kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o wide || true
+
+    # 2. Pod describe (first pod only)
+    local pod
+    pod=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    if [ -n "$pod" ]; then
+      log "Describe pod $pod:"
+      kubectl describe pod "$pod" -n "$NAMESPACE" || true
+
+      # 3. Pod logs (all containers)
+      log "Logs for pod $pod:"
+      kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=100 || true
+    else
+      log "No pod found for label app=$dep"
+    fi
+
+    # 4. Recent events
+    log "Recent events for $dep:"
+    kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp' | grep -i "$dep" | tail -n 20 || true
+
+    fatal "Deployment $dep failed to become ready – see diagnostics above."
+  done
+}
 
 check_pod_statuses() {
   log "Checking pod health..."
@@ -211,12 +263,7 @@ verify_backend_ws_image
 
 
 
-log "Waiting for deployments..."
-kubectl wait --for=condition=available --timeout=900s deployment/darkseek-backend-ws || fatal "WS failed."
-kubectl wait --for=condition=available --timeout=900s deployment/darkseek-backend-mqtt || fatal "MQTT failed."
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-frontend || fatal "Frontend failed."
-kubectl wait --for=condition=available --timeout=900s deployment/darkseek-db || fatal "DB failed."
-kubectl wait --for=condition=available --timeout=600s deployment/darkseek-redis || fatal "Redis failed."
+wait_for_deployments
 
 check_pod_statuses
 
