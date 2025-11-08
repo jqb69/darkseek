@@ -1,4 +1,3 @@
-# app/backend/Dockerfile.ws
 FROM python:3.11-slim
 WORKDIR /app
 
@@ -9,10 +8,13 @@ RUN pip install --no-cache-dir --upgrade pip virtualenv
 RUN python -m virtualenv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-COPY app/backend/ /app/app/backend/
-RUN pip install --no-cache-dir -r /app/app/backend/requirements.txt
+# Copy backend/ into arbitrary root
+COPY app/backend/ /app/darkseek/app/backend/
 
-ENV PYTHONPATH=/app
+# Install
+RUN pip install --no-cache-dir -r /app/darkseek/app/backend/requirements.txt
+
+ENV PYTHONPATH=/app/darkseek
 
 EXPOSE 8000
 CMD ["uvicorn", "app.backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
