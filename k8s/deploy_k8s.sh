@@ -179,25 +179,36 @@ wait_for_deployments() {
 
 check_pod_statuses() {
   log "Checking pod health..."
-  local all_healthy=true
-  for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis"; do
-    log "Checking $dep..."
-    while IFS= read -r line; do
-      pod=$(echo "$line" | cut -d: -f1)
-      phase=$(echo "$line" | cut -d: -f2)
-      ready=$(echo "$line" | cut -d: -f3)
-      if [ "$phase" != "Running" ] || [ "$ready" != "true" ]; then
-        echo "Warning: $pod unhealthy ($phase, $ready)" >&2
-        kubectl describe pod "$pod" -n "$NAMESPACE" || true
-        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true || true
+  local timeout=300 interval=10 elapsed=0 all_healthy=true
+  while [ $elapsed -lt $timeout ]; do
+    all_healthy=true
+    for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis"; do
+      pod_status=$(kubectl get pods -n "$NAMESPACE" -l app="$dep" -o jsonpath='{range .items[*]}{.metadata.name}:{.status.phase}:{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null || echo "")
+      if [ -z "$pod_status" ]; then
+        log "No pods for $dep (elapsed: $elapsed/$timeout)."
         all_healthy=false
-      else
-        log "Pod $pod healthy."
+        continue
       fi
-    done < <(kubectl get pods -n "$NAMESPACE" -l app="$dep" -o jsonpath='{range .items[*]}{.metadata.name}:{.status.phase}:{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null || echo "")
-    [ -z "$(kubectl get pods -n "$NAMESPACE" -l app="$dep" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)" ] && all_healthy=false
+      while IFS= read -r line; do
+        pod_name=$(echo "$line" | cut -d: -f1)
+        phase=$(echo "$line" | cut -d: -f2)
+        ready=$(echo "$line" | cut -d: -f3)
+        if [ "$phase" != "Running" ] || [ "$ready" != "true" ]; then
+          log "Pod $pod_name for $dep unhealthy (Phase: $phase, Ready: $ready) (elapsed: $elapsed/$timeout)."
+          kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
+          kubectl logs "$pod_name" -n "$NAMESPACE" --all-containers=true || true
+          all_healthy=false
+        else
+          log "Pod $pod_name healthy."
+        fi
+      done <<< "$pod_status"
+    done
+    [ "$all_healthy" = true ] && break
+    log "Retrying in $interval seconds (elapsed: $elapsed/$timeout)..."
+    sleep $interval
+    elapsed=$((elapsed + interval))
   done
-  $all_healthy || fatal "Unhealthy pods detected."
+  $all_healthy || fatal "Unhealthy pods after $timeout seconds."
   log "All pods healthy."
 }
 
