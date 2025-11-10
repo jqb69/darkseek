@@ -215,7 +215,7 @@ jobs:
           context: .
           file: ./app/backend/Dockerfile.ws
           push: true
-          tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-ws:latest
+          tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}  
 
