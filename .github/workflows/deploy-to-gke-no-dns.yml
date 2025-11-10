@@ -216,6 +216,8 @@ jobs:
           file: ./app/backend/Dockerfile.ws
           push: true
           tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-ws:latest
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}  
 
       - name: Build and push backend-mqtt
         uses: docker/build-push-action@v6
