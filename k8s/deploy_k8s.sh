@@ -124,6 +124,19 @@ verify_backend_ws_image() {
   log "Deployed image: $image"
 }
 
+debug_python_startup() {
+  local dep="$1"
+  local pod
+  pod=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  if [ -n "$pod" ]; then
+    log "=== PYTHON DEBUG: $dep ($pod) ==="
+    kubectl logs "$pod" -n "$NAMESPACE" --tail=50 | grep -i "import\|error\|exception\|traceback" || true
+    kubectl exec "$pod" -n "$NAMESPACE" -- python -c "import sys; print('Python path:', sys.path)" || true
+    kubectl exec "$pod" -n "$NAMESPACE" -- ls -la /app/ || true
+    kubectl exec "$pod" -n "$NAMESPACE" -- find /app -name "*.py" | head -20 || true
+  fi
+}
+
 # ----------------------------------------------------------------------
 #  DEBUG: wait for all deployments with detailed pod diagnostics
 # ----------------------------------------------------------------------
@@ -164,7 +177,9 @@ wait_for_deployments() {
 
       # 3. Pod logs (all containers)
       log "Logs for pod $pod:"
-      kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=100 || true
+      kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 | \
+      grep -i -E "(ERROR|Exception|Traceback|ModuleNotFound|ImportError|Failed)" || \
+      kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200
     else
       log "No pod found for label app=$dep"
     fi
@@ -172,6 +187,7 @@ wait_for_deployments() {
     # 4. Recent events
     log "Recent events for $dep:"
     kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp' | grep -i "$dep" | tail -n 20 || true
+    debug_python_startup "$dep"
 
     fatal "Deployment $dep failed to become ready – see diagnostics above."
   done
@@ -212,6 +228,12 @@ check_pod_statuses() {
   log "All pods healthy."
 }
 
+apply_with_envsubst() {
+  local file="$1"
+  export GCP_PROJECT_ID
+  envsubst < "$file" | kubectl apply -f -
+}
+
 # --- MAIN ---
 log "Starting deployment..."
 check_kubectl
@@ -242,7 +264,8 @@ kubectl create secret generic darkseek-secrets \
 
 dryrun_server
 
-apply_with_retry backend-ws-deployment.yaml
+#apply_with_retry backend-ws-deployment.yaml
+apply_with_envsubst backend-ws-deployment.yaml
 apply_with_retry backend-mqtt-deployment.yaml
 
 log "Waiting for deployments..."
@@ -257,7 +280,7 @@ apply_with_retry redis-service.yaml
 apply_with_retry db-pvc.yaml
 
 log "Patching images with GCP_PROJECT_ID..."
-kubectl set image deployment/darkseek-backend-ws backend-ws=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-ws:latest -n default
+#kubectl set image deployment/darkseek-backend-ws backend-ws=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-ws:latest -n default
 kubectl set image deployment/darkseek-backend-mqtt backend-mqtt=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-mqtt:latest -n default
 
 pvc_name="postgres-pvc"
