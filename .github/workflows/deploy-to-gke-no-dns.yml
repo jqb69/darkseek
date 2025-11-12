@@ -254,8 +254,12 @@ jobs:
           kubectl get deployments -n default
           kubectl get pods -n default
           kubectl logs -n default -l app=darkseek-frontend --tail=50
-          kubectl logs -n default -l app=darkseek-backend-ws --tail=50
-          kubectl logs -n default -l app=darkseek-backend-mqtt --tail=50
+          kubectl logs -n default -l app=darkseek-backend-ws --tail=100
+          echo "=== backend-ws pod describe ==="
+          kubectl describe pod -n default -l app=darkseek-backend-ws || true
+          kubectl logs -n default -l app=darkseek-backend-mqtt --tail=100
+          echo "=== backend-mqtt pod describe ==="
+          kubectl describe pod -n default -l app=darkseek-backend-mqtt || true
         shell: bash
 
       - name: Rollback deployment
