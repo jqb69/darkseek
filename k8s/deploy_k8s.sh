@@ -263,7 +263,8 @@ kubectl create secret generic darkseek-secrets \
   --dry-run=client -o yaml | kubectl apply -f -
 
 dryrun_server
-
+export GCP_PROJECT_ID="${GCP_PROJECT_ID}"
+log "Apply with envst GCP_PROJECT_ID = $GCP_PRJECT_ID"
 #apply_with_retry backend-ws-deployment.yaml
 apply_with_envsubst backend-ws-deployment.yaml
 apply_with_retry backend-mqtt-deployment.yaml
