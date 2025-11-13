@@ -32,6 +32,16 @@ check_kubectl() {
   fi
 }
 
+check_envsubst() {
+  command -v envsubst >/dev/null 2>&1 || { 
+    log "envsubst not found — installing gettext..."
+    sudo apt-get update -qq
+    sudo apt-get install -y gettext
+    command -v envsubst >/dev/null 2>&1 || fatal "Failed to install envsubst"
+    log "envsubst installed."
+  }
+}
+
 check_env_vars() {
   log "Validating required environment variables..."
   required_vars=( "GCP_PROJECT_ID" "GOOGLE_API_KEY" "GOOGLE_CSE_ID" "HUGGINGFACEHUB_API_TOKEN" "DATABASE_URL" "REDIS_URL" "MQTT_BROKER_HOST" "MQTT_BROKER_PORT" "MQTT_TLS" "MQTT_USERNAME" "MQTT_PASSWORD" "POSTGRES_USER" "POSTGRES_PASSWORD" "POSTGRES_DB")
@@ -230,13 +240,27 @@ check_pod_statuses() {
 
 apply_with_envsubst() {
   local file="$1"
-  export GCP_PROJECT_ID
-  envsubst < "$file" | kubectl apply -f -
+  #export GCP_PROJECT_ID
+  log "Apply with envsubst to ${file}: GCP_PROJECT_ID=${GCP_PROJECT_ID}"
+  local i=0
+  while [ "$i" -lt "$RETRY_APPLY" ]; do
+    # Pipe envsubst output to kubectl; check success
+    if envsubst < "$file" | kubectl apply -f -; then
+      return 0
+    fi
+    i=$((i + 1))
+    log "Retrying ${file} (${i}/${RETRY_APPLY})..."
+    sleep "$APPLY_SLEEP"
+  done
+
+  fatal "Failed to apply ${file} after ${RETRY_APPLY} attempts."
+ 
 }
 
 # --- MAIN ---
 log "Starting deployment..."
 check_kubectl
+check_envsubst
 [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
 check_env_vars
 check_manifest_files
@@ -263,11 +287,11 @@ kubectl create secret generic darkseek-secrets \
   --dry-run=client -o yaml | kubectl apply -f -
 
 dryrun_server
-export GCP_PROJECT_ID="${GCP_PROJECT_ID}"
-log "Apply with envst GCP_PROJECT_ID = $GCP_PROJECT_ID"
+export GCP_PROJECT_ID
+
 #apply_with_retry backend-ws-deployment.yaml
 apply_with_envsubst backend-ws-deployment.yaml
-apply_with_retry backend-mqtt-deployment.yaml
+apply_with_envsubst backend-mqtt-deployment.yaml
 
 log "Waiting for deployments..."
 apply_with_retry frontend-deployment.yaml
@@ -280,9 +304,9 @@ apply_with_retry db-service.yaml
 apply_with_retry redis-service.yaml
 apply_with_retry db-pvc.yaml
 
-log "Patching images with GCP_PROJECT_ID..."
+#log "Patching images with GCP_PROJECT_ID..."
 #kubectl set image deployment/darkseek-backend-ws backend-ws=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-ws:latest -n default
-kubectl set image deployment/darkseek-backend-mqtt backend-mqtt=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-mqtt:latest -n default
+#kubectl set image deployment/darkseek-backend-mqtt backend-mqtt=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-mqtt:latest -n default
 
 pvc_name="postgres-pvc"
 deployment_name="darkseek-db"
@@ -295,9 +319,6 @@ pvc_status=$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.p
 ensure_db_exists
 check_db_initialization "$pvc_name" "app=darkseek-db"
 verify_backend_ws_image
-
-
-
 wait_for_deployments
 
 check_pod_statuses
