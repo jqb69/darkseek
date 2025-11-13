@@ -240,12 +240,16 @@ check_pod_statuses() {
 
 apply_with_envsubst() {
   local file="$1"
-  #export GCP_PROJECT_ID
+  export GCP_PROJECT_ID
   log "Apply with envsubst to ${file}: GCP_PROJECT_ID=${GCP_PROJECT_ID}"
   local i=0
   while [ "$i" -lt "$RETRY_APPLY" ]; do
     # Pipe envsubst output to kubectl; check success
-    if envsubst < "$file" | kubectl apply -f -; then
+    envsubst < "$file" > "${file}.subst"
+    # Now attempt to apply the temp file
+    if kubectl apply -f "${file}.subst" --v=8; then
+      log "Substituted content:"
+      cat "${file}.subst"
       return 0
     fi
     i=$((i + 1))
