@@ -240,7 +240,7 @@ check_pod_statuses() {
 
 apply_with_envsubst() {
   local file="$1"
-  export GCP_PROJECT_ID
+  #export GCP_PROJECT_ID
   log "Apply with envsubst to ${file}: GCP_PROJECT_ID=${GCP_PROJECT_ID}"
   local i=0
   while [ "$i" -lt "$RETRY_APPLY" ]; do
@@ -270,7 +270,8 @@ check_env_vars
 check_manifest_files
 cd "$K8S_DIR"
 
-kubectl apply -f configmap.yaml
+# FIX: Convert GCP_PROJECT_ID to lowercase to ensure a valid GCR path.
+export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
 
 log "Updating darkseek-secrets..."
 kubectl create secret generic darkseek-secrets \
@@ -290,8 +291,10 @@ kubectl create secret generic darkseek-secrets \
   --from-literal=GCP_PROJECT_ID="${GCP_PROJECT_ID}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
+
+kubectl apply -f configmap.yaml
 dryrun_server
-export GCP_PROJECT_ID
+
 
 #apply_with_retry backend-ws-deployment.yaml
 apply_with_envsubst backend-ws-deployment.yaml
@@ -300,6 +303,7 @@ apply_with_envsubst backend-mqtt-deployment.yaml
 log "Waiting for deployments..."
 apply_with_retry frontend-deployment.yaml
 apply_with_retry db-deployment.yaml
+log "Applying other resources..."
 apply_with_retry redis-deployment.yaml
 apply_with_retry backend-ws-service.yaml
 apply_with_retry backend-mqtt-service.yaml
@@ -308,9 +312,9 @@ apply_with_retry db-service.yaml
 apply_with_retry redis-service.yaml
 apply_with_retry db-pvc.yaml
 
-log "Patching images with GCP_PROJECT_ID..."
-kubectl set image deployment/darkseek-backend-ws backend-ws=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-ws:latest -n default
-kubectl set image deployment/darkseek-backend-mqtt backend-mqtt=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-mqtt:latest -n default
+#log "Patching images with GCP_PROJECT_ID..."
+#kubectl set image deployment/darkseek-backend-ws backend-ws=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-ws:latest -n default
+#kubectl set image deployment/darkseek-backend-mqtt backend-mqtt=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-mqtt:latest -n default
 
 pvc_name="postgres-pvc"
 deployment_name="darkseek-db"
