@@ -147,9 +147,9 @@ debug_python_startup() {
   fi
 }
 
-# ----------------------------------------------------------------------
-#  DEBUG: wait for all deployments with detailed pod diagnostics
-# ----------------------------------------------------------------------
+# -----------------------------------------------------------------------
+#  IMPROVED DEBUG: wait for all deployments with detailed pod diagnostics
+# -----------------------------------------------------------------------
 wait_for_deployments() {
   local deployments=(
     "darkseek-backend-ws"
@@ -158,48 +158,58 @@ wait_for_deployments() {
     "darkseek-db"
     "darkseek-redis"
   )
-  local timeout=900   # increase from 600s – gives the pod more time to start
+  local timeout=900
   local interval=15
 
   log "Waiting up to ${timeout}s for deployments to become Available..."
   for dep in "${deployments[@]}"; do
     log "=== Waiting for deployment/$dep ==="
     if kubectl wait --for=condition=available --timeout=${timeout}s "deployment/$dep" -n "$NAMESPACE"; then
-      log "Deployment $dep is Available"
+      log "Deployment $dep is Available."
       continue
     fi
 
     # ------------------------------------------------------------------
-    #  If we get here the wait timed-out → dump everything useful
+    #  If the wait timed out, dump diagnostics for ALL related pods.
     # ------------------------------------------------------------------
-    log "WARNING: Deployment $dep did NOT become Available – dumping diagnostics..."
+    log "WARNING: Deployment '$dep' did NOT become Available – dumping diagnostics..."
 
-    # 1. Pod list
-    log "Pods for $dep:"
+    # 1. List all pods for this deployment
+    log "Pods for '$dep':"
     kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o wide || true
 
-    # 2. Pod describe (first pod only)
-    local pod
-    pod=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-    if [ -n "$pod" ]; then
-      log "Describe pod $pod:"
-      kubectl describe pod "$pod" -n "$NAMESPACE" || true
+    # 2. Get the names of all pods for this deployment
+    local pod_names
+    pod_names=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
 
-      # 3. Pod logs (all containers)
-      log "Logs for pod $pod:"
-      kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 | \
-      grep -i -E "(ERROR|Exception|Traceback|ModuleNotFound|ImportError|Failed)" || \
-      kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200
+    if [ -n "$pod_names" ]; then
+      # 3. Loop through each pod and dump its individual diagnostics
+      for pod in $pod_names; do
+        log "--------------------------------------------------"
+        log "--- Diagnostics for pod: $pod ---"
+        log "--------------------------------------------------"
+
+        # 3a. Describe the pod
+        log "Describing pod '$pod':"
+        kubectl describe pod "$pod" -n "$NAMESPACE" || true
+
+        # 3b. Get the logs for the pod
+        log "Logs for pod '$pod' (last 200 lines):"
+        # First, try to find specific errors. If none, dump the whole log.
+        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 | \
+        grep -i -E "(ERROR|Exception|Traceback|ModuleNotFound|ImportError|Failed|FATAL)" || \
+        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200
+      done
     else
-      log "No pod found for label app=$dep"
+      log "No pods found for label app=$dep"
     fi
 
-    # 4. Recent events
-    log "Recent events for $dep:"
+    # 4. Get recent events related to this deployment
+    log "Recent events for '$dep':"
     kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp' | grep -i "$dep" | tail -n 20 || true
     debug_python_startup "$dep"
 
-    fatal "Deployment $dep failed to become ready – see diagnostics above."
+    fatal "Deployment '$dep' failed to become ready – see diagnostics above."
   done
 }
 
