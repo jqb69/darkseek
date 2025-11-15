@@ -271,6 +271,28 @@ apply_with_envsubst() {
  
 }
 
+apply_with_sed() {
+  local file="$1"
+  log "Applying with substitution to ${file}: GCP_PROJECT_ID=${GCP_PROJECT_ID}"
+
+  # Use sed for a more reliable substitution.
+  # It replaces the literal string "${GCP_PROJECT_ID}" with the variable's value.
+  sed "s|\${GCP_PROJECT_ID}|${GCP_PROJECT_ID}|g" "$file" > "${file}.subst"
+
+  log "Substituted content:"
+  cat "${file}.subst"
+
+  # Apply the temporary file with retries
+  local i=0
+  until [ $i -ge $RETRY_APPLY ]; do
+    if kubectl apply -f "${file}.subst"; then return 0; fi
+    i=$((i + 1))
+    log "Retrying ${file} ($i/$RETRY_APPLY)..."
+    sleep $APPLY_SLEEP
+  done
+  fatal "Failed to apply ${file} after ${RETRY_APPLY} attempts."
+}
+
 # --- MAIN ---
 log "Starting deployment..."
 check_kubectl
@@ -307,8 +329,8 @@ dryrun_server
 
 
 #apply_with_retry backend-ws-deployment.yaml
-apply_with_envsubst backend-ws-deployment.yaml
-apply_with_envsubst backend-mqtt-deployment.yaml
+apply_with_sed backend-ws-deployment.yaml
+apply_with_sed backend-mqtt-deployment.yaml
 
 log "Waiting for deployments..."
 apply_with_retry frontend-deployment.yaml
