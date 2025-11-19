@@ -14,10 +14,53 @@ fatal() { echo "ERROR: $*" >&2; exit 1; }
 on_error() {
   local exit_code=$?
   log "Script failed (exit code: $exit_code). Running troubleshooting..."
+
+  # First, run the general troubleshooting for PVCs, events, etc.
   troubleshoot_k8s || true
+  # THEN, check if the backend-ws deployment was the cause of the failure.
+  # If so, trigger the interactive debug mode specifically for it.
+  if ! kubectl wait --for=condition=available --timeout=1s "deployment/darkseek-backend-ws" -n "$NAMESPACE" &>/dev/null; then
+    debug_pod_interactively "darkseek-backend-ws"
+  fi
+
   return $exit_code
 }
 trap 'on_error' ERR
+
+# ----------------------------------------------------------------------
+#  ADVANCED DEBUG: Get an interactive shell in a crashing pod
+# ----------------------------------------------------------------------
+debug_pod_interactively() {
+  local dep="$1"
+  log "Attempting to start interactive debug session for deployment '$dep'..."
+
+  # Find a failing pod for the deployment
+  local pod
+  pod=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" --sort-by='.metadata.creationTimestamp' -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || echo "")
+
+  if [ -z "$pod" ]; then
+    log "Could not find a pod for deployment '$dep' to debug."
+    return
+  fi
+
+  log "Found pod '$pod'. Patching deployment '$dep' to prevent crash."
+
+  # Override the container's command to keep it alive
+  kubectl patch deployment "$dep" -n "$NAMESPACE" -p \
+    '{"spec":{"template":{"spec":{"containers":[{"name":"backend-ws","command":["sleep","3600"]}]}}}}'
+
+  log "Deployment patched. Please wait a moment for the pod to restart with the new command."
+  log "The pod will now run for 1 hour without crashing."
+  log "To get a shell inside the pod, run this command from your local machine:"
+  echo ""
+  echo "  kubectl exec -it $pod -n $NAMESPACE -- /bin/bash"
+  echo ""
+  log "Inside the shell, you can debug interactively:"
+  log "  - Check environment variables with 'env'"
+  log "  - Check files with 'ls -la /app'"
+  log "  - Try to run the application manually to see the error: 'python /app/main.py'"
+  log "When you are finished, you must un-patch the deployment by re-running the pipeline or using 'kubectl rollout undo deployment/$dep'."
+}
 
 check_kubectl() {
   if ! command -v kubectl &> /dev/null; then
