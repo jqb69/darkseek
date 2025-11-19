@@ -239,7 +239,7 @@ wait_for_deployments() {
         # 3b. Get the logs for the pod
         log "Logs for pod '$pod' (last 200 lines):"
         # Always print the full logs to ensure we don't miss anything.
-        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 || log "Warning: Could not retrieve logs for pod '$pod'. It may have crashed before producing any output.
+        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 || log "Warning: Could not retrieve logs for pod '$pod'. It may have crashed before producing any output."
       done
     else
       log "No pods found for label app=$dep"
