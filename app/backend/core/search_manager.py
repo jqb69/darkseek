@@ -3,7 +3,8 @@
 from .caching import cache_manager
 from ..api.llm_api import llm_api
 from ..api.search2.api import search_api
-from .database import get_db, UserQuery
+from .database import get_db         
+from .models import UserQuery        
 from sqlalchemy.orm import Session
 from typing import List, Dict, AsyncGenerator
 import json
