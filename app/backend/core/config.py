@@ -16,7 +16,7 @@ validate_env_vars()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Base directory of the backend
 
 # === Certificates Directory ===
-CERTS_DIR = /etc/mosquitto/ssl/  # Directory for certificates
+CERTS_DIR = "/etc/mosquitto/ssl/"  # Directory for certificates
 #os.makedirs(CERTS_DIR, exist_ok=True)  # Ensure the certs directory exists
 
 # === File Paths for Certificates ===
@@ -77,5 +77,5 @@ MAX_CHATS = int(os.getenv("MAX_CHATS", 50))
 # Database Configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://admin:Gfysjqb@localhost:5432/darkseekdb")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
-CLOUD_SQL_CONNECTION = os.getenv("DATABASE_URL") 
+# CLOUD_SQL_CONNECTION = os.getenv("DATABASE_URL") 
 #REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
