@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException
-from app.backend.core.search_manager import SearchManager
+from app.backend.core.search_manager import search_manager
 
 from sqlalchemy.orm import Session
 from app.backend.schemas.request_models import QueryRequest
