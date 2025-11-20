@@ -1,10 +1,9 @@
-
 # app/backend/core/search_manager.py (Modified to handle the search API changes)
 from .caching import cache_manager
 from ..api.llm_api import llm_api
 from ..api.search2.api import search_api
-from .database import get_db         
-from .models import UserQuery        
+from .database import get_db
+from .models import UserQuery
 from sqlalchemy.orm import Session
 from typing import List, Dict, AsyncGenerator
 import json
@@ -12,6 +11,8 @@ from .config import MAX_CHATS
 import asyncio
 import logging
 from asyncio import Semaphore
+
+logger = logging.getLogger(__name__)
 class SearchManager:
     def __init__(self, cache_manager=cache_manager, search_api=search_api, llm_api=llm_api):
         self.cache_manager = cache_manager
@@ -62,5 +63,18 @@ class SearchManager:
                 if existing_query:
                     logger.info(f"Query already exists in DB: {query}")
                     return
+                logger.info(f"Saving new query to DB: '{query}'")
+                new_query = UserQuery(
+                    query_text=query,
+                    response_text=llm_response,
+                    search_results=json.dumps(search_results), 
+                    llm_used=llm_name
+                )
+                db.add(db_query)
+                db.commit()
+                db.refresh(db_query)
+            except Exception as e:
+                logger.error(f"Error saving to DB: {e}", exc_info=True)
+                db.rollback()
 
 search_manager = SearchManager()
