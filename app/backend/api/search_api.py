@@ -3,7 +3,7 @@
 from app.backend.core.caching import cache_manager
 from app.backend.api.llm_api import llm_api
 from app.backend.api.search2.api import search_api
-from .database import get_db, 
+from app.backend.core.database import get_db, 
 from app.backend.core.models import UserQuery        
 from sqlalchemy.orm import Session
 from typing import List, Dict, AsyncGenerator
