@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException
-from app.backend.api.search_api import search_manager
-from app.backend.core.database import get_db, UserQuery
+from app.backend.core.search_manager import SearchManager
+
 from sqlalchemy.orm import Session
 from app.backend.schemas.request_models import QueryRequest
 import json
+import time
 import logging
 import asyncio
 from app.backend.api.mqtt_api import AsyncMQTTServer
