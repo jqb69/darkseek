@@ -1,5 +1,5 @@
 # app/backend/core/utils.py
-
+from typing import Optional
 import re
 import hashlib
 
