@@ -1,7 +1,7 @@
 #app.backend.config.llm_api
 
 from langchain_community.llms import HuggingFaceHub
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain.chains import LLMChain
 from app.backend.core.config import LLM_CONFIGS, DEFAULT_LLM, STREAMING_CHUNK_SIZE
 from typing import List, Dict, AsyncGenerator
