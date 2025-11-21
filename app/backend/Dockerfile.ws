@@ -12,7 +12,7 @@ ENV PATH="/app/venv/bin:$PATH"
 COPY app/backend/ /app/darkseek/app/backend/
 
 # Install
-RUN pip install --no-cache-dir --no-cache -r /app/darkseek/app/backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/darkseek/app/backend/requirements.txt
 
 ENV PYTHONPATH=/app/darkseek
 
