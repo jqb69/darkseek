@@ -62,6 +62,8 @@ debug_pod_interactively() {
   log "When you are finished, you must un-patch the deployment by re-running the pipeline or using 'kubectl rollout undo deployment/$dep'."
 }
 
+
+
 check_kubectl() {
   if ! command -v kubectl &> /dev/null; then
     log "'kubectl' not found — installing..."
@@ -120,6 +122,60 @@ apply_with_retry() {
     sleep $APPLY_SLEEP
   done
   fatal "Failed to apply $file after $RETRY_APPLY attempts."
+}
+
+# ----------------------------------------------------------------------
+#  IMPROVED DEBUG: Asynchronously check pod status for instant feedback
+# ----------------------------------------------------------------------
+check_pods_in_background() {
+  local dep="$1"
+  local timeout="$2"
+  local start_time
+  start_time=$(date +%s)
+
+  log "[BG CHECK for $dep] Starting background monitoring..."
+
+  while true; do
+    # Check elapsed time
+    local current_time
+    current_time=$(date +%s)
+    if (( current_time - start_time > timeout )); then
+      log "[BG CHECK for $dep] Monitoring timed out. Exiting background check."
+      break
+    fi
+
+    # Get the status of the newest pod for this deployment
+    local pod_status
+    pod_status=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" --sort-by='.metadata.creationTimestamp' -o=jsonpath='{.items[-1:].status.phase}' 2>/dev/null || echo "NoPods")
+
+    if [[ "$pod_status" == "Failed" || "$pod_status" == "Unknown" ]]; then
+      log "[BG CHECK for $dep] Pod entered '$pod_status' state. Dumping logs and exiting."
+      # The main wait function will handle the full diagnostic dump.
+      # This just gives an early warning.
+      local failing_pod
+      failing_pod=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" --sort-by='.metadata.creationTimestamp' -o=jsonpath='{.items[-1:].metadata.name}')
+      log "--- EARLY LOGS for $failing_pod ---"
+      kubectl logs "$failing_pod" -n "$NAMESPACE" --all-containers=true --tail=100 || true
+      log "--- END EARLY LOGS ---"
+      break
+    fi
+
+    # Check for CrashLoopBackOff in the container statuses
+    local crash_loop
+    crash_loop=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" --sort-by='.metadata.creationTimestamp' -o=jsonpath='{range .items[-1:].status.containerStatuses[*]}{.state.waiting.reason}{end}' 2>/dev/null)
+
+    if [[ "$crash_loop" == "CrashLoopBackOff" ]]; then
+        log "[BG CHECK for $dep] Pod is in CrashLoopBackOff. Dumping logs and exiting."
+        local failing_pod
+        failing_pod=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" --sort-by='.metadata.creationTimestamp' -o=jsonpath='{.items[-1:].metadata.name}')
+        log "--- EARLY LOGS for $failing_pod ---"
+        kubectl logs "$failing_pod" -n "$NAMESPACE" --all-containers=true --tail=100 --previous || true # Use --previous for crash loops
+        log "--- END EARLY LOGS ---"
+        break
+    fi
+    
+    sleep 10 # Check every 10 seconds
+  done
 }
 
 troubleshoot_k8s() {
@@ -191,7 +247,7 @@ debug_python_startup() {
 }
 
 # -----------------------------------------------------------------------
-#  IMPROVED DEBUG: wait for all deployments with detailed pod diagnostics
+#  MODIFIED: wait for deployments with FAST feedback loop
 # -----------------------------------------------------------------------
 wait_for_deployments() {
   local deployments=(
@@ -202,53 +258,40 @@ wait_for_deployments() {
     "darkseek-redis"
   )
   local timeout=900
-  local interval=15
 
   log "Waiting up to ${timeout}s for deployments to become Available..."
   for dep in "${deployments[@]}"; do
     log "=== Waiting for deployment/$dep ==="
+
+    # Start the background check and get its Process ID (PID)
+    check_pods_in_background "$dep" "$timeout" &
+    local bg_pid=$!
+
+    # Run the main wait command. It will be interrupted if the script fails.
     if kubectl wait --for=condition=available --timeout=${timeout}s "deployment/$dep" -n "$NAMESPACE"; then
       log "Deployment $dep is Available."
+      kill "$bg_pid" 2>/dev/null || true # Kill the background checker since it's no longer needed
       continue
     fi
 
     # ------------------------------------------------------------------
-    #  If the wait timed out, dump diagnostics for ALL related pods.
+    #  If we get here, the main wait command timed out.
     # ------------------------------------------------------------------
-    log "WARNING: Deployment '$dep' did NOT become Available – dumping diagnostics..."
+    kill "$bg_pid" 2>/dev/null || true # Ensure the background checker is stopped
+    log "WARNING: Deployment '$dep' did NOT become Available – dumping full diagnostics..."
 
-    # 1. List all pods for this deployment
-    log "Pods for '$dep':"
-    kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o wide || true
-
-    # 2. Get the names of all pods for this deployment
     local pod_names
     pod_names=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
-
     if [ -n "$pod_names" ]; then
-      # 3. Loop through each pod and dump its individual diagnostics
       for pod in $pod_names; do
-        log "--------------------------------------------------"
-        log "--- Diagnostics for pod: $pod ---"
-        log "--------------------------------------------------"
-
-        # 3a. Describe the pod
-        log "Describing pod '$pod':"
+        log "--- Full diagnostics for pod: $pod ---"
         kubectl describe pod "$pod" -n "$NAMESPACE" || true
-
-        # 3b. Get the logs for the pod
         log "Logs for pod '$pod' (last 200 lines):"
-        # Always print the full logs to ensure we don't miss anything.
-        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 || log "Warning: Could not retrieve logs for pod '$pod'. It may have crashed before producing any output."
+        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 || log "Warning: Could not retrieve logs for pod '$pod'."
       done
     else
       log "No pods found for label app=$dep"
     fi
-
-    # 4. Get recent events related to this deployment
-    log "Recent events for '$dep':"
-    kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp' | grep -i "$dep" | tail -n 20 || true
-    debug_python_startup "$dep"
 
     fatal "Deployment '$dep' failed to become ready – see diagnostics above."
   done
