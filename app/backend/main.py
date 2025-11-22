@@ -1,3 +1,4 @@
+
 # app/backend/main.py
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -5,6 +6,7 @@ from app.backend.core.search_manager import search_manager
 from app.backend.core.database import get_db, UserQuery
 from sqlalchemy.orm import Session
 from app.backend.schemas.request_models import QueryRequest
+from app.backend.api import search2_api
 import json
 import logging
 import asyncio
