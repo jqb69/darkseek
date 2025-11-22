@@ -22,7 +22,7 @@ class SearchManager:
 
     async def get_streaming_response(self, query: str, session_id: str, search_enabled: bool = True,
                                      llm_name: str = None,
-                                     db: Session = next(get_db())) -> AsyncGenerator[Dict, None]:
+                                     db: Session = None) -> AsyncGenerator[Dict, None]:
         chat_count_key = f"chat_count:{session_id}"
         chat_count = self.cache_manager.redis_client.incr(chat_count_key)
         self.cache_manager.redis_client.expire(chat_count_key, 3600)
@@ -64,15 +64,16 @@ class SearchManager:
                     logger.info(f"Query already exists in DB: {query}")
                     return
                 logger.info(f"Saving new query to DB: '{query}'")
+               
                 new_query = UserQuery(
                     query_text=query,
                     response_text=llm_response,
                     search_results=json.dumps(search_results), 
                     llm_used=llm_name
                 )
-                db.add(db_query)
+                db.add(new_query)      # <--- CORRECTED
                 db.commit()
-                db.refresh(db_query)
+                db.refresh(new_query
             except Exception as e:
                 logger.error(f"Error saving to DB: {e}", exc_info=True)
                 db.rollback()
