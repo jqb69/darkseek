@@ -1,7 +1,7 @@
 # app/backend/core/search_manager.py (Modified to handle the search API changes)
 from .caching import cache_manager
 from ..api.llm_api import llm_api
-from ..api.search2.api import search_api
+from ..api.search2_api import search_api
 from .database import get_db
 from .models import UserQuery
 from sqlalchemy.orm import Session
