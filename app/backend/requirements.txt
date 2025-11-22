@@ -4,15 +4,20 @@
 fastapi==0.115.2
 uvicorn>=0.33.0
 python-multipart
+
 # --- Database & Cache ---
 sqlalchemy==2.0.36
 psycopg2-binary==2.9.10
 redis==5.1.1
-# --- AI & LangChain (This ensures all common modules like 'chains' are installed) ---
-langchain==1.0.8
-langchain-core
-langchain-community==0.4.1
-langchain-openai  #  <--- THIS IS THE KEY FIX. It pulls in the 'chains' module.
+
+# --- AI & LangChain (PINNED TO 0.3.x) ---
+# We explicitly pin to <0.4.0 to ensure 'langchain.chains' still exists.
+# Do NOT use >=1.0.0 for this codebase.
+langchain>=0.3.0,<0.4.0
+langchain-community>=0.3.0,<0.4.0
+langchain-core>=0.3.0,<0.4.0
+langchain-openai>=0.2.0,<0.3.0
+
 # --- Utilities ---
 httpx==0.27.2
 python-dotenv
