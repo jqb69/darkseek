@@ -378,6 +378,25 @@ apply_with_sed() {
   fatal "Failed to apply ${file} after ${RETRY_APPLY} attempts."
 }
 
+force_delete_pods() {
+  local app_label="${1:-}"   # e.g. darkseek-backend-ws
+  if [ -z "$app_label" ]; then
+    log "force_delete_pods called without label – skipping"
+    return 0
+  fi
+
+  log "Force deleting all pods with label app=$app_label ..."
+  # --ignore-not-found makes it safe even if no pods exist
+  kubectl delete pods -n "$NAMESPACE" -l "app=$app_label" \
+    --grace-period=0 --force \
+    --ignore-not-found=true \
+    || true
+
+  # Give scheduler a moment to notice they’re gone
+  sleep 10
+  log "Done force-deleting pods for $app_label"
+}
+
 # --- MAIN ---
 log "Starting deployment..."
 check_kubectl
@@ -414,6 +433,9 @@ dryrun_server
 
 
 #apply_with_retry backend-ws-deployment.yaml
+log "Ensuring no stale backend-ws pods are running..."
+force_delete_pods "darkseek-backend-ws"
+log "Applying backend-ws deployment with fresh image..."
 apply_with_sed backend-ws-deployment.yaml
 apply_with_sed backend-mqtt-deployment.yaml
 
