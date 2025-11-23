@@ -7,16 +7,25 @@ from typing import List, Dict, Optional, Union, AsyncGenerator
 import asyncio
 import logging
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type, before_sleep_log
+
 import time
 
 logger = logging.getLogger(__name__)
 
-def after_retry_callback(retry_state):
-    """Callback function for tenacity, executed after each retry."""
-    if retry_state.outcome.failed:
-        logger.warning(
-            f"Retry attempt {retry_state.attempt_number} failed. Exception: {retry_state.outcome.exception()}"
-        )
+
+
+def get_retry_wait_strategy():
+    def wait_with_retry_after(retry_state):
+        if retry_state.outcome.failed:
+            exc = retry_state.outcome.exception()
+            if isinstance(exc, httpx.HTTPStatusError):
+                retry_after = exc.response.headers.get("Retry-After")
+                if retry_after and retry_after.isdigit():
+                    secs = int(retry_after)
+                    logger.info(f"Respecting Retry-After: {secs}s")
+                    return secs
+        return wait_fixed(2)(retry_state)
+    return wait_with_retry_after
 
 class SearchAPI:
     def __init__(self, google_api_key=GOOGLE_API_KEY, google_cse_id=GOOGLE_CSE_ID,
@@ -36,25 +45,13 @@ class SearchAPI:
                 return 0
         return 0
 
-    def _get_wait_strategy(self):
-        """Creates a wait strategy for tenacity, incorporating Retry-After."""
-        def wait_with_retry_after(retry_state):
-            if retry_state.outcome.failed:
-                exception = retry_state.outcome.exception()
-                if isinstance(exception, httpx.HTTPStatusError) and exception.response:
-                    retry_after = self._get_retry_after(exception.response)
-                    if retry_after > 0:
-                        logger.info(f"Retrying after {retry_after} seconds (Retry-After header)")
-                        return retry_after
-            return wait_fixed(2)(retry_state)  # Default to waiting 2 seconds
-        return wait_with_retry_after
-
+    
     @retry(
       stop=stop_after_attempt(3),
-      wait=_get_wait_strategy(),
+      wait=get_retry_wait_strategy(),
       retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
       before_sleep=before_sleep_log(logger, logging.WARNING),
-      after=after_retry_callback
+      
     )
     async def google_search(self, query: str) -> List[Dict[str, str]]:
         if not self.google_api_key or not self.google_cse_id:
@@ -77,10 +74,10 @@ class SearchAPI:
 
     @retry(
       stop=stop_after_attempt(3),
-      wait=_get_wait_strategy(),
+      wait=get_retry_wait_strategy(),
       retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
       before_sleep=before_sleep_log(logger, logging.WARNING),
-      after=after_retry_callback
+      
     )
     async def duckduckgo_search(self, query: str) -> List[Dict[str, str]]:
         url = "https://api.duckduckgo.com/"
