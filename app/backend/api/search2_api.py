@@ -34,17 +34,7 @@ class SearchAPI:
         self.google_cse_id = google_cse_id
         self.duckduckgo_api_key = duckduckgo_api_key
 
-    def _get_retry_after(self, response: httpx.Response) -> int:
-        """Checks for Retry-After header and returns seconds to wait."""
-        retry_after = response.headers.get("Retry-After")
-        if retry_after:
-            try:
-                return int(retry_after)  # Seconds
-            except ValueError:
-                # Handle date-based Retry-After (more complex, out of scope for now)
-                return 0
-        return 0
-
+   
     
     @retry(
       stop=stop_after_attempt(3),
