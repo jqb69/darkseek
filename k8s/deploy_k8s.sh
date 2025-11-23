@@ -288,6 +288,7 @@ wait_for_deployments() {
         kubectl describe pod "$pod" -n "$NAMESPACE" || true
         log "Logs for pod '$pod' (last 200 lines):"
         kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 || log "Warning: Could not retrieve logs for pod '$pod'."
+        kubectl exec "$pod" -n "$NAMESPACE" -- python -c "import sys; print(sys.path)" || true
       done
     else
       log "No pods found for label app=$dep"
