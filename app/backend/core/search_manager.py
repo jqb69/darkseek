@@ -71,9 +71,9 @@ class SearchManager:
                     search_results=json.dumps(search_results), 
                     llm_used=llm_name
                 )
-                db.add(new_query)      # <--- CORRECTED
+                db.add(new_query)      
                 db.commit()
-                db.refresh(new_query
+                db.refresh(new_query)
             except Exception as e:
                 logger.error(f"Error saving to DB: {e}", exc_info=True)
                 db.rollback()
