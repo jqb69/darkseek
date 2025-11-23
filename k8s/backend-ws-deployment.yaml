@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: backend-ws
-        image: gcr.io/${GCP_PROJECT_ID}/darkseek-backend-ws:${{ github.sha }}
+        image: gcr.io/${GCP_PROJECT_ID}/darkseek-backend-ws:latest
         imagePullPolicy: Always
         ports:
           - containerPort: 8000
