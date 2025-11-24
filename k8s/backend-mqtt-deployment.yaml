@@ -1,4 +1,5 @@
 ---
+# ./k8s/backend-mqtt-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,6 +25,20 @@ spec:
             name: darkseek-config
         - secretRef:
             name: darkseek-secrets
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 45
+          periodSeconds: 10
+          timeoutSeconds: 15
+          failureThreshold: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8001
+          initialDelaySeconds: 60
+          periodSeconds: 20
         resources:
           requests:
             cpu: "100m"
