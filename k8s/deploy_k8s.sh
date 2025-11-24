@@ -437,6 +437,8 @@ log "Ensuring no stale backend-ws pods are running..."
 force_delete_pods "darkseek-backend-ws"
 log "Applying backend-ws deployment with fresh image..."
 apply_with_sed backend-ws-deployment.yaml
+force_delete_pods "darkseek-backend-mqtt"
+log "Applying backend-mqtt deployment with fresh image..."
 apply_with_sed backend-mqtt-deployment.yaml
 
 log "Waiting for deployments..."
