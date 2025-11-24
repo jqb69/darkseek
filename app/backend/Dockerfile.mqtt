@@ -29,5 +29,5 @@ COPY app/ /app/app/
 ENV PYTHONPATH=/app/
 
 EXPOSE 8001
-# The CMD is correct for this structure: app.backend.mainmqtt:app
-CMD ["uvicorn", "app.backend.mainmqtt:app", "--host", "0.0.0.0", "--port", "8001"]
+# The CMD is correct for this structure: app.backend.mqttmain:app
+CMD ["uvicorn", "app.backend.mqttmain:app", "--host", "0.0.0.0", "--port", "8001"]
