@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir --upgrade pip virtualenv
 RUN python -m virtualenv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 COPY requirements.txt ./frontend/
-RUN pip install --no-cache-dir -r frontend/requirements.txt
+RUN pip install --no-cache-dir --no-cache  -r frontend/requirements.txt
 COPY . ./frontend/
 COPY components/ ./frontend/components/
 COPY static/ ./frontend/static/
