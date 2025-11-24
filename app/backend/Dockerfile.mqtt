@@ -1,15 +1,33 @@
 # app/backend/Dockerfile.mqtt
+
 FROM python:3.11-slim
+# The container's root for our source code
 WORKDIR /app
+
+# 1. Install System Dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
+
+# 2. Setup VENV
+# We will use the standard venv location /app/venv
 RUN pip install --no-cache-dir --upgrade pip virtualenv
 RUN python -m virtualenv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
-# Copy backend/ into arbitrary root
-COPY app/backend/ /app/darkseek/app/backend/
-# Install
-RUN pip install --no-cache-dir --no-cache -r /app/darkseek/app/backend/requirements.txt
-ENV PYTHONPATH=/app/darkseek
+
+# 3. Copy Requirements & Install (NOTE: The copy is relative to the final source structure)
+# The final source will be /app/app/backend/
+COPY app/backend/requirements.txt /app/app/backend/requirements.txt
+RUN pip install --no-cache-dir --no-cache -r /app/app/backend/requirements.txt
+
+# 4. Copy all Source Code (The 'app' package)
+# Assuming the repository root is the build context, copy the local 'app' directory 
+# to /app/app in the container.
+COPY app/ /app/app/ 
+
+# 5. Set PYTHONPATH (The parent of the top-level package 'app' is the Venv's root)
+# Tell Python to look for packages starting at /app (which contains the 'app' folder)
+ENV PYTHONPATH=/app/
+
 EXPOSE 8001
+# The CMD is correct for this structure: app.backend.mainmqtt:app
 CMD ["uvicorn", "app.backend.mainmqtt:app", "--host", "0.0.0.0", "--port", "8001"]
