@@ -224,10 +224,12 @@ jobs:
       - name: Build and push backend-mqtt
         uses: docker/build-push-action@v6
         with:
-          context: ./app/
+          context: .
           file: ./app/backend/Dockerfile.mqtt
           push: true
           tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest
+          no-cache: true
+          pull: true
 
       - name: Deploy to GKE
         env:
