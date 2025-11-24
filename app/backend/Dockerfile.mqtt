@@ -14,19 +14,13 @@ RUN pip install --no-cache-dir --upgrade pip virtualenv
 RUN python -m virtualenv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# 3. Copy Requirements & Install (NOTE: The copy is relative to the final source structure)
-# The final source will be /app/app/backend/
-COPY app/backend/requirements.txt /app/app/backend/requirements.txt
-RUN pip install --no-cache-dir --no-cache -r /app/app/backend/requirements.txt
+COPY app/ /app/darkseek/app/
 
-# 4. Copy all Source Code (The 'app' package)
-# Assuming the repository root is the build context, copy the local 'app' directory 
-# to /app/app in the container.
-COPY app/ /app/app/ 
+# 3. Correct the path for requirements.txt (it is now at /app/darkseek/app/backend/requirements.txt)
+RUN /app/venv/bin/pip install --no-cache-dir --no-cache -r /app/darkseek/app/backend/requirements.txt
 
-# 5. Set PYTHONPATH (The parent of the top-level package 'app' is the Venv's root)
-# Tell Python to look for packages starting at /app (which contains the 'app' folder)
-ENV PYTHONPATH=/app/
+# 4. The PYTHON PATH is correct
+ENV PYTHONPATH=/app/darkseek
 
 EXPOSE 8001
 # The CMD is correct for this structure: app.backend.mqttmain:app
