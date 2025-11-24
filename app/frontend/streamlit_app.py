@@ -32,11 +32,15 @@ def inject_css():
 
 def main():
     st.set_page_config(page_title="DarkSeek", page_icon=":mag:", layout="wide")
-
-   for key in ["session_id", "messages", "chat_started", "last_assistant_message"]:
-    if key not in st.session_state:
-        st.session_state[key] = None if key == "last_assistant_message" else False if key == "chat_started" else [] if key == "messages" else generate_session_id()
-# --- Inject JavaScript (for WebSocket communication) ---
+    
+    for key in ["session_id", "messages", "chat_started", "last_assistant_message"]:
+        if key not in st.session_state:
+            st.session_state[key] = (
+                None if key == "last_assistant_message" 
+                else False if key == "chat_started" 
+                else [] if key == "messages" 
+                else generate_session_id()
+            )
     inject_javascript()
     inject_css()
 
