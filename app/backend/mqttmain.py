@@ -86,3 +86,8 @@ async def start_heartbeat():
     """Start the periodic heartbeat task."""
     asyncio.create_task(publish_heartbeat(interval=30))
     logger.info("Heartbeat task started.")
+
+# === Health Check===
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
