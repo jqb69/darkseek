@@ -1,5 +1,6 @@
 #app/backend/api/mqtt_api
 import aiomqtt
+import ssl
 import json
 import logging
 import os
