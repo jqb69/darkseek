@@ -32,8 +32,8 @@ os.makedirs(LOGS_DIR, exist_ok=True)  # Ensure the logs directory exists
 LOG_FILE_PATH = os.path.join(LOGS_DIR, "backend.log")  # Path to backend log file
 
 # === MQTT Broker Configuration ===
-MQTT_BROKER_URI = os.getenv("MQTT_BROKER_URI", "test.mosquitto.org")  # Replace with your broker's URI
-MQTT_PORT = int(os.getenv("MQTT_PORT", 8885))  # Default port for MQTT over TLS/SSL
+MQTT_BROKER_URI = os.getenv("MQTT_BROKER_HOST", "test.mosquitto.org")
+MQTT_PORT = int(os.getenv("MQTT_BROKER_PORT", "8885")
 
 # === Application Settings ===
 LLM_CONFIGS = {
