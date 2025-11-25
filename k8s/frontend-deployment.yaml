@@ -34,13 +34,13 @@ spec:
         livenessProbe:
           tcpSocket:
             port: 8501
-          initialDelaySeconds: 45
+          initialDelaySeconds: 90
           periodSeconds: 20
-          timeoutSeconds: 5
+          timeoutSeconds: 10
           failureThreshold: 10
         readinessProbe:
           tcpSocket:
             port: 8501
-          initialDelaySeconds: 60
+          initialDelaySeconds: 120
           periodSeconds: 20
           timeoutSeconds: 5
