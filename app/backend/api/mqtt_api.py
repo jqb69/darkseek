@@ -4,6 +4,9 @@ import ssl
 import json
 import logging
 import os
+from app.backend.core.database import SessionLocal
+from app.backend.core.search_manager import search_manager
+from app.backend.schemas.request_models import QueryRequest
 from logging.handlers import RotatingFileHandler
 from aiomqtt import Client
 
@@ -58,22 +61,33 @@ class AsyncMQTTServer:
             logger.error(f"Failed to connect to MQTT broker, return code: {rc}")
 
     async def on_message(self, client, userdata, msg):
-        try:
-            message = json.loads(msg.payload)
-            logger.info(f"Received message: {message}")
-            response = await self.process_message(message)
-            logger.info(f"Processed message: {response}")
+        if msg.topic.startswith("chat/") and msg.topic.endswith("/query"):
+            try:
+                payload = json.loads(msg.payload)
+                query_request = QueryRequest(**payload)
+                session_id = query_request.session_id
 
-            # Publish the response to the session-specific topic
-            session_id = message.get("session_id")
-            if session_id:
-                response_topic = f"chat/{session_id}/response"
-                await client.publish(response_topic, json.dumps(response))
-                logger.info(f"Published response to {response_topic}: {response}")
-        except json.JSONDecodeError:
-            logger.error("Failed to decode JSON message.")
-        except Exception as e:
-            logger.error(f"Error processing message: {e}", exc_info=True)
+                # DB session created HERE and only here
+                db = SessionLocal()
+                try:
+                    async for chunk in search_manager.get_streaming_response(
+                        query=query_request.query,
+                        session_id=session_id,
+                        search_enabled=query_request.search_enabled,
+                        llm_name=query_request.llm_name,
+                        db=db,
+                    ):
+                        await client.publish(
+                            f"chat/{session_id}/response",
+                            json.dumps(chunk)
+                        )
+                finally:
+                    db.close()
+            except json.JSONDecodeError:
+                logger.error("Failed to decode JSON message.")
+            except Exception as e:
+                logger.error(f"MQTT processing error: {e}")
+                await client.publish(f"chat/{session_id}/error", json.dumps({"error": str(e)}))
 
     async def process_message(self, message):
         """
