@@ -46,7 +46,7 @@ from app.backend.core.config import (
 # === Asynchronous MQTT Server ===
 class AsyncMQTTServer:
     def __init__(self):
-        self.client = Client()
+        self.client = Client(MQTT_BROKER_URI)   # ← fixed
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
 
