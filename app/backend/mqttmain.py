@@ -1,9 +1,10 @@
-#app/backend/api/mqtt_api
+# app/backend/api/mqttmain.py
 import aiomqtt
 import ssl
 import json
 import logging
 import os
+import asyncio
 from app.backend.core.database import SessionLocal
 from app.backend.core.search_manager import search_manager
 from app.backend.schemas.request_models import QueryRequest
@@ -160,13 +161,17 @@ class AsyncMQTTServer:
         except Exception as e:
             logger.error(f"Failed to terminate MQTT: {e}")
 
-# === Main Function ===
-#async def main():
-#    mqtt_server = AsyncMQTTServer()
-#    try:
-#        await mqtt_server.start()
-#    finally:
-#        await mqtt_server.close_connection()
+    # === Main async Function ===
+    async def main():
+        mqtt_server = AsyncMQTTServer()
+        try:
+            asyncio.run(mqtt_server.start())
+        except KeyboardInterrupt:
+            pass
+        finally:
+            asyncio.run(mqtt_server.close_connection())
 
+if __name__ == "__main__":
+    main()
 
     
