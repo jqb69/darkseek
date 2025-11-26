@@ -416,6 +416,8 @@ kill_stale_pods() {
   kubectl delete pod -l "app=$pod_name" --field-selector=status.phase!=Running --force --grace-period=0 --ignore-not-found=true || true
   # Optional wait to ensure cleanup
   sleep 5
+  # Also clear finalizers on PVC if stuck (nuclear but safe)
+  kubectl patch pvc postgres-pvc -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
 }
 
 force_delete_pods() {
@@ -467,9 +469,15 @@ kubectl create secret generic darkseek-secrets \
   --from-literal=GCP_PROJECT_ID="${GCP_PROJECT_ID}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
+kubectl delete pod darkseek-db-6d8b945f9c-8849h --force --grace-period=0
 
+# If it's already terminating or gone, also nuke any leftover finalizers on the PVC
+kubectl patch pvc postgres-pvc -p '{"metadata":{"finalizers":null}}' --type=merge
 log "Deleting stale darkseek-db pods"
 kill_stale_pods "darkseek-db"
+
+# Also clear finalizers on PVC if stuck (nuclear but safe)
+kubectl patch pvc postgres-pvc -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
 kubectl apply -f configmap.yaml
 dryrun_server
 
