@@ -76,7 +76,9 @@ async def process_query(query_request: QueryRequest):
 # === Health Check ===
 @app.get("/health")
 async def health():
+    is_connected = mqtt_server.is_connected()
+    logger.info(f"MQTT connected: {is_connected}")
     return {
         "status": "ok",
-        "mqtt_connected": mqtt_server.is_connected()   # ← now works
+        "mqtt_connected": is_connected
     }
