@@ -64,7 +64,9 @@ spec:
             - pg_isready
             - -U
             - admin
-          initialDelaySeconds: 60
+            - -d
+            - darkseekdb
+          initialDelaySeconds: 50
           periodSeconds: 10
           timeoutSeconds: 5
         livenessProbe:
@@ -73,7 +75,9 @@ spec:
             - pg_isready
             - -U
             - admin
-          initialDelaySeconds: 120
+            - -d
+            - darkseekdb
+          initialDelaySeconds: 75
           periodSeconds: 20
           timeoutSeconds: 5
       volumes:
