@@ -21,8 +21,13 @@ on_error() {
   # If so, trigger the interactive debug mode specifically for it.
   if ! kubectl wait --for=condition=available --timeout=1s "deployment/darkseek-backend-ws" -n "$NAMESPACE" &>/dev/null; then
     debug_pod_interactively "darkseek-backend-ws"
-  fi
-
+  elif ! kubectl wait --for=condition=available --timeout=1s "deployment/darkseek-backend-mqtt" -n "$NAMESPACE" &>/dev/null; then
+    debug_pod_interactively "darkseek-backend-mqtt"
+  elif ! kubectl wait --for=condition=available --timeout=1s "deployment/darkseek-frontend" -n "$NAMESPACE" &>/dev/null; then
+    debug_pod_interactively "darkseek-frontend"  
+  elif ! kubectl wait --for=condition=available --timeout=1s "deployment/darkseek-db" -n "$NAMESPACE" &>/dev/null; then
+    debug_pod_interactively "darkseek-db"  
+  fi  
   return $exit_code
 }
 trap 'on_error' ERR
@@ -32,34 +37,44 @@ trap 'on_error' ERR
 # ----------------------------------------------------------------------
 debug_pod_interactively() {
   local dep="$1"
-  log "Attempting to start interactive debug session for deployment '$dep'..."
+  local container_name="${2:-}"
 
-  # Find a failing pod for the deployment
-  local pod
-  pod=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" --sort-by='.metadata.creationTimestamp' -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || echo "")
-
-  if [ -z "$pod" ]; then
-    log "Could not find a pod for deployment '$dep' to debug."
-    return
+  # Auto-detect container name if not provided
+  if [ -z "$container_name" ]; then
+    # Try common patterns: backend-ws → backend-ws, darkseek-frontend → frontend, etc.
+    container_name=$(kubectl get deployment "$dep" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null || echo "")
+    if [ -z "$container_name" ]; then
+      # Fallback: strip "darkseek-" prefix and use rest
+      container_name="${dep#darkseek-}"
+      # If still empty or same, use the deployment name as-is
+      [ "$container_name" = "$dep" ] && container_name="app"
+    fi
   fi
 
-  log "Found pod '$pod'. Patching deployment '$dep' to prevent crash."
+  log "Attempting to start interactive debug session for deployment '$dep' (container: $container_name)..."
 
-  # Override the container's command to keep it alive
+  # Find latest pod
+  local pod
+  pod=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" --sort-by='.metadata.creationTimestamp' -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || echo "")
+  if [ -z "$pod" ]; then
+    log "No pod found for deployment '$dep'. Cannot debug."
+    return 1
+  fi
+
+  log "Found pod: $pod → patching container '$container_name' to sleep 1h"
+
+  # Dynamic patch with correct container name
   kubectl patch deployment "$dep" -n "$NAMESPACE" -p \
-    '{"spec":{"template":{"spec":{"containers":[{"name":"backend-ws","command":["sleep","3600"]}]}}}}'
+    "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"$container_name\",\"command\":[\"sleep\",\"3600\"]}]}}}}"
 
-  log "Deployment patched. Please wait a moment for the pod to restart with the new command."
-  log "The pod will now run for 1 hour without crashing."
-  log "To get a shell inside the pod, run this command from your local machine:"
+  log "Deployment patched. Pod will restart with infinite sleep."
+  log "Connect using:"
   echo ""
-  echo "  kubectl exec -it $pod -n $NAMESPACE -- /bin/bash"
+  echo "   kubectl exec -it $pod -n $NAMESPACE -- /bin/bash"
   echo ""
-  log "Inside the shell, you can debug interactively:"
-  log "  - Check environment variables with 'env'"
-  log "  - Check files with 'ls -la /app'"
-  log "  - Try to run the application manually to see the error: 'python /app/main.py'"
-  log "When you are finished, you must un-patch the deployment by re-running the pipeline or using 'kubectl rollout undo deployment/$dep'."
+  log "After debugging, restore with:"
+  echo "   kubectl rollout undo deployment/$dep"
+  log "Or re-run the full deploy script."
 }
 
 
@@ -178,6 +193,17 @@ check_pods_in_background() {
   done
 }
 
+
+troubleshoot_pvc_and_nodes() {
+  local pvc="$1"
+  log "=== PVC TROUBLESHOOTING: $pvc ==="
+  kubectl get pvc "$pvc" -n "$NAMESPACE" -o wide
+  kubectl describe pvc "$pvc" -n "$NAMESPACE"
+  kubectl get events -n "$NAMESPACE" --sort-by=.lastTimestamp | grep -i "pvc\|$pvc\|darkseek-db" | tail -20
+  kubectl get nodes -o wide
+  log "If PVC stuck in Pending → check node disk pressure or increase node pool size"
+}
+
 troubleshoot_k8s() {
   log "=== TROUBLESHOOTING ==="
   kubectl get pvc -n "$NAMESPACE" || true
@@ -203,34 +229,40 @@ ensure_db_exists() {
 
 check_db_initialization() {
   log "Checking PostgreSQL initialization..."
-  local pod_label="app=darkseek-db" timeout=300 interval=10 elapsed=0 pod_name=""
+  local pod_name=""
+  local timeout=300
+  local elapsed=0
+
   while [ $elapsed -lt $timeout ]; do
-    pod_name=$(kubectl get pods -n "$NAMESPACE" -l "$pod_label" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-    [ -n "$pod_name" ] && [ "$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}')" = "Running" ] && break
-    log "Waiting for pod ($elapsed/$timeout)..."
-    sleep $interval
-    elapsed=$((elapsed + interval))
+    pod_name=$(kubectl get pods -n "$NAMESPACE" -l app=darkseek-db -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    if [ -n "$pod_name" ] && [ "$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}')" = "Running" ]; then
+      break
+    fi
+    log "Waiting for darkseek-db pod... ($elapsed/$timeout)"
+    sleep 10
+    elapsed=$((elapsed + 10))
   done
-  [ -z "$pod_name" ] && fatal "No pod found for $pod_label."
-  kubectl exec -n "$NAMESPACE" "$pod_name" -- pg_isready -U "$POSTGRES_USER" >/dev/null 2>&1 || \
-    { log "pg_isready failed."; kubectl describe pod "$pod_name"; kubectl logs "$pod_name"; fatal "Postgres not ready."; }
-  log "PostgreSQL accepting connections."
-  local user="$POSTGRES_USER" db="$POSTGRES_DB"
-  [ -z "$db" ] && fatal "POSTGRES_DB not set."
-  kubectl exec -n "$NAMESPACE" "$pod_name" -- psql -U "$user" -d "$db" -c "SELECT 1;" >/dev/null 2>&1 && \
-    log "Database '$db' functional." || \
-    { log "Query failed."; kubectl describe pod "$pod_name"; kubectl logs "$pod_name"; fatal "Cannot query '$db'."; }
+
+  [ -z "$pod_name" ] && fatal "darkseek-db pod never appeared"
+
+  kubectl exec -n "$NAMESPACE" "$pod_name" -- pg_isready -U "$POSTGRES_USER" -q || \
+    { log "pg_isready failed"; kubectl logs "$pod_name" -n "$NAMESPACE"; fatal "Postgres not ready"; }
+
+  kubectl exec -n "$NAMESPACE" "$pod_name" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 1;" >/dev/null 2>&1 || \
+    { log "Cannot query database $POSTGRES_DB"; kubectl logs "$pod_name" -n "$NAMESPACE"; fatal "DB not functional"; }
+
+  log "PostgreSQL fully ready and accepting connections"
 }
 
-verify_backend_ws_image() {
-  log "Verifying backend-ws image..."
+verify_backend_image() {
+  local deployment_name="$1"
+  log "Verifying image for deployment $deployment_name..."
   local image
-  image=$(kubectl get deployment darkseek-backend-ws -n default \
-    -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "Not found")
+  image=$(kubectl get deployment "$deployment_name" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "Not found")
   if [ "$image" = "Not found" ]; then
-    fatal "Deployment darkseek-backend-ws not found or has no image."
+    fatal "Deployment $deployment_name not found or has no image."
   fi
-  log "Deployed image: $image"
+  log "Deployed image for $deployment_name: $image"
 }
 
 debug_python_startup() {
@@ -378,6 +410,14 @@ apply_with_sed() {
   fatal "Failed to apply ${file} after ${RETRY_APPLY} attempts."
 }
 
+kill_stale_pods() {
+  local pod_name="$1"  # e.g. "darkseek-db"
+  echo "Killing any stale pods with label app=$pod_name ..."
+  kubectl delete pod -l "app=$pod_name" --field-selector=status.phase!=Running --force --grace-period=0 --ignore-not-found=true || true
+  # Optional wait to ensure cleanup
+  sleep 5
+}
+
 force_delete_pods() {
   local app_label="${1:-}"   # e.g. darkseek-backend-ws
   if [ -z "$app_label" ]; then
@@ -428,6 +468,8 @@ kubectl create secret generic darkseek-secrets \
   --dry-run=client -o yaml | kubectl apply -f -
 
 
+log "Deleting stale darkseek-db pods"
+kill_stale_pods "darkseek-db"
 kubectl apply -f configmap.yaml
 dryrun_server
 
@@ -463,11 +505,13 @@ dep_claim=$(kubectl get deployment $deployment_name -o jsonpath='{.spec.template
 [ "$dep_claim" != "$pvc_name" ] && fatal "PVC mismatch."
 
 pvc_status=$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
-[ "$pvc_status" != "Bound" ] && { log "PVC not Bound."; troubleshoot_pvc_and_nodes "$pvc_name" "darkseek-db"; fatal "PVC not Bound."; }
+[ "$pvc_status" != "Bound" ] && { log "PVC not Bound."; troubleshoot_pvc_and_nodes "$pvc_name" ; fatal "PVC not Bound."; }
 
 ensure_db_exists
-check_db_initialization "$pvc_name" "app=darkseek-db"
-verify_backend_ws_image
+check_db_initialization 
+verify_backend_image "darkseek-backend-ws"
+verify_backend_image "darkseek-backend-mqtt"
+
 wait_for_deployments
 
 check_pod_statuses
