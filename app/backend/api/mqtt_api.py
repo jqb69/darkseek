@@ -50,15 +50,22 @@ from app.backend.core.config import (
 class AsyncMQTTServer:
     def __init__(self):
         self.client = Client(MQTT_BROKER_URI)   # ← fixed
+        self._connected = False   # ← ADD THIS
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
+        self.client.on_disconnect = self.on_disconnect  # ← ADD THIS
 
     async def on_connect(self, client, userdata, flags, rc):
         if rc == 0:
+            self._connected = True
             logger.info("Connected to MQTT broker")
             await client.subscribe("chat/#")  # Subscribe to all chat topics
         else:
             logger.error(f"Failed to connect to MQTT broker, return code: {rc}")
+
+    def is_connected(self) -> bool:
+        """Return True if currently connected to MQTT broker."""
+        return self._connected
 
     async def on_message(self, client, userdata, msg):
         if msg.topic.startswith("chat/") and msg.topic.endswith("/query"):
@@ -136,15 +143,19 @@ class AsyncMQTTServer:
         except Exception as e:
             logger.error(f"Failed to start MQTT server: {e}", exc_info=True)
             raise
-
+    
+    async def on_disconnect(self, client, userdata, rc):
+        self._connected = False
+        logger.info("Disconnected from MQTT broker")
+    
+ 
+    # ← Replace disconnect() with terminate():
     async def close_connection(self):
-        """Close the MQTT connection."""
         try:
-            await self.client.disconnect()
-            logger.info("Disconnected from MQTT broker.")
+            await self.client.terminate()   # ← NOT disconnect()
+            logger.info("MQTT connection terminated.")
         except Exception as e:
-            logger.error(f"Failed to disconnect from MQTT broker: {e}", exc_info=True)
-            raise
+            logger.error(f"Failed to terminate MQTT: {e}")
 
 # === Main Function ===
 #async def main():
