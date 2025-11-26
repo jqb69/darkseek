@@ -60,6 +60,7 @@ class AsyncMQTTServer:
             self._connected = True
             logger.info("Connected to MQTT broker")
             await client.subscribe("chat/#")  # Subscribe to all chat topics
+            open("/tmp/mqtt-healthy", "w").close()
         else:
             logger.error(f"Failed to connect to MQTT broker, return code: {rc}")
 
@@ -147,8 +148,10 @@ class AsyncMQTTServer:
     async def on_disconnect(self, client, userdata, rc):
         self._connected = False
         logger.info("Disconnected from MQTT broker")
+        # REMOVE HEALTH FILE
+        if os.path.exists("/tmp/mqtt-healthy"):     
+            os.unlink("/tmp/mqtt-healthy")
     
- 
     # ← Replace disconnect() with terminate():
     async def close_connection(self):
         try:
