@@ -13,22 +13,34 @@ fatal() { echo "ERROR: $*" >&2; exit 1; }
 
 on_error() {
   local exit_code=$?
-  log "Script failed (exit code: $exit_code). Running troubleshooting..."
+  log "FATAL: Script failed (exit code: $exit_code). Entering emergency debug mode..."
 
-  # First, run the general troubleshooting for PVCs, events, etc.
+  # General diagnostics
   troubleshoot_k8s || true
-  # THEN, check if the backend-ws deployment was the cause of the failure.
-  # If so, trigger the interactive debug mode specifically for it.
-  if ! kubectl wait --for=condition=available --timeout=1s "deployment/darkseek-backend-ws" -n "$NAMESPACE" &>/dev/null; then
-    debug_pod_interactively "darkseek-backend-ws"
-  elif ! kubectl wait --for=condition=available --timeout=1s "deployment/darkseek-backend-mqtt" -n "$NAMESPACE" &>/dev/null; then
-    debug_pod_interactively "darkseek-backend-mqtt"
-  elif ! kubectl wait --for=condition=available --timeout=1s "deployment/darkseek-frontend" -n "$NAMESPACE" &>/dev/null; then
-    debug_pod_interactively "darkseek-frontend"  
-  elif ! kubectl wait --for=condition=available --timeout=1s "deployment/darkseek-db" -n "$NAMESPACE" &>/dev/null; then
-    debug_pod_interactively "darkseek-db"  
-  fi  
-  return $exit_code
+
+  # List of critical deployments to check
+  local deployments=(
+    "darkseek-backend-ws"
+    "darkseek-backend-mqtt"
+    "darkseek-frontend"
+    "darkseek-db"
+    "darkseek-redis"
+  )
+
+  for dep in "${deployments[@]}"; do
+    if ! kubectl wait --for=condition=available --timeout=3s "deployment/$dep" -n "$NAMESPACE" &>/dev/null; then
+      log "Deployment $dep is NOT available → dropping you into interactive debug pod..."
+      debug_pod_interactively "$dep"
+      
+      # CRITICAL: Stop everything after debug shell
+      log "Debug session for $dep completed. Script terminated intentionally."
+      exit $exit_code  # This prevents any further execution or "success" exit
+    fi
+  done
+
+  # If no deployment was unavailable (should never reach here due to set -e)
+  log "No specific deployment found unhealthy. Exiting with code $exit_code."
+  exit $exit_code
 }
 trap 'on_error' ERR
 
@@ -498,7 +510,7 @@ log "Applying backend-mqtt deployment with fresh image..."
 apply_with_sed backend-mqtt-deployment.yaml
 
 log "Waiting for deployments..."
-apply_with_retry frontend-deployment.yaml
+apply_with_sed frontend-deployment.yaml
 apply_with_retry db-deployment.yaml
 log "Applying other resources..."
 apply_with_retry redis-deployment.yaml
