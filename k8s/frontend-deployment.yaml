@@ -1,3 +1,4 @@
+---
 # frontend-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -15,7 +16,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: gcr.io/ascendant-lore-452208-b6/darkseek-frontend:latest
+        image: gcr.io/${GCP_PROJECT_ID}/darkseek-frontend:latest
         imagePullPolicy: Always # Ensure latest image is pulled
         ports:
         - containerPort: 8501
@@ -37,10 +38,10 @@ spec:
           initialDelaySeconds: 90
           periodSeconds: 20
           timeoutSeconds: 10
-          failureThreshold: 10
+          failureThreshold: 5
         readinessProbe:
           tcpSocket:
             port: 8501
-          initialDelaySeconds: 120
-          periodSeconds: 20
+          initialDelaySeconds: 150
+          periodSeconds: 40
           timeoutSeconds: 5
