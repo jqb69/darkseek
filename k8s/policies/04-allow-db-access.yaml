@@ -1,0 +1,22 @@
+---
+# k8s/policies/04-allow-db-access.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-postgres
+spec:
+  podSelector:
+    matchLabels:
+      app: darkseek-db
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darkseek-backend-ws
+    - podSelector:
+        matchLabels:
+          app: darkseek-backend-mqtt
+    ports:
+    - protocol: TCP
+    port: 5432
