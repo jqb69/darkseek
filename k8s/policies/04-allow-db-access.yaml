@@ -19,4 +19,4 @@ spec:
           app: darkseek-backend-mqtt
     ports:
     - protocol: TCP
-    port: 5432
+      port: 5432
