@@ -1,0 +1,22 @@
+---
+# k8s/policies/05-allow-redis-access.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-redis
+spec:
+  podSelector:
+    matchLabels:
+      app: darkseek-redis
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darkseek-backend-ws
+    - podSelector:
+        matchLabels:
+          app: darkseek-backend-mqtt
+    ports:
+    - protocol: TCP
+      port: 6379
