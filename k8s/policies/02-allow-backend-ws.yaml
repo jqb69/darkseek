@@ -1,0 +1,19 @@
+---
+# k8s/policies/02-allow-backend-ws.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-backend-ws
+spec:
+  podSelector:
+    matchLabels:
+      app: darkseek-backend-ws
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darkseek-frontend
+    ports:
+    - protocol: TCP
+      port: 8000
