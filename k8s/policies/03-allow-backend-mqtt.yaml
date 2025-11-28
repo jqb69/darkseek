@@ -1,0 +1,22 @@
+---
+# k8s/policies/03-allow-backend-mqtt.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-backend-mqtt
+spec:
+  podSelector:
+    matchLabels:
+      app: darkseek-backend-mqtt
+  policyTypes: [Ingress]
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darkseek-frontend
+    - podSelector:
+        matchLabels:
+          app: darkseek-backend-ws  # if WS talks to MQTT internally
+    ports:
+    - protocol: TCP
+      port: 1883
