@@ -1,11 +1,15 @@
----
-# frontend-deployment.yaml
+# k8s/frontend-deployment.yaml — FINAL VERSION (immortal)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: darkseek-frontend
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: darkseek-frontend
@@ -17,7 +21,7 @@ spec:
       containers:
       - name: frontend
         image: gcr.io/${GCP_PROJECT_ID}/darkseek-frontend:latest
-        imagePullPolicy: Always # Ensure latest image is pulled
+        imagePullPolicy: Always
         ports:
         - containerPort: 8501
         envFrom:
@@ -27,21 +31,32 @@ spec:
             name: darkseek-secrets
         resources:
           requests:
-            cpu: "100m"
-            memory: "256Mi"
-          limits:
-            cpu: "500m"
+            cpu: "250m"
             memory: "512Mi"
-        livenessProbe:
-          tcpSocket:
+          limits:
+            cpu: "1000m"
+            memory: "1024Mi"
+        startupProbe:                  # ← THIS IS THE REAL FIX
+          httpGet:
+            path: /_stcore/healthz
             port: 8501
-          initialDelaySeconds: 90
-          periodSeconds: 20
-          timeoutSeconds: 10
-          failureThreshold: 5
-        readinessProbe:
-          tcpSocket:
-            port: 8501
-          initialDelaySeconds: 150
-          periodSeconds: 40
+          initialDelaySeconds: 30
+          periodSeconds: 10
           timeoutSeconds: 5
+          failureThreshold: 30       # → allows up to 330 seconds total startup
+        livenessProbe:
+          httpGet:
+            path: /_stcore/healthz
+            port: 8501
+          initialDelaySeconds: 300
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /_stcore/healthz
+            port: 8501
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
