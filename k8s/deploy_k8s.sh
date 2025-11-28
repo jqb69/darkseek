@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- Deploy DarkSeek to GKE (Without DNS) ---
-# Date: 2025-09-30
+# Date: 2025-09-30,Modified 2025-11-28
 set -euo pipefail
 
 NAMESPACE="default"
@@ -342,6 +342,24 @@ wait_for_deployments() {
   done
 }
 
+apply_network_policies() {
+  log "Applying Zero-Trust Network Policies..."
+  local policy_dir="./policies"
+  
+  if [ ! -d "$policy_dir" ]; then
+    log "No policies directory found. Skipping NetworkPolicy application."
+    return 0
+  fi
+
+  for policy in "$policy_dir"/*.yaml; do
+    [ -f "$policy" ] || continue
+    log "Applying network policy: $(basename "$policy")"
+    kubectl apply -f "$policy" || log "Warning: Failed to apply $policy (may already exist)"
+  done
+  
+  log "All network policies applied. Cluster now in Zero-Trust mode."
+}
+
 check_pod_statuses() {
   log "Checking pod health..."
   local timeout=300 interval=10 elapsed=0 all_healthy=true
@@ -492,34 +510,35 @@ kubectl create secret generic darkseek-secrets \
 log "Deleting stale darkseek-db pods"
 kill_stale_pods "darkseek-db"
 kill_stale_pods "darkseek-db"
-kill_stale_pods "darkseek-db"
 
-# Also clear finalizers on PVC if stuck (nuclear but safe)
+# 0. Also clear finalizers on PVC if stuck (nuclear but safe)
 kubectl patch pvc postgres-pvc -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
 kubectl apply -f configmap.yaml
 dryrun_server
+# 1. Core infrastructure first
+apply_with_retry db-deployment.yaml
+apply_with_retry redis-deployment.yaml
+apply_with_retry db-pvc.yaml
 
-
-#apply_with_retry backend-ws-deployment.yaml
-log "Ensuring no stale backend-ws pods are running..."
+# 2. Backends (clients need them immediately)
 force_delete_pods "darkseek-backend-ws"
-log "Applying backend-ws deployment with fresh image..."
 apply_with_sed backend-ws-deployment.yaml
+
 force_delete_pods "darkseek-backend-mqtt"
-log "Applying backend-mqtt deployment with fresh image..."
 apply_with_sed backend-mqtt-deployment.yaml
 
-log "Waiting for deployments..."
+# 3. Frontend last —->,used $GCP_PROJECT_ID placeholder
 apply_with_sed frontend-deployment.yaml
-apply_with_retry db-deployment.yaml
-log "Applying other resources..."
-apply_with_retry redis-deployment.yaml
+
+# 4. Services
 apply_with_retry backend-ws-service.yaml
 apply_with_retry backend-mqtt-service.yaml
 apply_with_retry frontend-service.yaml
 apply_with_retry db-service.yaml
 apply_with_retry redis-service.yaml
-apply_with_retry db-pvc.yaml
+
+# 5. Lock it down
+apply_network_policies
 
 #log "Patching images with GCP_PROJECT_ID..."
 #kubectl set image deployment/darkseek-backend-ws backend-ws=gcr.io/${GCP_PROJECT_ID}/darkseek-backend-ws:latest -n default
