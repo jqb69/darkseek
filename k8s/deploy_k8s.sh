@@ -473,6 +473,22 @@ force_delete_pods() {
   log "Done force-deleting pods for $app_label"
 }
 
+deploy_main_apps() {
+  local apps=(
+    "darkseek-backend-ws:backend-ws-deployment.yaml"
+    "darkseek-backend-mqtt:backend-mqtt-deployment.yaml"
+    "darkseek-frontend:frontend-deployment.yaml"
+  )
+# Ensure frontend is last
+  for entry in "${apps[@]}"; do
+    local label="${entry%%:*}"
+    local file="${entry##*:}"
+    log "Deploying $file (app label: $label)..."
+    force_delete_pods "$label"
+    apply_with_sed "$file"
+  done
+}
+
 # --- MAIN ---
 log "Starting deployment..."
 check_kubectl
@@ -511,7 +527,7 @@ log "Deleting stale darkseek-db pods"
 kill_stale_pods "darkseek-db"
 kill_stale_pods "darkseek-db"
 
-# 0. Also clear finalizers on PVC if stuck (nuclear but safe)
+# Also clear finalizers on PVC if stuck (nuclear but safe)
 kubectl patch pvc postgres-pvc -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
 kubectl apply -f configmap.yaml
 dryrun_server
@@ -520,15 +536,9 @@ apply_with_retry db-deployment.yaml
 apply_with_retry redis-deployment.yaml
 apply_with_retry db-pvc.yaml
 
-# 2. Backends (clients need them immediately)
-force_delete_pods "darkseek-backend-ws"
-apply_with_sed backend-ws-deployment.yaml
-
-force_delete_pods "darkseek-backend-mqtt"
-apply_with_sed backend-mqtt-deployment.yaml
-
-# 3. Frontend last —->,used $GCP_PROJECT_ID placeholder
-apply_with_sed frontend-deployment.yaml
+# 2-3.After DB + Redis + PVC
+# 
+deploy_main_apps
 
 # 4. Services
 apply_with_retry backend-ws-service.yaml
