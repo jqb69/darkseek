@@ -283,8 +283,8 @@ jobs:
         run: |
           echo "Deploying MQTT debugger pod using GCP_PROJECT_ID=${GCP_PROJECT_ID}"
           chmod +x ./k8s/mqtt-debugk8s.sh
-          ./k8s/mqtt-debugk8s.sh || echo "MQTT debugger already exists or minor issue — continuing"
-          env:
+          ./k8s/mqtt-debugk8s.sh || echo "MQTT debugger already exists or minor issue — continuing
+        env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Victory Message
