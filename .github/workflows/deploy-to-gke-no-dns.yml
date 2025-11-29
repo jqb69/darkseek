@@ -291,4 +291,4 @@ jobs:
         if: success()
         run: |
           echo "DARKSEEK RULES B*TCHES!"
-          echo "Frontend: http://$(kubectl get svc darkseek-frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}'):8501"  
+          echo "http://$(kubectl get svc darkseek-frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}'):8501"  
