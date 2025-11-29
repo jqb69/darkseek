@@ -283,7 +283,8 @@ jobs:
         run: |
           echo "Deploying MQTT debugger pod using GCP_PROJECT_ID=${GCP_PROJECT_ID}"
           chmod +x ./k8s/mqtt-debugk8s.sh
-          ./k8s/mqtt-debugk8s.sh || echo "MQTT debugger already exists or minor issue — continuing
+          ./k8s/mqtt-debugk8s.sh || echo "MQTT debugger already exists or minor issue -continuing"
+        shell: bash
         env:
           GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
 
@@ -291,4 +292,6 @@ jobs:
         if: success()
         run: |
           echo "DARKSEEK RULES B*TCHES!"
-          echo "http://$(kubectl get svc darkseek-frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}'):8501"  
+          FR_IP="$(kubectl get svc darkseek-frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}')"
+          echo "Frontend → http://$FR_IP:8501"
+        shell: bash
