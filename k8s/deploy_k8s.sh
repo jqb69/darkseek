@@ -18,50 +18,42 @@ on_error() {
   # General diagnostics
   troubleshoot_k8s || true
 
-  # List of critical deployments to check
-  local deployments=(
-    "darkseek-backend-ws"
-    "darkseek-backend-mqtt"
-    "darkseek-frontend"
-    "darkseek-db"
-    "darkseek-redis"
-  )
+  # List of critical deployments to check (in reverse order for logical debugging)
+  local deployments=("darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis")
 
   for dep in "${deployments[@]}"; do
+    # Check if a deployment is NOT available (using a short timeout)
     if ! kubectl wait --for=condition=available --timeout=3s "deployment/$dep" -n "$NAMESPACE" &>/dev/null; then
       log "Deployment $dep is NOT available → dropping you into interactive debug pod..."
       debug_pod_interactively "$dep"
       
       # CRITICAL: Stop everything after debug shell
       log "Debug session for $dep completed. Script terminated intentionally."
-      exit $exit_code  # This prevents any further execution or "success" exit
+      exit $exit_code
     fi
   done
 
-  # If no deployment was unavailable (should never reach here due to set -e)
   log "No specific deployment found unhealthy. Exiting with code $exit_code."
   exit $exit_code
 }
 trap 'on_error' ERR
 
 # ----------------------------------------------------------------------
-#  ADVANCED DEBUG: Get an interactive shell in a crashing pod
+#  ADVANCED DEBUG: Get an interactive shell in a crashing pod (Improved)
 # ----------------------------------------------------------------------
 debug_pod_interactively() {
   local dep="$1"
-  local container_name="${2:-}"
+  local container_name
 
-  # Auto-detect container name if not provided
-  if [ -z "$container_name" ]; then
-    # Try common patterns: backend-ws → backend-ws, darkseek-frontend → frontend, etc.
-    container_name=$(kubectl get deployment "$dep" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null || echo "")
-    if [ -z "$container_name" ]; then
-      # Fallback: strip "darkseek-" prefix and use rest
-      container_name="${dep#darkseek-}"
-      # If still empty or same, use the deployment name as-is
-      [ "$container_name" = "$dep" ] && container_name="app"
-    fi
-  fi
+  # Auto-detect the container name for a specific deployment
+  case "$dep" in
+    "darkseek-backend-ws") container_name="backend-ws";;
+    "darkseek-backend-mqtt") container_name="backend-mqtt";;
+    "darkseek-frontend") container_name="frontend";;
+    "darkseek-db") container_name="postgres";; # Use the container name inside the DB pod
+    "darkseek-redis") container_name="redis";;
+    *) container_name=$(kubectl get deployment "$dep" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null || echo "$dep");;
+  esac
 
   log "Attempting to start interactive debug session for deployment '$dep' (container: $container_name)..."
 
@@ -75,11 +67,11 @@ debug_pod_interactively() {
 
   log "Found pod: $pod → patching container '$container_name' to sleep 1h"
 
-  # Dynamic patch with correct container name
-  kubectl patch deployment "$dep" -n "$NAMESPACE" -p \
-    "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"$container_name\",\"command\":[\"sleep\",\"3600\"]}]}}}}"
+  # Dynamic patch with correct container name (use --patch for safer operation)
+  kubectl patch deployment "$dep" -n "$NAMESPACE" --patch \
+    "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"$container_name\",\"command\":[\"sleep\",\"3600\"], \"imagePullPolicy\":\"Always\"}]}}}}"
 
-  log "Deployment patched. Pod will restart with infinite sleep."
+  log "Deployment patched. Pod will restart with infinite sleep. The deployment will be updated."
   log "Connect using:"
   echo ""
   echo "   kubectl exec -it $pod -n $NAMESPACE -- /bin/bash"
@@ -291,7 +283,7 @@ debug_python_startup() {
 }
 
 # -----------------------------------------------------------------------
-#  MODIFIED: wait for deployments with FAST feedback loop
+#  MODIFIED: wait for deployments with FAST feedback loop (LOGS IMPROVED)
 # -----------------------------------------------------------------------
 wait_for_deployments() {
   local deployments=(
@@ -311,17 +303,16 @@ wait_for_deployments() {
     check_pods_in_background "$dep" "$timeout" &
     local bg_pid=$!
 
-    # Run the main wait command. It will be interrupted if the script fails.
     if kubectl wait --for=condition=available --timeout=${timeout}s "deployment/$dep" -n "$NAMESPACE"; then
       log "Deployment $dep is Available."
-      kill "$bg_pid" 2>/dev/null || true # Kill the background checker since it's no longer needed
+      kill "$bg_pid" 2>/dev/null || true
       continue
     fi
 
     # ------------------------------------------------------------------
     #  If we get here, the main wait command timed out.
     # ------------------------------------------------------------------
-    kill "$bg_pid" 2>/dev/null || true # Ensure the background checker is stopped
+    kill "$bg_pid" 2>/dev/null || true
     log "WARNING: Deployment '$dep' did NOT become Available – dumping full diagnostics..."
 
     local pod_names
@@ -330,8 +321,9 @@ wait_for_deployments() {
       for pod in $pod_names; do
         log "--- Full diagnostics for pod: $pod ---"
         kubectl describe pod "$pod" -n "$NAMESPACE" || true
-        log "Logs for pod '$pod' (last 200 lines):"
-        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 || log "Warning: Could not retrieve logs for pod '$pod'."
+        log "Logs for pod '$pod' (last 200 lines, including previous container crash):"
+        # ADDED --previous flag to main log dump for CrashLoopBackOff analysis
+        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 --previous || kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 || log "Warning: Could not retrieve logs for pod '$pod'."
         kubectl exec "$pod" -n "$NAMESPACE" -- python -c "import sys; print(sys.path)" || true
       done
     else
