@@ -48,6 +48,23 @@ jobs:
           echo "GKE_CLUSTER_ZONE: $GKE_CLUSTER_ZONE"
         shell: bash
 
+      - name: Sanitize GCP Project ID
+        id: sanitize
+        run: |
+          LOWER=$(echo "${{ secrets.GCP_PROJECT_ID }}" | tr '[:upper:]' '[:lower:]')
+          echo "GCP_PROJECT_ID_LOWERCASE=$LOWER" >> $GITHUB_ENV
+          echo "Sanitized project ID: $LOWER"
+        shell: bash
+
+      - name: Validate sanitized project ID
+        run: |
+          if [[ "${{ env.GCP_PROJECT_ID_LOWERCASE }}" =~ [A-Z] ]]; then
+            echo "ERROR: Project ID still contains uppercase after sanitizing!"
+            exit 1
+          fi
+          echo "Project ID is clean: ${{ env.GCP_PROJECT_ID_LOWERCASE }}"
+        shell: bash
+
       - name: Debug frontend directory
         run: |
           echo "Listing app/frontend/ contents:"
@@ -119,7 +136,7 @@ jobs:
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          project_id: ${{ env.GCP_PROJECT_ID_LOWERCASE }}
 
       - name: Configure Docker for GCR
         run: |
@@ -207,17 +224,15 @@ jobs:
           context: ./app/frontend
           file: ./app/frontend/Dockerfile
           push: true
-          tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-frontend:latest
+          tags: gcr.io/${{ env.GCP_PROJECT_ID_LOWERCASE }}/darkseek-frontend:latest
 
       - name: Build and push backend-ws
         uses: docker/build-push-action@v6
-        env:
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         with:
           context: .
           file: ./app/backend/Dockerfile.ws
           push: true
-          tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-ws:latest
+          tags: gcr.io/${{ env.GCP_PROJECT_ID_LOWERCASE }}/darkseek-backend-ws:latest
           no-cache: true
           pull: true
 
@@ -227,7 +242,7 @@ jobs:
           context: .
           file: ./app/backend/Dockerfile.mqtt
           push: true
-          tags: gcr.io/${{ secrets.GCP_PROJECT_ID }}/darkseek-backend-mqtt:latest
+          tags: gcr.io/${{ env.GCP_PROJECT_ID_LOWERCASE }}/darkseek-backend-mqtt:latest
           no-cache: true
           pull: true
 
@@ -246,7 +261,7 @@ jobs:
           MQTT_PASSWORD: ${{ secrets.MQTT_PASSWORD }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID_LOWERCASE }}
         run: |
           echo "Deploying to GKE..."
           chmod +x ./k8s/deploy_k8s.sh
@@ -286,7 +301,7 @@ jobs:
           ./k8s/mqtt-debugk8s.sh || echo "MQTT debugger already exists or minor issue -continuing"
         shell: bash
         env:
-          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID_LOWERCASE }}
 
       - name: Victory Message
         if: success()
