@@ -34,7 +34,7 @@ kubectl run debug-mqtt --restart=Never \
         }
       }]
     }
-  }
+  }"
 
 log "MQTT SPY POD IS ALIVE AND ETERNAL"
 log ""
