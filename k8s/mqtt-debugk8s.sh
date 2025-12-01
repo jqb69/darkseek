@@ -29,12 +29,12 @@ kubectl run debug-mqtt --restart=Never \
         \"image\": \"gcr.io/$GCP_PROJECT_ID/debug-mqtt:latest\",
         \"command\": [\"sleep\", \"infinity\"],
         \"resources\": {
-          \"requests\": { \"memory\": \"64Mi\", \"cpu\": \"50m\" },
-          \"limits\":   { \"memory\": \"128Mi\", \"cpu\": \"200m\" }
+          \"requests\": { \"memory\": \"128Mi\", \"cpu\": \"50m\" },
+          \"limits\":   { \"memory\": \"256Mi\", \"cpu\": \"250m\" }
         }
       }]
     }
-  }"
+  }
 
 log "MQTT SPY POD IS ALIVE AND ETERNAL"
 log ""
