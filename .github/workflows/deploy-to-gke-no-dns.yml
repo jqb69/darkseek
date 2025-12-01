@@ -303,6 +303,20 @@ jobs:
         env:
           GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID_LOWERCASE }}
 
+      - name: Test MQTT Spy Connectivity (90s max)
+        if: success()
+        env:
+          GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID_LOWERCASE }}
+        run: |
+          chmod +x ./k8s/mqtt-testk8s.sh
+          timeout 95 ./k8s/mqtt-testk8s.sh || {
+            echo "MQTT TEST FAILED — dumping debug pod logs..."
+            kubectl logs debug-mqtt --tail=100 || true
+            kubectl describe pod debug-mqtt || true
+            exit 1
+          }
+        shell: bash
+    
       - name: Victory Message
         if: success()
         run: |
