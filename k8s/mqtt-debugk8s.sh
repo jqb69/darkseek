@@ -96,10 +96,10 @@ EOF
 
 verify_pod() {
     log "Verifying debug-mqtt pod is Running..."
-    for i in {1..30}; do
+    for i in {1..39}; do
         phase=$(kubectl get pod debug-mqtt -o jsonpath='{.status.phase}' 2>/dev/null || echo "Missing")
         [[ "$phase" == "Running" ]] && { log "POD IS RUNNING — SPY IS ALIVE"; return 0; }
-        log "Pod phase: $phase — waiting... ($i/30)"
+        log "Pod phase: $phase — waiting... ($i/39)"
         sleep 2
     done
     log "ERROR: debug-mqtt pod failed to reach Running state"
