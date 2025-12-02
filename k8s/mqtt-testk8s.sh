@@ -11,15 +11,16 @@ log "=== DARKSEEK MQTT SPY TEST STARTED ==="
 log "Log file: $LOGFILE"
 
 log "Waiting for debug-mqtt pod to be exec-ready (max 30s)..."
-for i in {1..30}; do
+for i in {1..39}; do
   if kubectl exec debug-mqtt -- true 2>/dev/null; then
     log "Pod ready for exec"
     break
   fi
-  log "Pod not ready yet ($i/30) — waiting..."
+  log "Pod not ready yet ($i/39) — waiting..."
   sleep 1
 done
-
+# Sleep for a while and wait
+sleep 3
 kubectl exec debug-mqtt -- true >/dev/null || {
   log "ERROR: debug-mqtt pod never became exec-ready"
   kubectl describe pod debug-mqtt
