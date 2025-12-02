@@ -59,20 +59,17 @@ check_existing_pod() {
 nuke_and_deploy() {
     if $DEBUG_MODE; then
         check_existing_pod && return 0
-        log "DEBUG MODE: deploying fresh pod (no ghost nuke)"
+        log "DEBUG MODE: deploying fresh pod (no nuke)"
     else
-        log "PRODUCTION MODE: EXECUTING FULL GHOST ANNIHILATION PROTOCOL"
+        log "PRODUCTION MODE: safe, Autopilot-compliant pod replacement"
         kubectl delete pod debug-mqtt --force --grace-period=0 --wait=false || true
-        sleep 5
-        kubectl get node -o name | xargs -I {} kubectl debug {} \
-          --image=mcr.microsoft.com/aks/fundamental/base-ubuntu:v0.0.11 -- \
-          /bin/sh -c "ip link del gke* 2>/dev/null || true" || true
-        sleep 3
+        sleep 8   # This is the magic — gives Autopilot time to clean veth ghosts
     fi
 
+    # If pod still exists (rare race), skip deploy
     check_existing_pod && return 0
 
-    log "Deploying immortal, ghost-proof, OOM-proof spy pod..."
+    log "Deploying immortal spy pod..."
     kubectl replace --force -f - <<EOF
 apiVersion: v1
 kind: Pod
