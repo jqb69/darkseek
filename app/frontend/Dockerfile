@@ -16,7 +16,7 @@ COPY static/ ./frontend/static/
 ENV PYTHONPATH=/app
 EXPOSE 8501
 # Standard Streamlit command
-CMD ["streamlit", "run", "app/frontend/streamlit_app.py", \
+CMD ["streamlit", "run", "frontend/streamlit_app.py", \
     "--server.port=8501", \
     "--server.address=0.0.0.0", \
     "--server.enableCORS=false", \
