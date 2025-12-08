@@ -1,4 +1,4 @@
-# k8s/frontend-deployment.yaml — FINAL VERSION (immortal)
+# k8s/frontend-deployment.yaml — FINAL FINAL FINAL — CLEANSED BY FIRE
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -36,14 +36,14 @@ spec:
           limits:
             cpu: "1000m"
             memory: "1024Mi"
-        startupProbe:                  # ← THIS IS THE REAL FIX
+        startupProbe:
           httpGet:
             path: /_stcore/healthz
             port: 8501
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
-          failureThreshold: 30       # → allows up to 330 seconds total startup
+          failureThreshold: 30
         livenessProbe:
           httpGet:
             path: /_stcore/healthz
