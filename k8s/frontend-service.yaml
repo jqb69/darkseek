@@ -1,13 +1,21 @@
-# frontend-service.yaml
+---
+# /k8s/frontend-service-dns.yml
 apiVersion: v1
 kind: Service
 metadata:
   name: darkseek-frontend
+  namespace: default
+  annotations:
+    cloud.google.com/load-balancer-type: "External"
+    cloud.google.com/load-balancer-backend-timeout: "3600"
+  labels:
+    app: darkseek-frontend
 spec:
+  type: LoadBalancer
   selector:
     app: darkseek-frontend
   ports:
-  - port: 8501
-    targetPort: 8501
+  - name: http-80
     protocol: TCP
-  type: LoadBalancer
+    port: 80
+    targetPort: 8501 # Streamlit runs on 8501 inside the container (HTTP)
