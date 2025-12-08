@@ -36,6 +36,7 @@ spec:
           limits:
             cpu: "1000m"
             memory: "1024Mi"
+        # 1. Probe handlers MUST be unique (ONLY httpGet is used here)
         startupProbe:
           httpGet:
             path: /_stcore/healthz
@@ -43,15 +44,15 @@ spec:
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
-          failureThreshold: 30
+          failureThreshold: 60 # --> NEW: Allows 10 minutes (60 * 10s) for startup
         livenessProbe:
           httpGet:
             path: /_stcore/healthz
             port: 8501
-          initialDelaySeconds: 300
-          periodSeconds: 30
-          timeoutSeconds: 5
-          failureThreshold: 3
+          initialDelaySeconds: 600 # --> NEW: Wait 10 minutes before starting Liveness checks
+          periodSeconds: 60 # --> NEW: Check only once per minute
+          timeoutSeconds: 10 # --> NEW: More time for response
+          failureThreshold: 5 # --> NEW: Allows 5 failed checks (5 minutes) before restart
         readinessProbe:
           httpGet:
             path: /_stcore/healthz
