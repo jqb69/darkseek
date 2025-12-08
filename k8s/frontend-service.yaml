@@ -1,5 +1,5 @@
 ---
-# /k8s/frontend-service.yaml
+# k8s/frontend-service.yaml — FINAL VERSION (immortal)
 apiVersion: v1
 kind: Service
 metadata:
