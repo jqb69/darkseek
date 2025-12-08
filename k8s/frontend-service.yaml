@@ -1,13 +1,17 @@
 ---
-# k8s/frontend-service.yaml — FINAL VERSION (immortal)
+# k8s/frontend-service.yaml — FINNAL F*king VERSION
 apiVersion: v1
 kind: Service
 metadata:
   name: darkseek-frontend
   namespace: default
+  # This set of annotations is necessary for a robust, high-performance GKE
+  # External LoadBalancer with a long timeout.
   annotations:
-    cloud.google.com/load-balancer-type: "External"
-    cloud.google.com/load-balancer-backend-timeout: "3600"
+    # 1. CRITICAL: Sets the GKE Load Balancer's backend service timeout to 1 hour (3600s).
+    cloud.google.com/backend-config: '{"default": {"timeoutSec": 3600}}'
+    # 2. BEST PRACTICE: Enables Network Endpoint Groups (NEGs) for better scaling and health checks.
+    cloud.google.com/neg: "true"
   labels:
     app: darkseek-frontend
 spec:
@@ -15,7 +19,7 @@ spec:
   selector:
     app: darkseek-frontend
   ports:
-  - name: http-80
-    protocol: TCP
-    port: 80
-    targetPort: 8501 # Streamlit runs on 8501 inside the container (HTTP)
+    # Service Port 80 (standard HTTP access) maps to the container's 8501 port
+    - port: 80
+      targetPort: 8501
+      protocol: TCP
