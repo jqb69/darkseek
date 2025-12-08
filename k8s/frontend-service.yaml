@@ -1,5 +1,5 @@
 ---
-# /k8s/frontend-service-dns.yml
+# /k8s/frontend-service.yaml
 apiVersion: v1
 kind: Service
 metadata:
