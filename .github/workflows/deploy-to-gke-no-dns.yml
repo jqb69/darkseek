@@ -224,7 +224,7 @@ jobs:
           context: ./app/frontend
           file: ./app/frontend/Dockerfile
           push: true
-          tags: gcr.io/${{ env.GCP_PROJECT_ID_LOWERCASE }}/darkseek-frontend:latest
+          tags: us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID_LOWERCASE }}/darkseek/darkseek-frontend:latest
 
       - name: Build and push backend-ws
         uses: docker/build-push-action@v6
@@ -232,7 +232,7 @@ jobs:
           context: .
           file: ./app/backend/Dockerfile.ws
           push: true
-          tags: gcr.io/${{ env.GCP_PROJECT_ID_LOWERCASE }}/darkseek-backend-ws:latest
+          tags: us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID_LOWERCASE }}/darkseek/darkseek-backend-ws:latest
           pull: true
 
       - name: Build and push backend-mqtt
@@ -241,7 +241,7 @@ jobs:
           context: .
           file: ./app/backend/Dockerfile.mqtt
           push: true
-          tags: gcr.io/${{ env.GCP_PROJECT_ID_LOWERCASE }}/darkseek-backend-mqtt:latest
+          tags: us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID_LOWERCASE }}/darkseek/darkseek-backend-mqtt:latest
           no-cache: true
           pull: true
 
