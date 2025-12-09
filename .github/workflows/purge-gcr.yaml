@@ -8,27 +8,23 @@ on:
 jobs:
   purge:
     runs-on: ubuntu-latest
-    # ← REMOVE THIS ENTIRE BLOCK (this is what forces token requirement)
-    # permissions:
-    #   contents: write
 
     steps:
-      - name: Checkout with PAT
+      - name: Checkout with PAT (REQUIRED)
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.PAT_TOKEN }}   # ← YOUR PAT HERE
-          persist-credentials: true
+          token: ${{ secrets.PAT_TOKEN }}        # ← YOUR PAT HERE
+          persist-credentials: true              # ← REQUIRED FOR git push
 
       - name: Execute purge
-        shell: bash
         run: |
           chmod +x k8s/purge-gcr.sh
           cd k8s && ./purge-gcr.sh
 
       - name: Commit & push
-        shell: bash
         run: |
           git config user.name "Frank Aigrillo"
+          git config user.email "frank@darkseek.com"
           git add .
           git commit -m "GCR PURGED FOREVER — Artifact Registry reigns" || echo "No changes"
           git push
