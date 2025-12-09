@@ -1,0 +1,27 @@
+---
+# purge-gcr.yaml
+name: PURGE GCR — ONE TIME ONLY
+
+on:
+  workflow_dispatch:
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Execute GCR Purge Script
+        run: |
+          cd k8s
+          ./purge-gcr.sh
+
+      - name: Commit the purge
+        run: |
+          git config user.name "Frank Aigrillo"
+          git config user.email "frank@darkseek.com"
+          git add .
+          git commit -m "FINAL PURGE: GCR purged from k8s/ — Artifact Registry reigns forever" || echo "Nothing to commit"
+          git push
