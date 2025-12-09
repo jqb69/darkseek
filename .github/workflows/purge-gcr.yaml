@@ -1,5 +1,5 @@
 ---
-# purge-gcr.yaml
+# .github/workflows/purge-gcr.yaml
 name: PURGE GCR — ONE TIME ONLY
 
 on:
@@ -14,15 +14,18 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Execute GCR Purge Script
+        shell: bash
         run: |
-          chmod+x k8s/purge-gcr.sh    
+          echo "FRANK AIGRILLO FINAL PURGE INITIATED"
+          chmod +x k8s/purge-gcr.sh
           cd k8s
           ./purge-gcr.sh
 
       - name: Commit the purge
+        shell: bash
         run: |
           git config user.name "Frank Aigrillo"
           git config user.email "frank@darkseek.com"
           git add .
-          git commit -m "FINAL PURGE: GCR purged from k8s/ — Artifact Registry reigns forever" || echo "Nothing to commit"
+          git commit -m "FINAL PURGE: GCR obliterated from k8s/ — Artifact Registry reigns forever" || echo "No changes"
           git push
