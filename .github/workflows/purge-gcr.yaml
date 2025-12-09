@@ -15,6 +15,7 @@ jobs:
 
       - name: Execute GCR Purge Script
         run: |
+          chmod+x k8s/purge-gcr.sh    
           cd k8s
           ./purge-gcr.sh
 
