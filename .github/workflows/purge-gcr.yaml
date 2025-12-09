@@ -8,14 +8,14 @@ on:
 jobs:
   purge:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    # ← REMOVE THIS LINE COMPLETELY (the source of all evil)
+    # permissions:
+    #   contents: write
 
     steps:
-      - name: Checkout with PAT
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.PAT_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}   # ← YOUR PAT HERE
 
       - name: Execute GCR Purge Script
         shell: bash
@@ -31,5 +31,5 @@ jobs:
           git config user.name "Frank Aigrillo"
           git config user.email "frank@darkseek.com"
           git add .
-          git commit -m "FINAL PURGE: GCR obliterated from k8s/ — Artifact Registry reigns forever" || echo "No changes"
-          git push origin main
+          git commit -m "FINAL PURGE: GCR obliterated — Artifact Registry reigns" || echo "No changes"
+          git push
