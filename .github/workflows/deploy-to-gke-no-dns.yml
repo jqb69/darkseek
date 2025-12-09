@@ -316,6 +316,13 @@ jobs:
         env:
           GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID_LOWERCASE }}
 
+      - name: Execute Frontend Diagnostic Blitz
+        if: success()
+        run: |
+          chmod +x ./k8s/frontend-testk8s.sh
+          ./k8s/frontend-testk8s.sh
+        shell: bash
+
       - name: Victory Message
         if: success()
         run: |
