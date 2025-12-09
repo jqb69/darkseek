@@ -8,10 +8,13 @@ on:
 jobs:
   purge:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_TOKEN }}  # ← YOUR PERSONAL ACCESS TOKEN
 
       - name: Execute GCR Purge Script
         shell: bash
@@ -27,5 +30,5 @@ jobs:
           git config user.name "Frank Aigrillo"
           git config user.email "frank@darkseek.com"
           git add .
-          git commit -m "FINAL PURGE: GCR obliterated from k8s/ — Artifact Registry reigns forever" || echo "No changes"
+          git commit -m "FINAL PURGE: GCR obliterated from k8s/ — Artifact Registry reigns forever" || echo "Nothing to commit"
           git push
