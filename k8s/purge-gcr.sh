@@ -23,10 +23,9 @@ done
 
 echo "GCR PURGE COMPLETE."
 if grep -r "gcr\.io" .; then
-  echo "WARNING: GCR STILL DETECTED — MANUAL REVIEW NEEDED"
+  echo "ERROR: GCR STILL DETECTED"
   exit 1
 else
   echo "CONFIRMED: GCR IS DEAD IN k8s/"
   echo "VICTORY."
-fi
 fi
