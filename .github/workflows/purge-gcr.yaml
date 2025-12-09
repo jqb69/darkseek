@@ -8,14 +8,15 @@ on:
 jobs:
   purge:
     runs-on: ubuntu-latest
-    # ← REMOVE THIS LINE COMPLETELY (the source of all evil)
-    # permissions:
-    #   contents: write
+    permissions:
+      contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout with PAT (THIS WORKS)
+        uses: actions/checkout@v4
         with:
           token: ${{ secrets.PAT_TOKEN }}   # ← YOUR PAT HERE
+          persist-credentials: true
 
       - name: Execute GCR Purge Script
         shell: bash
