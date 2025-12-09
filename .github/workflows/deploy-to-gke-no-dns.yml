@@ -138,11 +138,10 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID_LOWERCASE }}
 
-      - name: Configure Docker for GCR
+      - name: Configure Docker for Artifact Registry
         run: |
-          echo "Configuring Docker for GCR..."
-          gcloud auth configure-docker gcr.io --quiet
-        shell: bash
+          echo "Authenticating Docker to us-central1-docker.pkg.dev..."
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
       - name: Verify service account
         run: |
@@ -156,6 +155,12 @@ jobs:
           fi
           SERVICE_ACCOUNT=$(jq -r '.client_email' "$GOOGLE_GHA_CREDS_PATH")
           echo "Service Account: $SERVICE_ACCOUNT"
+        shell: bash
+
+      - name: Configure Docker for GCR
+        run: |
+          echo "Configuring Docker for GCR..."
+          gcloud auth configure-docker gcr.io --quiet
         shell: bash
 
       - name: List all clusters
