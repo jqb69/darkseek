@@ -12,9 +12,10 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout with PAT
+        uses: actions/checkout@v4
         with:
-          token: ${{ secrets.PAT_TOKEN }}  # ← YOUR PERSONAL ACCESS TOKEN
+          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Execute GCR Purge Script
         shell: bash
@@ -24,11 +25,11 @@ jobs:
           cd k8s
           ./purge-gcr.sh
 
-      - name: Commit the purge
+      - name: Commit and push purge
         shell: bash
         run: |
           git config user.name "Frank Aigrillo"
           git config user.email "frank@darkseek.com"
           git add .
-          git commit -m "FINAL PURGE: GCR obliterated from k8s/ — Artifact Registry reigns forever" || echo "Nothing to commit"
-          git push
+          git commit -m "FINAL PURGE: GCR obliterated from k8s/ — Artifact Registry reigns forever" || echo "No changes"
+          git push origin main
