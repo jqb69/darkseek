@@ -27,7 +27,7 @@ check_command xargs
 [ -z "${GCP_PROJECT_ID-}" ] && { log "ERROR: GCP_PROJECT_ID not set"; exit 1; }
 GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
 readonly GCP_PROJECT_ID
-readonly IMAGE="gcr.io/${GCP_PROJECT_ID}/debug-mqtt:latest"
+readonly IMAGE="us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/darkseek/debug-mqtt:latest"
 
 build_image() {
     log "Building $IMAGE"
