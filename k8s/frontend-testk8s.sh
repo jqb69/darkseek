@@ -7,8 +7,9 @@ log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 log "=== DARKSEEK FRONTEND DIAGNOSTIC EXECUTIONER ACTIVATED ==="
 
 # STAGE 1: Find a Running pod
-# We specifically select a pod in the "Running" phase to ensure we target a stable instance.
-POD=$(kubectl get pods -l app=darkseek-frontend -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' 2>/dev/null || echo "")
+# FIX: Use 'awk' to ensure only the FIRST pod name is selected, preventing the "NotFound" error
+# when multiple pods are running.
+POD=$(kubectl get pods -l app=darkseek-frontend -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' 2>/dev/null | awk '{print $1}' || echo "")
 
 if [[ -z "$POD" ]]; then
     log "ERROR: No Running frontend pod found"
@@ -19,15 +20,20 @@ fi
 log "TARGET ACQUIRED: $POD"
 
 # STAGE 2: Wait up to 12 MINUTES for exec readiness (matches 10-min startupProbe + margin)
-# This addresses the previous FATAL timeout issue.
+# This addresses the previous FATAL timeout issue and now streams status/logs on failure.
 log "STAGE 2: Waiting for pod to accept exec (max 720s — matches 10-min startupProbe)..."
 for i in {1..720}; do
     if kubectl exec "$POD" -- true 2>/dev/null; then
         log "Pod accepts exec — READY"
         break
     fi
-    # Log status every 30 seconds for visibility
-    [[ $((i % 30)) -eq 0 ]] && log "Still waiting... ($i/720)"
+    # Log status and stream logs every 30 seconds
+    if [[ $((i % 30)) -eq 0 ]]; then
+        log "STATUS CHECK ($i/720): Still waiting. DUMPING STATUS AND LATEST LOGS..."
+        kubectl get pod "$POD"
+        # Check the last 5 lines of the container logs for errors
+        kubectl logs "$POD" --tail=5 || log "Note: Could not fetch logs yet (container might be initializing/crashing)."
+    fi
     sleep 1
 done
 
