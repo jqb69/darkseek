@@ -16,7 +16,7 @@ spec:
       restartPolicy: Always  # Setting the restart policy to Always
       containers:
       - name: backend-mqtt
-        image: gcr.io/${GCP_PROJECT_ID}/darkseek-backend-mqtt:latest
+        image: us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/darkseek/darkseek-backend-mqtt:latest
         envFrom:
         - configMapRef:
             name: darkseek-config
