@@ -1,9 +1,9 @@
----
 # k8s/policies/allow-frontend-ingress.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-frontend-ingress
+  namespace: default
 spec:
   podSelector:
     matchLabels:
@@ -15,7 +15,7 @@ spec:
     - ipBlock:
         cidr: 130.211.0.0/22
     - ipBlock:
-        cidr: 35.191.0.0/
+        cidr: 35.191.0.0/16       
     ports:
     - protocol: TCP
       port: 8501
