@@ -105,14 +105,23 @@ run_slim_diagnostics() {
     return 1 # Failure!
 }
 
-get_frontend_url() {
-    local ip
-    ip=$(kubectl get svc darkseek-frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "PENDING")
-    if [[ "$ip" != "PENDING" && -n "$ip" ]]; then
-        echo "http://$ip:8501"
-    else
-        echo "IP still PENDING"
-    fi
+run_service_diagnostics() {
+    log "STAGE 4: EXTERNAL NETWORK DIAGNOSTICS"
+    
+    log "--- K8S SERVICE STATUS (darkseek-frontend) ---"
+    kubectl get svc darkseek-frontend -o wide || log "Service darkseek-frontend not found."
+    
+    log "--- K8S ENDPOINTS (darkseek-frontend) ---"
+    # This confirms the service knows which pod IP to route to.
+    kubectl get endpoints darkseek-frontend || log "Endpoints for darkseek-frontend not found/ready."
+    
+    log "--------------------------------------------------------"
+    log "!!! ATTENTION !!!"
+    log "The application is READY inside the pod, but UNREACHABLE externally."
+    log "This points to a firewall or Service routing issue."
+    log "ACTION REQUIRED: Please verify your external firewall (e.g., GCP Firewall Rules) allows TCP ingress traffic on port 8501 to the Load Balancer IP."
+    log "--------------------------------------------------------"
+    return 0
 }
 
 main() {
@@ -127,11 +136,14 @@ main() {
     # STAGE 2: Wait for exec readiness
     wait_for_exec_ready "$pod" || exit 1
     
-    # STAGE 3: Run diagnostics. The function itself handles the final SUCCESS logging and URL print.
-    run_slim_diagnostics "$pod" || exit 1 # Exit the script entirely if run_slim_diagnostics returns 1 (failure)
+    # STAGE 3: Run application readiness check. Exit if the app isn't ready internally.
+    run_slim_diagnostics "$pod" || exit 1 
+    
+    # STAGE 4: Run external diagnostics ONLY if the internal app check passed.
+    run_service_diagnostics
 
     log "=== DIAGNOSTIC COMPLETE: Pod is fully ready ==="
-    # The final URL is already logged by run_slim_diagnostics on success, so we don't need redundant logging here.
+    # The final URL is already logged by run_slim_diagnostics on success.
 }
 
 main
