@@ -11,11 +11,7 @@ spec:
   policyTypes:
   - Ingress
   ingress:
-  - from:
-    - ipBlock:
-        cidr: 130.211.0.0/22
-    - ipBlock:
-        cidr: 35.191.0.0/16       
+  - from: []  # ← THIS MEANS "FROM ANYWHERE" — OVERRIDES DENY-ALL
     ports:
     - protocol: TCP
       port: 8501
