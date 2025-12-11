@@ -112,7 +112,8 @@ get_frontend_url() {
         echo "http://$ip:8501"
     else
         echo "IP still PENDING"
-    }
+    fi
+}
 
 main() {
     log "=== DARKSEEK FRONTEND DIAGNOSTIC EXECUTIONER ACTIVATED ==="
