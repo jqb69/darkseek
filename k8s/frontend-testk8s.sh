@@ -114,13 +114,6 @@ run_service_diagnostics() {
     log "--- K8S ENDPOINTS (darkseek-frontend) ---"
     # This confirms the service knows which pod IP to route to.
     kubectl get endpoints darkseek-frontend || log "Endpoints for darkseek-frontend not found/ready."
-    
-    log "--------------------------------------------------------"
-    log "!!! ATTENTION !!!"
-    log "The application is READY inside the pod, but UNREACHABLE externally."
-    log "This points to a firewall or Service routing issue."
-    log "ACTION REQUIRED: Please verify your external firewall (e.g., GCP Firewall Rules) allows TCP ingress traffic on port 8501 to the Load Balancer IP."
-    log "--------------------------------------------------------"
     return 0
 }
 
