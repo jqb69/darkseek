@@ -1,23 +1,27 @@
 # app/frontend/Dockerfile
 FROM python:3.11-slim
+
 WORKDIR /app
+
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
-# Upgrade pip and install virtualenv
+
 RUN pip install --no-cache-dir --upgrade pip virtualenv
-# Create and activate virtual environment
 RUN python -m virtualenv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
-COPY requirements.txt ./frontend/
-RUN pip install --no-cache-dir --no-cache  -r frontend/requirements.txt
-COPY . ./frontend/
-COPY components/ ./frontend/components/
-COPY static/ ./frontend/static/
+
+# ← THIS LINE IS PURE GENIUS
+COPY app/frontend/requirements.txt /app/
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY . /app/
 ENV PYTHONPATH=/app
+
+WORKDIR /app/frontend
 EXPOSE 8501
-# Standard Streamlit command
-CMD ["streamlit", "run", "frontend/streamlit_app.py", \
-    "--server.port=8501", \
-    "--server.address=0.0.0.0", \
-    "--server.enableCORS=false", \
-    "--server.enableXsrfProtection=false"]
+
+CMD ["streamlit", "run", "streamlit_app.py", \
+     "--server.port=8501", \
+     "--server.address=0.0.0.0", \
+     "--server.enableCORS=false", \
+     "--server.enableXsrfProtection=false"]
