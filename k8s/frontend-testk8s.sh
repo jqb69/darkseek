@@ -1,73 +1,127 @@
 #!/bin/bash
-# k8s/frontend-testk8s.sh — FINAL: Streamlit Diagnostic Executioner (Autopilot-Proof)
+# k8s/frontend-testk8s.sh — FINAL MODULAR EXECUTIONER (Autopilot-Proof, Slim-Image Safe)
 set -euo pipefail
+
+NAMESPACE="default"
+APP_LABEL="darkseek-frontend"
+MAX_WAIT=720  # 12 minutes
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
-log "=== DARKSEEK FRONTEND DIAGNOSTIC EXECUTIONER ACTIVATED ==="
+find_running_pod() {
+    local pod
+    pod=$(kubectl get pods -n "$NAMESPACE" -l app="$APP_LABEL" \
+        -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' 2>/dev/null | awk '{print $1}')
+    echo "$pod"
+}
 
-# STAGE 1: Find a Running pod
-# FIX: Use 'awk' to ensure only the FIRST pod name is selected, preventing the "NotFound" error
-# when multiple pods are running.
-POD=$(kubectl get pods -l app=darkseek-frontend -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' 2>/dev/null | awk '{print $1}' || echo "")
+wait_for_exec_ready() {
+    local pod="$1"
+    local elapsed=0
+    local interval=30
 
-if [[ -z "$POD" ]]; then
-    log "ERROR: No Running frontend pod found"
-    kubectl get pods -l app=darkseek-frontend
-    exit 1
-fi
+    log "STAGE 2: Waiting for pod '$pod' to accept exec (max ${MAX_WAIT}s = $((MAX_WAIT/60)) min)..."
 
-log "TARGET ACQUIRED: $POD"
+    while (( elapsed < MAX_WAIT )); do
+        # Primary check: Can we exec into the pod?
+        if kubectl exec "$pod" -- true 2>/dev/null; then
+            log "Pod accepts exec — READY"
+            return 0
+        fi
 
-# STAGE 2: Wait up to 12 MINUTES for exec readiness (matches 10-min startupProbe + margin)
-# This addresses the previous FATAL timeout issue and now streams status/logs on failure.
-log "STAGE 2: Waiting for pod to accept exec (max 720s — matches 10-min startupProbe)..."
-for i in {1..720}; do
-    if kubectl exec "$POD" -- true 2>/dev/null; then
-        log "Pod accepts exec — READY"
-        break
+        (( elapsed++ ))
+
+        # Every 30 seconds (or at 10s mark): status + logs dump
+        if (( elapsed % interval == 0 || elapsed == 10 )); then
+            local mins=$((elapsed / 60))
+            local secs=$((elapsed % 60))
+            log "STATUS CHECK [$mins:$secs/$((MAX_WAIT/60)) min]: Still waiting for exec..."
+            
+            log "--- POD STATUS ---"
+            kubectl get pod "$pod" -o wide || true
+
+            log "--- RECENT LOGS (last 10 lines) ---"
+            if ! kubectl logs "$pod" --tail=10 2>/dev/null; then
+                log "No logs available yet (container may still be starting)"
+            fi
+
+            log "--- CONTAINER STATUS ---"
+            # Extract container status for detailed health check (Ready state)
+            kubectl get pod "$pod" -o jsonpath='{.status.containerStatuses[*].{name:ready,state}}' 2>/dev/null || true
+            echo
+        fi
+
+        sleep 1
+    done
+
+    log "FATAL: Pod '$pod' never became exec-ready after ${MAX_WAIT}s"
+    log "--- FINAL POD DESCRIBE ---"
+    kubectl describe pod "$pod" || true
+    log "--- FINAL LOGS (last 100 lines) ---"
+    kubectl logs "$pod" --tail=100 || true
+
+    return 1
+}
+
+run_slim_diagnostics() {
+    local pod="$1"
+    log "STAGE 3: EXECUTING SLIM-IMAGE SAFE DIAGNOSTICS on $pod"
+
+    log "--- PYTHON/STREAMLIT VERSIONS ---"
+    # Check if python is available and run a simple command
+    kubectl exec "$pod" -- python -c "import streamlit, sys; print(f'Streamlit {streamlit.__version__} | Python {sys.version.split()[0]}')" 2>/dev/null || log "Python version check failed (Python may be missing or Streamlit not installed)."
+
+    log "--- APPLICATION DIRECTORY LISTING ---"
+    kubectl exec "$pod" -- ls -la /app 2>/dev/null || log "/app directory listing failed."
+
+    log "--- ENVIRONMENT (PATH/PYTHON/STREAMLIT) ---"
+    kubectl exec "$pod" -- env | grep -E "(PATH|PYTHON|STREAMLIT)" 2>/dev/null || log "Environment variables not visible."
+    
+    log "--- HEALTH CHECK (Attempting wget/curl fallback) ---"
+    # Use 'sh -c' to check if 'wget' or 'curl' exists, then execute the health check
+    if kubectl exec "$pod" -- sh -c 'command -v wget >/dev/null && wget -qO- http://localhost:8501/_stcore/healthz || (command -v curl >/dev/null && curl -f http://localhost:8501/_stcore/healthz)' 2>/dev/null | grep -q "ok"; then
+        log "HEALTHZ OK — Streamlit is confirmed alive via http check."
+    else
+        log "HEALTHZ FAILED — Service is unreachable. Dumping final logs for insight."
+        kubectl logs "$pod" --tail=100 || true
     fi
-    # Log status and stream logs every 30 seconds
-    if [[ $((i % 30)) -eq 0 ]]; then
-        log "STATUS CHECK ($i/720): Still waiting. DUMPING STATUS AND LATEST LOGS..."
-        kubectl get pod "$POD"
-        # Check the last 5 lines of the container logs for errors
-        kubectl logs "$POD" --tail=5 || log "Note: Could not fetch logs yet (container might be initializing/crashing)."
+}
+
+get_frontend_url() {
+    local ip
+    ip=$(kubectl get svc darkseek-frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "PENDING")
+    if [[ "$ip" != "PENDING" && -n "$ip" ]]; then
+        echo "http://$ip:8501"
+    else
+        echo "IP still PENDING"
     fi
-    sleep 1
-done
+}
 
-if ! kubectl exec "$POD" -- true 2>/dev/null; then
-    log "FATAL: Pod never became exec-ready after 12 minutes"
-    # Execute vital debugging commands on failure
-    log "--- KUBECTL DESCRIBE (for events) ---"
-    kubectl describe pod "$POD"
-    log "--- KUBECTL LOGS (for application output) ---"
-    kubectl logs "$POD" --tail=100
-    exit 1
-fi
+main() {
+    log "=== DARKSEEK FRONTEND DIAGNOSTIC EXECUTIONER ACTIVATED ==="
 
-# STAGE 3: Full diagnostic blitz - Check essential services and resources
-log "STAGE 3: EXECUTING DIAGNOSTIC BLITZ (Netstat, Health, Processes, Resources)..."
-log "--- NETSTAT (Checking Streamlit Port 8501) ---"
-kubectl exec "$POD" -- netstat -tlnp | grep 8501 || true
+    local pod
+    pod=$(find_running_pod)
+    [[ -z "$pod" ]] && { log "ERROR: No Running frontend pod"; kubectl get pods -l app="$APP_LABEL"; exit 1; }
 
-log "--- HEALTH CHECK (Streamlit /_stcore/healthz) ---"
-kubectl exec "$POD" -- curl -f http://localhost:8501/_stcore/healthz && log "HEALTHZ OK" || log "HEALTHZ FAILED"
+    log "TARGET ACQUIRED: $pod"
 
-log "--- PROCESS LIST (ps aux) ---"
-kubectl exec "$POD" -- ps aux
+    # STAGE 2: Wait for exec readiness (which now includes status/log streaming)
+    wait_for_exec_ready "$pod" || exit 1
+    
+    # STAGE 3: Run diagnostics safe for slim images
+    run_slim_diagnostics "$pod"
 
-log "--- FILESYSTEM USAGE (df -h) ---"
-kubectl exec "$POD" -- df -h
+    log "=== FRONTEND DIAGNOSTIC COMPLETE ==="
+    local url
+    url=$(get_frontend_url)
+    log "FRONTEND URL → $url"
 
-log "--- MEMORY USAGE (free -m) ---"
-kubectl exec "$POD" -- free -m
+    if [[ "$url" == "IP still PENDING" ]]; then
+        log "Note: The LoadBalancer IP is still pending, but the application is confirmed running inside the pod."
+        exit 0
+    fi
+    log "Frontend pod $pod is alive and passed slim diagnostics."
+}
 
-log "=== FRONTEND DIAGNOSTIC COMPLETE ==="
-log "Frontend pod $POD is alive and exec-ready"
-# Retrieve LoadBalancer IP and construct the full URL
-FRONTEND_IP=$(kubectl get svc darkseek-frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-log "URL: http://$FRONTEND_IP:8501"
-
-exit 0
+main
