@@ -221,7 +221,7 @@ jobs:
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
         with:
-          context: ./app/frontend
+          context: .
           file: ./app/frontend/Dockerfile
           push: true
           tags: us-central1-docker.pkg.dev/${{ env.GCP_PROJECT_ID_LOWERCASE }}/darkseek/darkseek-frontend:latest
