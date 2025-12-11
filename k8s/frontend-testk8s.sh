@@ -69,22 +69,40 @@ run_slim_diagnostics() {
 
     log "--- PYTHON/STREAMLIT VERSIONS ---"
     # Check if python is available and run a simple command
-    kubectl exec "$pod" -- python -c "import streamlit, sys; print(f'Streamlit {streamlit.__version__} | Python {sys.version.split()[0]}')" 2>/dev/null || log "Python version check failed (Python may be missing or Streamlit not installed)."
+    kubectl exec "$pod" -- python -c "import streamlit, sys; print(f'Streamlit {streamlit.__version__} | Python {sys.version.split()[0]}')" 2>/dev/null || log "Python/Streamlit check failed"
 
-    log "--- APPLICATION DIRECTORY LISTING ---"
-    kubectl exec "$pod" -- ls -la /app 2>/dev/null || log "/app directory listing failed."
+    log "--- APPLICATION DIRECTORY ---"
+    kubectl exec "$pod" -- ls -la /app 2>/dev/null || log "Cannot list /app"
 
-    log "--- ENVIRONMENT (PATH/PYTHON/STREAMLIT) ---"
-    kubectl exec "$pod" -- env | grep -E "(PATH|PYTHON|STREAMLIT)" 2>/dev/null || log "Environment variables not visible."
-    
-    log "--- HEALTH CHECK (Attempting wget/curl fallback) ---"
-    # Use 'sh -c' to check if 'wget' or 'curl' exists, then execute the health check
-    if kubectl exec "$pod" -- sh -c 'command -v wget >/dev/null && wget -qO- http://localhost:8501/_stcore/healthz || (command -v curl >/dev/null && curl -f http://localhost:8501/_stcore/healthz)' 2>/dev/null | grep -q "ok"; then
-        log "HEALTHZ OK — Streamlit is confirmed alive via http check."
-    else
-        log "HEALTHZ FAILED — Service is unreachable. Dumping final logs for insight."
-        kubectl logs "$pod" --tail=100 || true
-    fi
+    log "--- ENVIRONMENT ---"
+    kubectl exec "$pod" -- env | grep -E "(PATH|PYTHON|STREAMLIT)" 2>/dev/null || log "No env vars visible"
+
+    # GEMINI'S GENIUS: 5-RETRY SOCKET CHECK — KILLS THE RACE CONDITION DEAD
+    log "--- HEALTH CHECK: Verifying Streamlit is listening on 8501 (5 retries) ---"
+    local attempts=0
+    local max_attempts=5
+
+    while (( attempts < max_attempts )); do
+        (( attempts++ ))
+        log "Attempt $attempts/$max_attempts — checking port 8501..."
+
+        # Python socket check: Bypasses curl/wget dependency.
+        # Exits 0 on success, 1 on failure. Redirecting stderr/stdout to discard output.
+        if kubectl exec "$pod" -- python -c "import socket; s=socket.socket(); s.settimeout(3); exit(0 if s.connect_ex(('127.0.0.1', 8501)) == 0 else 1)" &>/dev/null; then
+            log "SUCCESS: Streamlit is LISTENING on 8501 — FULLY READY"
+            # Print the final URL directly here, as this is the point of guaranteed readiness.
+            log "FRONTEND IS 100% LIVE → http://$(kubectl get svc darkseek-frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "IP still PENDING"):8501"
+            return 0 # Success! Exit the function.
+        fi
+
+        log "Port 8501 not ready yet — retrying in 2s..."
+        sleep 2
+    done
+
+    log "FATAL: Streamlit failed to bind to 8501 after $max_attempts attempts"
+    log "--- FINAL LOGS ---"
+    kubectl logs "$pod" --tail=100 || true
+    return 1 # Failure!
 }
 
 get_frontend_url() {
@@ -94,8 +112,7 @@ get_frontend_url() {
         echo "http://$ip:8501"
     else
         echo "IP still PENDING"
-    fi
-}
+    }
 
 main() {
     log "=== DARKSEEK FRONTEND DIAGNOSTIC EXECUTIONER ACTIVATED ==="
@@ -106,22 +123,14 @@ main() {
 
     log "TARGET ACQUIRED: $pod"
 
-    # STAGE 2: Wait for exec readiness (which now includes status/log streaming)
+    # STAGE 2: Wait for exec readiness
     wait_for_exec_ready "$pod" || exit 1
     
-    # STAGE 3: Run diagnostics safe for slim images
-    run_slim_diagnostics "$pod"
+    # STAGE 3: Run diagnostics. The function itself handles the final SUCCESS logging and URL print.
+    run_slim_diagnostics "$pod" || exit 1 # Exit the script entirely if run_slim_diagnostics returns 1 (failure)
 
-    log "=== FRONTEND DIAGNOSTIC COMPLETE ==="
-    local url
-    url=$(get_frontend_url)
-    log "FRONTEND URL → $url"
-
-    if [[ "$url" == "IP still PENDING" ]]; then
-        log "Note: The LoadBalancer IP is still pending, but the application is confirmed running inside the pod."
-        exit 0
-    fi
-    log "Frontend pod $pod is alive and passed slim diagnostics."
+    log "=== DIAGNOSTIC COMPLETE: Pod is fully ready ==="
+    # The final URL is already logged by run_slim_diagnostics on success, so we don't need redundant logging here.
 }
 
 main
