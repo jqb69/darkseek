@@ -21,7 +21,7 @@ def inject_javascript():
     try:
         # Note: Streamlit struggles with relative paths inside components.v1.html(). 
         # For simplicity in this environment, we assume the user has this deployed correctly.
-        with open("app/frontend/static/js/socketio_client.js", "r") as f:
+        with open("/static/js/socketio_client.js", "r") as f:
             js_code = f.read()
         st.components.v1.html(f'<script>{js_code}</script>', height=0)
     except FileNotFoundError:
@@ -30,7 +30,7 @@ def inject_javascript():
 def inject_css():
     """Inject necessary CSS styles."""
     try:
-        with open("app/frontend/static/css/styles.css", "r") as f:
+        with open("/static/css/styles.css", "r") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
     except FileNotFoundError:
         st.error("CSS file (styles.css) not found. Please check the file path.")
