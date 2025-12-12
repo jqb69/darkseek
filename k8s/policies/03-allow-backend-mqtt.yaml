@@ -13,9 +13,6 @@ spec:
   - from:
     - podSelector:
         matchLabels:
-          app: darkseek-frontend
-    - podSelector:
-        matchLabels:
           app: darkseek-backend-ws  # if WS talks to MQTT internally
     ports:
     - protocol: TCP
