@@ -1,3 +1,4 @@
-# app/frontend/requirements.txt
-streamlit
-# aiomqtt==2.3.0
+# app/frontend/requirements.txt — FINAL, CLEAN, PRODUCTION-GRADE
+streamlit==1.38.0
+requests==2.32.3
+# aiomqtt REMOVED FOREVER — DEAD
