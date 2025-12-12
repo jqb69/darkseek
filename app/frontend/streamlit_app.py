@@ -12,29 +12,45 @@ def generate_session_id():
     return secrets.token_hex(16)
 
 def inject_javascript():
-    """Inject necessary JavaScript for WebSocket communication."""
-    # Assuming standard relative path from where Streamlit is run
+    """Inject Socket.IO + local JS — survives missing file without killing the app."""
+    # External CDN — always works
     st.components.v1.html(
-        '<script src="https://cdn.socket.io/4.6.0/socket.io.min.js" xintegrity="sha384-c79GN5VsunZvi+Q/WObgk2in0CbZsHnjEqvFxC5DxHn9lTfNce2WW6h2pH6u/kF+" crossorigin="anonymous"></script>',
+        '<script src="https://cdn.socket.io/4.6.0/socket.io.min.js" '
+        'integrity="sha384-c79GN5VsunZvi+Q/WObgk2in0CbZsHnjEqvFxC5DxHn9lTfNce2WW6h2pH6u/kF+" '
+        'crossorigin="anonymous"></script>',
         height=0,
     )
+
+    # Local custom JS — graceful fallback
     try:
-        # Note: Streamlit struggles with relative paths inside components.v1.html(). 
-        # For simplicity in this environment, we assume the user has this deployed correctly.
-        with open("/static/js/socketio_client.js", "r") as f:
+        with open("/app/app/frontend/static/js/socketio_client.js", "r", encoding="utf-8") as f:
             js_code = f.read()
         st.components.v1.html(f'<script>{js_code}</script>', height=0)
+        st.success("Custom Socket.IO client loaded")  # optional nice touch
     except FileNotFoundError:
-        st.error("JavaScript file (socketio_client.js) not found. Please check the file path.")
+        st.warning("socketio_client.js not found — using fallback behavior")
+        # Optional: inject minimal fallback JS or just continue
+        fallback_js = """
+        console.warn('socketio_client.js missing — WebSocket features disabled');
+        window.addEventListener('load', () => {
+            document.body.dataset.websocket = 'disabled';
+        });
+        """
+        st.components.v1.html(f'<script>{fallback_js}</script>', height=0)
+    except Exception as e:
+        st.error(f"Failed to load JS: {e}")
+
 
 def inject_css():
-    """Inject necessary CSS styles."""
+    """Inject custom CSS — survives missing file without killing the app."""
     try:
-        with open("/static/css/styles.css", "r") as f:
+        with open("/app/app/frontend/static/css/styles.css", "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+        st.success("Custom CSS loaded")
     except FileNotFoundError:
-        st.error("CSS file (styles.css) not found. Please check the file path.")
-
+        st.warning("styles.css not found — using default Streamlit theme")
+    except Exception as e:
+        st.error(f"Failed to load CSS: {e}")
 
 def main():
     st.set_page_config(page_title="DarkSeek", page_icon=":mag:", layout="wide")
