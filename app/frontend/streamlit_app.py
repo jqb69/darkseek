@@ -79,7 +79,7 @@ def main():
     # --- Routing (Login or Chat) ---
     if st.session_state.logged_in:
         # Correctly call the imported function
-        chat2_interface(st.session_state.session_id) 
+        chat2_interface() 
     else:
         login_interface() 
     
