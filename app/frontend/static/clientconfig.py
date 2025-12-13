@@ -22,7 +22,7 @@ MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", 8885)) # Default port for M
 # WebSocket server URI
 WEBSOCKET_URI = os.getenv("WEBSOCKET_URI", "wss://darkseek-backend-ws/ws/")
 # MQTT host SERVER ui
-MQTT_URI = os.getenv("MQTT_URI", "http://darkseek-backend-mqtt:8000") # <-- BUG FIX: Corrected "https:" to "https://"
+MQTT_URI = os.getenv("MQTT_URI", "http://darkseek-backend-mqtt:8001") # <-- BUG FIX: Corrected "https:" to "https://"
 # Default session ID placeholder
 DEFAULT_SESSION_ID = "default_session_id"
 
