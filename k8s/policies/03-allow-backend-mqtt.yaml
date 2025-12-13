@@ -16,4 +16,4 @@ spec:
           app: darkseek-backend-ws  # if WS talks to MQTT internally
     ports:
     - protocol: TCP
-      port: 1883
+      port: 8885
