@@ -52,7 +52,7 @@ def ping_backend_test(user_id: str):
         with st.spinner(f"Pinging backend at {ping_url}..."):
             start_time = time.time()
             # Send initial greeting via HTTP POST
-            resp = requests.post(ping_url, json=payload, timeout=5) 
+            resp = requests.post(f"{ping_url}/process_query", json=payload, timeout=5) 
             end_time = time.time()
             resp.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
             
