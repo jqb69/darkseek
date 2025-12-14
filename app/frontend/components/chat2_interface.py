@@ -13,7 +13,7 @@ def ping_backend_test(user_id: str):
     Executes a simple HTTP POST request to the backend's /ping endpoint to verify connectivity
     and service health before the user attempts a full query.
     """
-    ping_url = f"{MQTT_URI}/ping"
+    ping_url = f"{MQTT_URI}"
     initial_message = f"Hello backend, I am {user_id}"
     payload = {
         "message": initial_message,
