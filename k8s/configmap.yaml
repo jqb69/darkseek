@@ -9,4 +9,4 @@ data:
   MQTT_BROKER_PORT: "8885"
   MQTT_TLS: "true"
   WEBSOCKET_URI: "wss://darkseek-backend-ws/ws/"  # Internal service name
-  MQTT_URI: "https://darkseek-backend-mqtt"       # Internal service name
+  MQTT_URI: "http://darkseek-backend-mqtt:8001"       # Internal service name
