@@ -14,6 +14,7 @@ def ping_backend_test(user_id: str):
     and service health before the user attempts a full query.
     """
     ping_url = f"{MQTT_URI}"
+    st.info(f"MQTT_URI= {ping_url}")
     initial_message = f"Hello backend, I am {user_id}"
     payload = {
         "message": initial_message,
