@@ -40,7 +40,7 @@ def ping_backend_test(user_id: str):
         st.error(
             f"**URI PORT ERROR:** The backend URI ({ping_url}) is missing an explicit port number. "
             "Internal APIs (like FastAPI/Uvicorn) rarely run on default HTTP port 80. "
-            "The correct URI should likely be `http://darkseek-backend-mqtt:8000` (or 8080/8888)."
+            "The correct URI should likely be `http://darkseek-backend-mqtt:8001` (or 8080/8888)."
         )
         # We can't proceed reliably if the URI is likely wrong, so we return False early.
         st.error("Cannot proceed with ping test due to incorrect URI format.")
@@ -52,7 +52,7 @@ def ping_backend_test(user_id: str):
         with st.spinner(f"Pinging backend at {ping_url}..."):
             start_time = time.time()
             # Send initial greeting via HTTP POST
-            resp = requests.post(f"{ping_url}/process_query", json=payload, timeout=5) 
+            resp = requests.post(f"{ping_url}/process_query", json=payload, timeout=15) 
             end_time = time.time()
             resp.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
             
@@ -78,7 +78,7 @@ def ping_backend_test(user_id: str):
             return True, None
             
     except requests.exceptions.Timeout:
-        error_msg = f"Ping TIMEOUT (5s): Backend at {ping_url} did not respond. Check Network Policy or Backend Service Port."
+        error_msg = f"Ping TIMEOUT (15s): Backend at {ping_url} did not respond. Check Network Policy or Backend Service Port."
         st.error(error_msg)
         return False, error_msg
     except requests.exceptions.ConnectionError as e:
