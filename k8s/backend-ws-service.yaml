@@ -7,7 +7,7 @@ spec:
   selector:
     app: darkseek-backend-ws
   ports:
-  - port: 8443
-    targetPort: 8443
+  - port: 8000
+    targetPort: 8000
     protocol: TCP
   type: LoadBalancer  # Exposes externally; use ClusterIP if internal only
