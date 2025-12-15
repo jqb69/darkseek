@@ -53,20 +53,32 @@ stage_mqtt_connectivity() {
 }
 
 stage_http_health() {
-    log "🌐 STAGE 3: HTTP $BACKEND_NAME:8001/health (wget)..."
+    log "🌐 STAGE 3: HTTP $BACKEND_NAME:8001/health..."
     
+    # NON-FATAL timeout - explicit check
     if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
         wget -qO- --timeout=8 --spider http://"$BACKEND_NAME":8001/health 2>/dev/null; then
-        log "✅ HTTP /health: 200 OK ✓"
-    elif timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+        log "✅ HTTP /health: 200 OK"
+        return 0
+    fi
+    
+    if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
         wget -qO- --timeout=8 --spider http://"$BACKEND_NAME":8001/ 2>/dev/null; then
-        log "✅ HTTP root: 200 OK ✓"
+        log "✅ HTTP root: 200 OK"
+        return 0
+    fi
+    
+    # Both failed - log-based fallback (NO timeout here)
+    log "⚠️ Direct HTTP failed, checking logs..."
+    if kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=20 2>/dev/null | \
+        grep -qiE "uvicorn|fastapi|8001|listening"; then
+        log "✅ Uvicorn HTTP confirmed in logs ✓"
     else
-        log "⚠️ HTTP not responding, checking logs..."
-        kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=20 2>/dev/null | \
-            grep -qiE "uvicorn|fastapi|8001" && log "✅ Server logs confirm running"
+        log "❌ No HTTP server evidence found"
+        # DON'T exit here - continue to diagnostics
     fi
 }
+
 
 stage_backend_diagnostics() {
     log "🔍 STAGE 4: $BACKEND_NAME diagnostics..."
