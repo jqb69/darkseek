@@ -11,6 +11,9 @@ LOGFILE="/tmp/mqtt-test-$(date +%Y%m%d-%H%M%S).log"
 FRONTEND_IP=""
 DEBUG_POD="debug-mqtt"
 
+# Global status variable to track HTTP health: 1 = Success, 0 = Failure
+HTTP_SUCCESS=0 
+
 exec &> >(tee -a "$LOGFILE")
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
@@ -62,6 +65,7 @@ stage_http_health() {
     if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
         wget -qO- --timeout=8 --spider http://"$BACKEND_WS":8000/health 2>/dev/null; then
         log "✅ HTTP /health: 200 OK"
+        HTTP_SUCCESS=1 # Set global success status
         return 0
     fi
     
@@ -69,17 +73,21 @@ stage_http_health() {
     if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
         wget -qO- --timeout=8 --spider http://"$BACKEND_WS":8000/ 2>/dev/null; then
         log "✅ HTTP root: 200 OK"
+        HTTP_SUCCESS=1 # Set global success status
         return 0
     fi
     
     # Both failed - log-based fallback
     log "⚠️ Direct HTTP failed, checking logs..."
     if kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=20 2>/dev/null | \
-        grep -qiE "REST /api/chat\|Client connected"; then
-        log "✅ Uvicorn HTTP confirmed in logs ✓"
+        # Check for Uvicorn startup confirmation for better reliability
+        grep -qiE "Application startup complete"; then
+        log "✅ Uvicorn startup confirmed in logs ✓ (Still unreachable via network)"
     else
-        log "❌ No HTTP server evidence found"
+        log "❌ No Uvicorn startup or API activity found in logs."
     fi
+    
+    # HTTP_SUCCESS remains 0 if this point is reached.
 }
 
 
@@ -127,7 +135,16 @@ main() {
     sleep 3
     stage_mqtt_connectivity
     stage_http_health
-    stage_backend_diagnostics # Now checks both WS and MQTT status/logs
+    
+    # Check status and perform fatal exit if needed, but only after diagnostics
+    if [[ "$HTTP_SUCCESS" -eq 0 ]]; then
+        stage_backend_diagnostics # Run diagnostics to gather failure info
+        stage_frontend_status     # Gather final status
+        error_exit "HTTP/WS API facade ($BACKEND_WS:8000) is unreachable. See STAGE 4 logs for details."
+    fi
+
+    # If successful, run remaining stages normally
+    stage_backend_diagnostics 
     stage_frontend_status
     
     log "🎉 10/10 PERFECT PASS ✓"
