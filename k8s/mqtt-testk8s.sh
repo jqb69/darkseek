@@ -20,6 +20,7 @@ log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 cleanup_debug_pod() {
     log "🧹 AUTO CLEANUP: Removing $DEBUG_POD pod..."
     # The --force --grace-period=0 ensures an immediate, aggressive removal
+    # We ignore errors here in case the pod is already gone when the trap fires.
     kubectl delete pod "$DEBUG_POD" -n "$NAMESPACE" --ignore-not-found=true --force --grace-period=0 || true
     log "✅ Debug pod cleaned up"
 }
@@ -35,10 +36,22 @@ trap cleanup_debug_pod EXIT
 # --- STAGE 0: IMMEDIATE PRE-CLEANUP (New) ---
 stage_pre_cleanup() {
     log "🧼 STAGE 0: Pre-cleanup check for orphaned $DEBUG_POD..."
-    # Attempt to forcefully delete any existing pod with the same name
+    # Check if the pod exists
     if kubectl get pod "$DEBUG_POD" -n "$NAMESPACE" &> /dev/null; then
         log "⚠️ Found orphaned $DEBUG_POD. Deleting now to ensure a fresh start."
-        cleanup_debug_pod
+        # Aggressive delete
+        kubectl delete pod "$DEBUG_POD" -n "$NAMESPACE" --ignore-not-found=true --force --grace-period=0 || true
+        
+        # New: Explicitly wait for the Kube API to confirm the pod is gone.
+        log "⏳ Waiting for deletion confirmation (max 15s)..."
+        for i in {1..15}; do
+            if ! kubectl get pod "$DEBUG_POD" -n "$NAMESPACE" &> /dev/null; then
+                log "✓ Pod confirmed fully terminated ($i s)"
+                return 0
+            fi
+            sleep 1
+        done
+        log "⚠️ Pod deletion confirmation timeout (15s). Proceeding to wait for new pod."
     else
         log "✓ No orphaned $DEBUG_POD found."
     fi
@@ -48,6 +61,7 @@ stage_pre_cleanup() {
 stage_wait_debug_pod() {
     log "⏳ STAGE 1: $DEBUG_POD (--namespace $NAMESPACE)..."
     for i in {1..60}; do
+        # Use kubectl exec to check readiness (pod running + container ready)
         if timeout 5 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- true 2>/dev/null; then
             log "✓ Debug pod ready ($i s)"
             return 0
@@ -144,7 +158,7 @@ main() {
     log "🚀 DarkSeek Health: $BACKEND_NAME (Auto-cleanup enabled)"
     log "📁 Log: $LOGFILE"
     
-    stage_pre_cleanup # New: Ensure clean slate
+    stage_pre_cleanup # New: Ensure clean slate and wait for old pod deletion
 
     stage_wait_debug_pod
     sleep 3
