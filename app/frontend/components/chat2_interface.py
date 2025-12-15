@@ -52,7 +52,7 @@ def ping_backend_test(user_id: str):
         with st.spinner(f"Pinging backend at {ping_url}..."):
             start_time = time.time()
             # Send initial greeting via HTTP POST
-            resp = requests.post(f"{ping_url}/process_query", json=payload, timeout=15) 
+            resp = requests.post(f"{ping_url}/api/chat", json=payload, timeout=15) 
             end_time = time.time()
             resp.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
             
@@ -110,7 +110,7 @@ def send_query(user_input: str, selected_llm: str, search_enabled: bool):
         "user_id": st.session_state.get("username", "guest")
     }
     try:
-        resp = requests.post(f"{MQTT_URI}/process_query", json=payload, timeout=90)
+        resp = requests.post(f"{MQTT_URI}/api/chat", json=payload, timeout=90)
         resp.raise_for_status() 
         return resp.json().get("content", "Error: Backend returned an empty response.")
     except requests.exceptions.HTTPError as e:
