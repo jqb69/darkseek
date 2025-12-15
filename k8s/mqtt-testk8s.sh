@@ -19,6 +19,7 @@ exec &> >(tee -a "$LOGFILE")
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 cleanup_debug_pod() {
     log "🧹 AUTO CLEANUP: Removing $DEBUG_POD pod..."
+    # The --force --grace-period=0 ensures an immediate, aggressive removal
     kubectl delete pod "$DEBUG_POD" -n "$NAMESPACE" --ignore-not-found=true --force --grace-period=0 || true
     log "✅ Debug pod cleaned up"
 }
@@ -31,7 +32,19 @@ error_exit() {
 # Trap for ANY exit (success + error)
 trap cleanup_debug_pod EXIT
 
-# --- STAGES (unchanged perfection) ---
+# --- STAGE 0: IMMEDIATE PRE-CLEANUP (New) ---
+stage_pre_cleanup() {
+    log "🧼 STAGE 0: Pre-cleanup check for orphaned $DEBUG_POD..."
+    # Attempt to forcefully delete any existing pod with the same name
+    if kubectl get pod "$DEBUG_POD" -n "$NAMESPACE" &> /dev/null; then
+        log "⚠️ Found orphaned $DEBUG_POD. Deleting now to ensure a fresh start."
+        cleanup_debug_pod
+    else
+        log "✓ No orphaned $DEBUG_POD found."
+    fi
+}
+
+# --- STAGES (existing perfection) ---
 stage_wait_debug_pod() {
     log "⏳ STAGE 1: $DEBUG_POD (--namespace $NAMESPACE)..."
     for i in {1..60}; do
@@ -130,6 +143,8 @@ stage_frontend_status() {
 main() {
     log "🚀 DarkSeek Health: $BACKEND_NAME (Auto-cleanup enabled)"
     log "📁 Log: $LOGFILE"
+    
+    stage_pre_cleanup # New: Ensure clean slate
 
     stage_wait_debug_pod
     sleep 3
