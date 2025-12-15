@@ -565,7 +565,7 @@ check_pod_statuses
 
 log "Setting IPs..."
 WEBSOCKET_URI="wss://darkseek-backend-ws:8443/ws/"
-MQTT_URI="http://darkseek-backend-mqtt:8001"
+MQTT_URI="http://darkseek-backend-ws:8000"
 #WS_IP="" MQTT_IP=""
 #for i in {1..5}; do
 #  WS_IP=$(kubectl get service darkseek-backend-ws -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "pending")
@@ -580,7 +580,7 @@ MQTT_URI="http://darkseek-backend-mqtt:8001"
   
 #[ -z "$WS_IP" ] || [ "$WS_IP" = "pending" ] || [ -z "$MQTT_IP" ] || [ "$MQTT_IP" = "pending" ] && \
 #  echo "Warning: IPs not assigned." >&2
-  kubectl patch configmap darkseek-config -n "$NAMESPACE" -p "{\"data\":{\"WEBSOCKET_URI\":\"wss://darkseek-backend-ws:8443/ws/\",\"MQTT_URI\":\"http://darkseek-backend-mqtt:8001\"}}" || true
+  kubectl patch configmap darkseek-config -n "$NAMESPACE" -p "{\"data\":{\"WEBSOCKET_URI\":\"wss://darkseek-backend-ws:8443/ws/\",\"MQTT_URI\":\"http://darkseek-backend-ws:8000\"}}" || true
 
 log "Deployment complete. Services:"
 kubectl get services -n "$NAMESPACE" -o wide
