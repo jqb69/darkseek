@@ -6,6 +6,7 @@ set -euo pipefail
 
 NAMESPACE="default"
 BACKEND_NAME="darkseek-backend-mqtt"
+BACKEND_WS="darkseek-backend-ws"
 LOGFILE="/tmp/mqtt-test-$(date +%Y%m%d-%H%M%S).log"
 FRONTEND_IP=""
 DEBUG_POD="debug-mqtt"
@@ -44,6 +45,8 @@ stage_wait_debug_pod() {
 
 stage_mqtt_connectivity() {
     log "📡 STAGE 2: MQTT $BACKEND_NAME:1883..."
+    # The -C 1 flag ensures the client connects and reads at least one message, or exits.
+    # Since we are subscribing to '#' (all topics), success confirms broker connectivity.
     if timeout 85s kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
         mosquitto_sub -h "$BACKEND_NAME" -p 1883 -t "#" -v -C 1 --nodelay; then
         log "✅ MQTT 1883: Messages received"
@@ -53,41 +56,55 @@ stage_mqtt_connectivity() {
 }
 
 stage_http_health() {
-    log "🌐 STAGE 3: HTTP $BACKEND_NAME:8001/health..."
+    log "🌐 STAGE 3: HTTP $BACKEND_WS:8000/health..."
     
-    # NON-FATAL timeout - explicit check
+    # NON-FATAL timeout - explicit check for /health endpoint
     if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        wget -qO- --timeout=8 --spider http://"$BACKEND_NAME":8001/health 2>/dev/null; then
+        wget -qO- --timeout=8 --spider http://"$BACKEND_WS":8000/health 2>/dev/null; then
         log "✅ HTTP /health: 200 OK"
         return 0
     fi
     
+    # Fallback check for root endpoint
     if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        wget -qO- --timeout=8 --spider http://"$BACKEND_NAME":8001/ 2>/dev/null; then
+        wget -qO- --timeout=8 --spider http://"$BACKEND_WS":8000/ 2>/dev/null; then
         log "✅ HTTP root: 200 OK"
         return 0
     fi
     
-    # Both failed - log-based fallback (NO timeout here)
+    # Both failed - log-based fallback
     log "⚠️ Direct HTTP failed, checking logs..."
-    if kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=20 2>/dev/null | \
-        grep -qiE "uvicorn|fastapi|8001|listening"; then
+    if kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=20 2>/dev/null | \
+        grep -qiE "REST /api/chat\|Client connected"; then
         log "✅ Uvicorn HTTP confirmed in logs ✓"
     else
         log "❌ No HTTP server evidence found"
-        # DON'T exit here - continue to diagnostics
     fi
 }
 
 
 stage_backend_diagnostics() {
-    log "🔍 STAGE 4: $BACKEND_NAME diagnostics..."
-    local pods_running
-    pods_running=$(kubectl get pods -l app="$BACKEND_NAME" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
-    ((pods_running > 0)) || error_exit "$BACKEND_NAME pods not Running"
-    log "✓ $pods_running pods Running"
+    log "🔍 STAGE 4: Backend Service Diagnostics ($BACKEND_NAME & $BACKEND_WS)..."
+    
+    local mqtt_pods_running
+    # Check MQTT Pod Status
+    mqtt_pods_running=$(kubectl get pods -l app="$BACKEND_NAME" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
+    ((mqtt_pods_running > 0)) || error_exit "$BACKEND_NAME pods not Running"
+    log "✓ $BACKEND_NAME pods Running"
     kubectl get svc "$BACKEND_NAME" -n "$NAMESPACE" -o wide
-    kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=15 2>/dev/null || log "No logs"
+    
+    local ws_pods_running
+    # Check WS Pod Status
+    ws_pods_running=$(kubectl get pods -l app="$BACKEND_WS" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
+    ((ws_pods_running > 0)) || error_exit "$BACKEND_WS pods not Running"
+    log "✓ $BACKEND_WS pods Running"
+    kubectl get svc "$BACKEND_WS" -n "$NAMESPACE" -o wide
+    
+    log "--- $BACKEND_NAME (MQTT) Logs (Last 10) ---"
+    kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=10 2>/dev/null || log "No MQTT logs available"
+
+    log "--- $BACKEND_WS (WS) Logs (Last 10) ---"
+    kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=10 2>/dev/null || log "No WS logs available"
 }
 
 stage_frontend_status() {
@@ -110,7 +127,7 @@ main() {
     sleep 3
     stage_mqtt_connectivity
     stage_http_health
-    stage_backend_diagnostics
+    stage_backend_diagnostics # Now checks both WS and MQTT status/logs
     stage_frontend_status
     
     log "🎉 10/10 PERFECT PASS ✓"
