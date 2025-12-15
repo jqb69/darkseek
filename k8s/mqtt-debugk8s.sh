@@ -33,7 +33,7 @@ build_image() {
     log "Building $IMAGE"
     docker build -t "$IMAGE" - <<EOF
 FROM alpine:latest
-RUN apk add --no-cache mosquitto-clients bash coreutils moreutils
+RUN apk add --no-cache mosquitto-clients bash coreutils wget
 CMD ["sleep", "infinity"]
 EOF
 }
