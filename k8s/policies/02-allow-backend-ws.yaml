@@ -16,4 +16,4 @@ spec:
           app: darkseek-frontend
     ports:
     - protocol: TCP
-      port: 8443
+      port: 8000
