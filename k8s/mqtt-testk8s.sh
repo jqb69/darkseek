@@ -33,7 +33,7 @@ error_exit() {
 # Trap for ANY exit (success + error)
 trap cleanup_debug_pod EXIT
 
-# --- STAGE 0: IMMEDIATE PRE-CLEANUP (New) ---
+# --- STAGE 0: IMMEDIATE PRE-CLEANUP ---
 stage_pre_cleanup() {
     log "🧼 STAGE 0: Pre-cleanup check for orphaned $DEBUG_POD..."
     # Check if the pod exists
@@ -42,7 +42,7 @@ stage_pre_cleanup() {
         # Aggressive delete
         kubectl delete pod "$DEBUG_POD" -n "$NAMESPACE" --ignore-not-found=true --force --grace-period=0 || true
         
-        # New: Explicitly wait for the Kube API to confirm the pod is gone.
+        # Explicitly wait for the Kube API to confirm the pod is gone.
         log "⏳ Waiting for deletion confirmation (max 15s)..."
         for i in {1..15}; do
             if ! kubectl get pod "$DEBUG_POD" -n "$NAMESPACE" &> /dev/null; then
@@ -51,15 +51,29 @@ stage_pre_cleanup() {
             fi
             sleep 1
         done
-        log "⚠️ Pod deletion confirmation timeout (15s). Proceeding to wait for new pod."
+        log "⚠️ Pod deletion confirmation timeout (15s). Proceeding."
     else
         log "✓ No orphaned $DEBUG_POD found."
     fi
 }
 
-# --- STAGES (existing perfection) ---
+# --- STAGE 1: CREATE DEBUG POD (NEW) ---
+stage_create_debug_pod() {
+    log "➕ STAGE 1: Creating $DEBUG_POD pod..."
+    # NOTE: You must use an image that contains 'mosquitto_sub' and 'wget'.
+    # This example uses the image found in your previous logs.
+    kubectl run "$DEBUG_POD" \
+        --image="***-docker.pkg.dev/***/darkseek/debug-mqtt:latest" \
+        --restart=Never \
+        --rm=false \
+        --command -- sleep infinity
+    log "✓ $DEBUG_POD creation initiated."
+}
+
+
+# --- STAGE 2: WAIT FOR POD READY (Old Stage 1) ---
 stage_wait_debug_pod() {
-    log "⏳ STAGE 1: $DEBUG_POD (--namespace $NAMESPACE)..."
+    log "⏳ STAGE 2: Waiting for $DEBUG_POD to be ready..."
     for i in {1..60}; do
         # Use kubectl exec to check readiness (pod running + container ready)
         if timeout 5 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- true 2>/dev/null; then
@@ -70,11 +84,12 @@ stage_wait_debug_pod() {
         sleep 1
     done
     kubectl describe pod "$DEBUG_POD" -n "$NAMESPACE"
-    error_exit "debug-mqtt not ready"
+    error_exit "debug-mqtt not ready after 60s"
 }
 
+# --- STAGE 3: MQTT CONNECTIVITY (Old Stage 2) ---
 stage_mqtt_connectivity() {
-    log "📡 STAGE 2: MQTT $BACKEND_NAME:1883..."
+    log "📡 STAGE 3: MQTT $BACKEND_NAME:1883..."
     # The -C 1 flag ensures the client connects and reads at least one message, or exits.
     # Since we are subscribing to '#' (all topics), success confirms broker connectivity.
     if timeout 85s kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
@@ -85,8 +100,9 @@ stage_mqtt_connectivity() {
     fi
 }
 
+# --- STAGE 4: HTTP/WS HEALTH (Old Stage 3) ---
 stage_http_health() {
-    log "🌐 STAGE 3: HTTP $BACKEND_WS:8000/health..."
+    log "🌐 STAGE 4: HTTP $BACKEND_WS:8000/health..."
     
     # NON-FATAL timeout - explicit check for /health endpoint
     if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
@@ -118,8 +134,9 @@ stage_http_health() {
 }
 
 
+# --- STAGE 5: BACKEND DIAGNOSTICS (Old Stage 4) ---
 stage_backend_diagnostics() {
-    log "🔍 STAGE 4: Backend Service Diagnostics ($BACKEND_NAME & $BACKEND_WS)..."
+    log "🔍 STAGE 5: Backend Service Diagnostics ($BACKEND_NAME & $BACKEND_WS)..."
     
     local mqtt_pods_running
     # Check MQTT Pod Status
@@ -142,8 +159,9 @@ stage_backend_diagnostics() {
     kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=10 2>/dev/null || log "No WS logs available"
 }
 
+# --- STAGE 6: FRONTEND STATUS (Old Stage 5) ---
 stage_frontend_status() {
-    log "🏠 STAGE 5: Frontend IP..."
+    log "🏠 STAGE 6: Frontend IP..."
     FRONTEND_IP=$(kubectl get svc darkseek-frontend -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "PENDING")
     [[ "$FRONTEND_IP" == "PENDING" ]] && log "⏳ Frontend PENDING" || {
         echo ""
@@ -158,23 +176,24 @@ main() {
     log "🚀 DarkSeek Health: $BACKEND_NAME (Auto-cleanup enabled)"
     log "📁 Log: $LOGFILE"
     
-    stage_pre_cleanup # New: Ensure clean slate and wait for old pod deletion
-
-    stage_wait_debug_pod
+    stage_pre_cleanup # STAGE 0: Ensure clean slate and wait for old pod deletion
+    stage_create_debug_pod # STAGE 1: Create the new debug pod
+    
+    stage_wait_debug_pod # STAGE 2: Wait for the new pod to be ready
     sleep 3
-    stage_mqtt_connectivity
-    stage_http_health
+    stage_mqtt_connectivity # STAGE 3
+    stage_http_health # STAGE 4
     
     # Check status and perform fatal exit if needed, but only after diagnostics
     if [[ "$HTTP_SUCCESS" -eq 0 ]]; then
-        stage_backend_diagnostics # Run diagnostics to gather failure info
-        stage_frontend_status     # Gather final status
-        error_exit "HTTP/WS API facade ($BACKEND_WS:8000) is unreachable. See STAGE 4 logs for details."
+        stage_backend_diagnostics # STAGE 5: Run diagnostics to gather failure info
+        stage_frontend_status     # STAGE 6: Gather final status
+        error_exit "HTTP/WS API facade ($BACKEND_WS:8000) is unreachable. See STAGE 5 logs for details."
     fi
 
     # If successful, run remaining stages normally
-    stage_backend_diagnostics 
-    stage_frontend_status
+    stage_backend_diagnostics # STAGE 5
+    stage_frontend_status # STAGE 6
     
     log "🎉 10/10 PERFECT PASS ✓"
 }
