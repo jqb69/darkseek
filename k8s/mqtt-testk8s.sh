@@ -94,27 +94,23 @@ stage_http_health() {
 stage_backend_diagnostics() {
     log "🔍 STAGE 4: Backend Service Diagnostics ($BACKEND_NAME & $BACKEND_WS)..."
     
-    # Enhanced check: Show full service YAML to inspect ports, selectors, and Endpoints
     log "--- $BACKEND_WS Service Definition (YAML) ---"
     kubectl get svc "$BACKEND_WS" -n "$NAMESPACE" -o yaml
     log "--- $BACKEND_WS Service Description ---"
     kubectl describe svc "$BACKEND_WS" -n "$NAMESPACE"
 
     local mqtt_pods_running
-    # Check MQTT Pod Status (Foundation)
     mqtt_pods_running=$(kubectl get pods -l app="$BACKEND_NAME" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
     ((mqtt_pods_running > 0)) || error_exit "$BACKEND_NAME pods not Running"
     log "✓ $BACKEND_NAME pods Running: $mqtt_pods_running"
     kubectl get svc "$BACKEND_NAME" -n "$NAMESPACE" -o wide
     
     local ws_pods_running
-    # Check WS Pod Status
     ws_pods_running=$(kubectl get pods -l app="$BACKEND_WS" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
     log "✓ $BACKEND_WS pods Running: $ws_pods_running"
     ((ws_pods_running > 0)) || log "⚠️ WARNING: $BACKEND_WS pods are not Running."
     kubectl get svc "$BACKEND_WS" -n "$NAMESPACE" -o wide 
     
-    # Increased tail for better crash investigation
     log "--- $BACKEND_WS (WS API) Logs (Last 20) ---"
     kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No WS logs available"
 
@@ -122,8 +118,9 @@ stage_backend_diagnostics() {
     kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No MQTT logs available"
 
     log "--- All Relevant Pods Overview ---"
-    kubectl get pods -n "$NAMESPACE" -l app in ($BACKEND_WS,$BACKEND_NAME) --show-labels
+    kubectl get pods -n "$NAMESPACE" -l "app in ($BACKEND_WS,$BACKEND_NAME)" --show-labels
 }
+
 
 # --- STAGE 5: FRONTEND STATUS ---
 stage_frontend_status() {
