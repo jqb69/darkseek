@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-debug-to-backend
+  namespace: default
+spec:
+  # This policy applies to all pods that match this selector.
+  # If empty, it applies to ALL pods in the namespace. Since the debug-mqtt
+  # pod has no custom labels, applying it to all pods is the safest way
+  # to grant the debug-mqtt pod the required egress.
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Rule 1: Allow communication to the darkseek-backend-ws pods on port 8000 (HTTP/WS)
+    - to:
+      - podSelector:
+          matchLabels:
+            app: darkseek-backend-ws
+      ports:
+      - protocol: TCP
+        port: 8000
+    # Rule 2: Allow communication to the darkseek-backend-mqtt pods on port 1883 (MQTT)
+    - to:
+      - podSelector:
+          matchLabels:
+            app: darkseek-backend-mqtt
+      ports:
+      - protocol: TCP
+        port: 1883
