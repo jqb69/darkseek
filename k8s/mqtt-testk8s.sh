@@ -1,6 +1,6 @@
 #!/bin/bash
 # k8s/mqtt-testk8s.sh — Frank Aigrillo 10/10 + AUTO CLEANUP ON ERROR
-# Removes debug-mqtt pod on ANY failure
+# Implements unique pod naming to prevent deletion conflicts.
 
 set -euo pipefail
 
@@ -9,7 +9,11 @@ BACKEND_NAME="darkseek-backend-mqtt"
 BACKEND_WS="darkseek-backend-ws"
 LOGFILE="/tmp/mqtt-test-$(date +%Y%m%d-%H%M%S).log"
 FRONTEND_IP=""
-DEBUG_POD="debug-mqtt"
+
+# Unique ID based on timestamp for this run's specific pod
+POD_SUFFIX=$(date +%s) 
+DEBUG_POD_PREFIX="debug-mqtt" # Base name for labeling
+DEBUG_POD_NAME="${DEBUG_POD_PREFIX}-${POD_SUFFIX}" # Unique pod name for this run
 
 # Global status variable to track HTTP health: 1 = Success, 0 = Failure
 HTTP_SUCCESS=0 
@@ -17,13 +21,14 @@ HTTP_SUCCESS=0
 exec &> >(tee -a "$LOGFILE")
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
+
 cleanup_debug_pod() {
-    log "🧹 AUTO CLEANUP: Removing $DEBUG_POD pod..."
-    # The --force --grace-period=0 ensures an immediate, aggressive removal
-    # We ignore errors here in case the pod is already gone when the trap fires.
-    kubectl delete pod "$DEBUG_POD" -n "$NAMESPACE" --ignore-not-found=true --force --grace-period=0 || true
-    log "✅ Debug pod cleaned up"
+    log "🧹 AUTO CLEANUP: Removing current test pod $DEBUG_POD_NAME..."
+    # Only delete the uniquely named pod created by this specific script run
+    kubectl delete pod "$DEBUG_POD_NAME" -n "$NAMESPACE" --ignore-not-found=true --force --grace-period=0 || true
+    log "✅ Pod cleaned up"
 }
+
 error_exit() {
     log "❌ FATAL: $*" >&2
     cleanup_debug_pod
@@ -33,66 +38,71 @@ error_exit() {
 # Trap for ANY exit (success + error)
 trap cleanup_debug_pod EXIT
 
-# --- STAGE 0: IMMEDIATE PRE-CLEANUP ---
+# --- STAGE 0: IMMEDIATE PRE-CLEANUP (Intelligent Deletion) ---
 stage_pre_cleanup() {
-    log "🧼 STAGE 0: Pre-cleanup check for orphaned $DEBUG_POD..."
-    # Check if the pod exists
-    if kubectl get pod "$DEBUG_POD" -n "$NAMESPACE" &> /dev/null; then
-        log "⚠️ Found orphaned $DEBUG_POD. Deleting now to ensure a fresh start."
-        # Aggressive delete
-        kubectl delete pod "$DEBUG_POD" -n "$NAMESPACE" --ignore-not-found=true --force --grace-period=0 || true
+    log "🧼 STAGE 0: Pre-cleanup check for orphaned $DEBUG_POD_PREFIX pods..."
+    
+    # Select all pods with the common app label, but EXCLUDE the one we are about to create in this run.
+    local stale_pods
+    stale_pods=$(kubectl get pods -n "$NAMESPACE" -l "app=$DEBUG_POD_PREFIX,test-id!=$POD_SUFFIX" -o name 2>/dev/null)
+
+    if [ -n "$stale_pods" ]; then
+        log "⚠️ Found orphaned pods. Deleting: $stale_pods"
+        # Aggressive delete of all stale pods
+        echo "$stale_pods" | xargs -r kubectl delete -n "$NAMESPACE" --force --grace-period=0
         
-        # Explicitly wait for the Kube API to confirm the pod is gone.
+        # Explicitly wait for the Kube API to confirm deletion
         log "⏳ Waiting for deletion confirmation (max 15s)..."
         for i in {1..15}; do
-            if ! kubectl get pod "$DEBUG_POD" -n "$NAMESPACE" &> /dev/null; then
-                log "✓ Pod confirmed fully terminated ($i s)"
+            # Check if any of the stale pods are still found
+            if ! kubectl get pods -n "$NAMESPACE" -l "app=$DEBUG_POD_PREFIX,test-id!=$POD_SUFFIX" -o name &> /dev/null; then
+                log "✓ Stale pods confirmed fully terminated ($i s)"
                 return 0
             fi
             sleep 1
         done
-        log "⚠️ Pod deletion confirmation timeout (15s). Proceeding."
+        log "⚠️ Stale pod deletion confirmation timeout (15s). Proceeding."
     else
-        log "✓ No orphaned $DEBUG_POD found."
+        log "✓ No orphaned debug-mqtt pods found."
     fi
 }
 
-# --- STAGE 1: CREATE DEBUG POD (NEW) ---
+# --- STAGE 1: CREATE DEBUG POD ---
 stage_create_debug_pod() {
-    log "➕ STAGE 1: Creating $DEBUG_POD pod..."
-    # NOTE: You must use an image that contains 'mosquitto_sub' and 'wget'.
-    # This example uses the image found in your previous logs.
-    kubectl run "$DEBUG_POD" \
+    log "➕ STAGE 1: Creating $DEBUG_POD_NAME pod..."
+    # Create the pod with a unique name and labels for identification/cleanup.
+    kubectl run "$DEBUG_POD_NAME" \
         --image="***-docker.pkg.dev/***/darkseek/debug-mqtt:latest" \
         --restart=Never \
         --rm=false \
+        --labels="app=$DEBUG_POD_PREFIX,test-id=$POD_SUFFIX" \
         --command -- sleep infinity
-    log "✓ $DEBUG_POD creation initiated."
+    log "✓ $DEBUG_POD_NAME creation initiated."
 }
 
 
-# --- STAGE 2: WAIT FOR POD READY (Old Stage 1) ---
+# --- STAGE 2: WAIT FOR POD READY ---
 stage_wait_debug_pod() {
-    log "⏳ STAGE 2: Waiting for $DEBUG_POD to be ready..."
+    log "⏳ STAGE 2: Waiting for $DEBUG_POD_NAME to be ready..."
     for i in {1..60}; do
         # Use kubectl exec to check readiness (pod running + container ready)
-        if timeout 5 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- true 2>/dev/null; then
+        if timeout 5 kubectl exec "$DEBUG_POD_NAME" -n "$NAMESPACE" -- true 2>/dev/null; then
             log "✓ Debug pod ready ($i s)"
             return 0
         fi
         ((i % 10 == 0)) && log "Waiting... ($i/60s)"
         sleep 1
     done
-    kubectl describe pod "$DEBUG_POD" -n "$NAMESPACE"
-    error_exit "debug-mqtt not ready after 60s"
+    kubectl describe pod "$DEBUG_POD_NAME" -n "$NAMESPACE"
+    error_exit "$DEBUG_POD_NAME not ready after 60s"
 }
 
-# --- STAGE 3: MQTT CONNECTIVITY (Old Stage 2) ---
+# --- STAGE 3: MQTT CONNECTIVITY ---
 stage_mqtt_connectivity() {
     log "📡 STAGE 3: MQTT $BACKEND_NAME:1883..."
     # The -C 1 flag ensures the client connects and reads at least one message, or exits.
     # Since we are subscribing to '#' (all topics), success confirms broker connectivity.
-    if timeout 85s kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+    if timeout 85s kubectl exec "$DEBUG_POD_NAME" -n "$NAMESPACE" -- \
         mosquitto_sub -h "$BACKEND_NAME" -p 1883 -t "#" -v -C 1 --nodelay; then
         log "✅ MQTT 1883: Messages received"
     else
@@ -100,12 +110,12 @@ stage_mqtt_connectivity() {
     fi
 }
 
-# --- STAGE 4: HTTP/WS HEALTH (Old Stage 3) ---
+# --- STAGE 4: HTTP/WS HEALTH ---
 stage_http_health() {
     log "🌐 STAGE 4: HTTP $BACKEND_WS:8000/health..."
     
     # NON-FATAL timeout - explicit check for /health endpoint
-    if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+    if timeout 10 kubectl exec "$DEBUG_POD_NAME" -n "$NAMESPACE" -- \
         wget -qO- --timeout=8 --spider http://"$BACKEND_WS":8000/health 2>/dev/null; then
         log "✅ HTTP /health: 200 OK"
         HTTP_SUCCESS=1 # Set global success status
@@ -113,7 +123,7 @@ stage_http_health() {
     fi
     
     # Fallback check for root endpoint
-    if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+    if timeout 10 kubectl exec "$DEBUG_POD_NAME" -n "$NAMESPACE" -- \
         wget -qO- --timeout=8 --spider http://"$BACKEND_WS":8000/ 2>/dev/null; then
         log "✅ HTTP root: 200 OK"
         HTTP_SUCCESS=1 # Set global success status
@@ -134,7 +144,7 @@ stage_http_health() {
 }
 
 
-# --- STAGE 5: BACKEND DIAGNOSTICS (Old Stage 4) ---
+# --- STAGE 5: BACKEND DIAGNOSTICS ---
 stage_backend_diagnostics() {
     log "🔍 STAGE 5: Backend Service Diagnostics ($BACKEND_NAME & $BACKEND_WS)..."
     
@@ -159,7 +169,7 @@ stage_backend_diagnostics() {
     kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=10 2>/dev/null || log "No WS logs available"
 }
 
-# --- STAGE 6: FRONTEND STATUS (Old Stage 5) ---
+# --- STAGE 6: FRONTEND STATUS ---
 stage_frontend_status() {
     log "🏠 STAGE 6: Frontend IP..."
     FRONTEND_IP=$(kubectl get svc darkseek-frontend -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "PENDING")
@@ -176,13 +186,13 @@ main() {
     log "🚀 DarkSeek Health: $BACKEND_NAME (Auto-cleanup enabled)"
     log "📁 Log: $LOGFILE"
     
-    stage_pre_cleanup # STAGE 0: Ensure clean slate and wait for old pod deletion
-    stage_create_debug_pod # STAGE 1: Create the new debug pod
+    stage_pre_cleanup     # STAGE 0: Only delete old, orphaned pods.
+    stage_create_debug_pod # STAGE 1: Create the new, uniquely named debug pod.
     
-    stage_wait_debug_pod # STAGE 2: Wait for the new pod to be ready
+    stage_wait_debug_pod   # STAGE 2: Wait for the new pod to be ready.
     sleep 3
     stage_mqtt_connectivity # STAGE 3
-    stage_http_health # STAGE 4
+    stage_http_health       # STAGE 4
     
     # Check status and perform fatal exit if needed, but only after diagnostics
     if [[ "$HTTP_SUCCESS" -eq 0 ]]; then
@@ -193,7 +203,7 @@ main() {
 
     # If successful, run remaining stages normally
     stage_backend_diagnostics # STAGE 5
-    stage_frontend_status # STAGE 6
+    stage_frontend_status     # STAGE 6
     
     log "🎉 10/10 PERFECT PASS ✓"
 }
