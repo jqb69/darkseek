@@ -56,10 +56,30 @@ stage_mqtt_connectivity() {
 }
 
 # Helper function to execute wget inside the debug pod and check its exit code
+# Returns 0 on success (HTTP 2xx or 3xx) and 1 on failure, logging the reason.
 check_http() {
-    # The return status of this block is the return status of kubectl exec...
-    kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-    wget -qO- --timeout=8 --spider "http://$BACKEND_WS:8000/$1" 2>/dev/null
+    local endpoint="$1"
+    local url="http://$BACKEND_WS:8000/$endpoint"
+    
+    # Execute kubectl exec with wget, suppressing all output.
+    # The 'if' block checks the return status of the entire kubectl exec command.
+    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+        wget -qO- --timeout=8 --spider "$url" 2>/dev/null; then
+        return 0 # Success
+    else
+        # If the kubectl exec block failed (non-zero exit status)
+        local status=$?
+        
+        # Log failure reason explicitly (as requested by GPT-4 output check)
+        if [[ "$status" -eq 4 ]]; then
+            log "DEBUG: 🛑 Failed to reach $url. wget status: $status (Network error/Timeout)"
+        elif [[ "$status" -eq 8 ]]; then
+            log "DEBUG: 🛑 Failed to reach $url. wget status: $status (Server error/Bad URL)"
+        else
+            log "DEBUG: 🛑 Failed to reach $url. Exit status: $status (Potential connectivity failure)"
+        fi
+        return 1 # Failure
+    fi
 }
 
 
