@@ -6,41 +6,38 @@ metadata:
   name: allow-debug-to-backend
   namespace: default
 spec:
-  # This policy applies to all pods with no labels (including debug-mqtt).
   podSelector:
     matchLabels:
-      app: debug-mqtt  # ← TARGET YOUR SPY
+      app: debug-mqtt
   policyTypes:
-    - Egress
+  - Egress
   egress:
-    # RULE 1 (FIX): Allow DNS resolution to the kube-system namespace on port 53 (UDP/TCP).
-    - to:
-      - namespaceSelector:
-          matchLabels:
-            kubernetes.io/metadata.name: kube-system # Target the kube-system namespace
-        podSelector:
-          matchLabels:
-            k8s-app: kube-dns # Target the DNS pods (e.g., CoreDNS)
-      ports:
-      - protocol: UDP
-        port: 53
-      - protocol: TCP # Required for large DNS responses
-        port: 53
-        
-    # RULE 2: Allow communication to the darkseek-backend-ws pods on port 8000 (HTTP/WS)
-    - to:
-      - podSelector:
-          matchLabels:
-            app: darkseek-backend-ws
-      ports:
-      - protocol: TCP
-        port: 8000
-        
-    # RULE 3: Allow communication to the darkseek-backend-mqtt pods on port 1883 (MQTT)
-    - to:
-      - podSelector:
-          matchLabels:
-            app: darkseek-backend-mqtt
-      ports:
-      - protocol: TCP
-        port: 1883
+  # DNS FIX: GKE Autopilot CoreDNS label
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: coredns  # ← GKE REAL label (NOT kube-dns)
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # WS Backend HTTP
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darkseek-backend-ws
+    ports:
+    - protocol: TCP
+      port: 8000
+  # MQTT Backend  
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darkseek-backend-mqtt
+    ports:
+    - protocol: TCP
+      port: 1883
