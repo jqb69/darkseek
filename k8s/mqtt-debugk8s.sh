@@ -5,12 +5,14 @@ set -euo pipefail
 
 DEBUG_MODE=false
 while getopts "d" opt; do
-    case "$opt" in
-        d) DEBUG_MODE=true ;;
-        *) echo "Usage: $0 [-d]  # -d = debug mode (no nuke, keep existing pod)" >&2; exit 1 ;;
-    esac
+    case "$opt" in
+        d) DEBUG_MODE=true ;;
+        *) 
+            echo "Usage: $0 [-d]  # -d = debug mode (no nuke, keep existing pod)" >&2
+            exit 1 
+            ;;
+    esac
 done
-
 # --- ERROR HANDLING (NO CLEANUP) ---
 # cleanup_debug_pod and trap ERR removed. The Eternal Spy MUST survive errors.
 error_exit() {
