@@ -50,38 +50,39 @@ EOF
 }
 
 push_image() {
-    log "Pushing $IMAGE"
-    # Use error_exit here to exit cleanly on push failure
-    docker push "$IMAGE" || error_exit "Docker push failed"
+    log "Pushing $IMAGE"
+    # Use error_exit here to exit cleanly on push failure
+    docker push "$IMAGE" || error_exit "Docker push failed"
 }
 
 check_existing_pod() {
-    if kubectl get pod debug-mqtt >/dev/null 2>&1; then
-        log "Existing immortal debug-mqtt pod detected — leaving untouched"
-        return 0
-    else
-        log "No existing debug-mqtt pod found — deploying fresh"
-        return 1
-    fi
+    if kubectl get pod debug-mqtt >/dev/null 2>&1; then
+        log "Existing immortal debug-mqtt pod detected — leaving untouched"
+        return 0
+    else
+        log "No existing debug-mqtt pod found — deploying fresh"
+        return 1
+    fi
 }
 
+
 nuke_and_deploy() {
-    if $DEBUG_MODE; then
-        check_existing_pod && return 0
-        log "DEBUG MODE: deploying fresh pod (no nuke)"
-    else
-        log "PRODUCTION MODE: safe, Autopilot-compliant pod replacement"
-        # Nuke the old pod to ensure a clean replacement
-        kubectl delete pod debug-mqtt --force --grace-period=0 --wait=false || true
-        sleep 8   # This is the magic — gives Autopilot time to clean veth ghosts
-    fi
+    if [[ $DEBUG_MODE == true ]]; then
+        check_existing_pod && return 0
+        log "DEBUG MODE: deploying fresh pod (no nuke)"
+    else
+        log "PRODUCTION MODE: safe, Autopilot-compliant pod replacement"
+        # Nuke the old pod to ensure a clean replacement
+        kubectl delete pod debug-mqtt --force --grace-period=0 --wait=false || true
+        sleep 8   # This is the magic — gives Autopilot time to clean veth ghosts
+    fi
 
-    # If pod still exists (rare race), skip deploy
-    check_existing_pod && return 0
+    # If pod still exists (rare race), skip deploy
+    check_existing_pod && return 0
 
-    log "Deploying immortal spy pod..."
-    # Use error_exit if replace fails
-    kubectl replace --force -f - <<EOF || error_exit "Kubectl deployment failed"
+    log "Deploying immortal spy pod..."
+    # Use error_exit if replace fails
+    kubectl replace --force -f - <<EOF || error_exit "Kubectl deployment failed"
 apiVersion: v1
 kind: Pod
 metadata:
@@ -105,19 +106,24 @@ spec:
 EOF
 }
 
+
 verify_pod() {
-    log "Verifying debug-mqtt pod is Running..."
-    for i in {1..39}; do
-        phase=$(kubectl get pod debug-mqtt -o jsonpath='{.status.phase}' 2>/dev/null || echo "Missing")
-        [[ "$phase" == "Running" ]] && { log "POD IS RUNNING — SPY IS ALIVE"; return 0; }
-        log "Pod phase: $phase — waiting... ($i/39)"
-        sleep 2
-    done
-    log "❌ ERROR: debug-mqtt pod failed to reach Running state"
-    kubectl describe pod debug-mqtt
+    log "Verifying debug-mqtt pod is Running..."
+    for i in {1..39}; do
+        phase=$(kubectl get pod debug-mqtt -o jsonpath='{.status.phase}' 2>/dev/null || echo "Missing")
+        if [[ "$phase" == "Running" ]]; then
+            log "POD IS RUNNING — SPY IS ALIVE"
+            return 0
+        fi
+        log "Pod phase: $phase — waiting... ($i/39)"
+        sleep 2
+    done
+    log "❌ ERROR: debug-mqtt pod failed to reach Running state"
+    kubectl describe pod debug-mqtt
     log "⚠️ Spy deployment failed. Pod is left running for manual debugging. Do NOT run cleanup."
-    exit 1 # Exit 1 without cleanup (cleanup trap removed)
+    exit 1 # Exit 1 without cleanup (cleanup trap removed)
 }
+
 
 # === EXECUTION ===
 build_image
