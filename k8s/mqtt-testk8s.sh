@@ -1,6 +1,6 @@
 #!/bin/bash
-# k8s/mqtt-testk8s.sh — NON-DESTRUCTIVE MONITOR (FIXED STAGE 4 LABEL SELECTOR)
-# Replaced the fragile set-based label selector with two robust equality selectors.
+# k8s/mqtt-testk8s.sh — NON-DESTRUCTIVE MONITOR (ADDED NETWORK DIAGNOSTICS)
+# Implemented explicit raw connectivity checks (nc, nslookup) in STAGE 3 to confirm NetworkPolicy issue.
 
 set -euo pipefail
 
@@ -62,7 +62,6 @@ check_http() {
     local url="http://$BACKEND_WS:8000/$endpoint"
     
     # Execute kubectl exec with wget, suppressing all output.
-    # The 'if' block checks the return status of the entire kubectl exec command.
     if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
         wget -qO- --timeout=8 --spider "$url" 2>/dev/null; then
         return 0 # Success
@@ -70,7 +69,7 @@ check_http() {
         # If the kubectl exec block failed (non-zero exit status)
         local status=$?
         
-        # Log failure reason explicitly (as requested by GPT-4 output check)
+        # Log failure reason explicitly 
         if [[ "$status" -eq 4 ]]; then
             log "DEBUG: 🛑 Failed to reach $url. wget status: $status (Network error/Timeout)"
         elif [[ "$status" -eq 8 ]]; then
@@ -79,29 +78,38 @@ check_http() {
             log "DEBUG: 🛑 Failed to reach $url. Exit status: $status (Potential connectivity failure)"
         fi
         return 1 # Failure
-    fi
+    }
 }
-
 
 # --- STAGE 3: HTTP/WS HEALTH (REFACTORED) ---
 stage_http_health() {
     log "🌐 STAGE 3: HTTP $BACKEND_WS:8000/health..."
     
-    # 1. Try health endpoint
-    if timeout 10 check_http "health"; then
+    # 1. Raw connectivity checks (New diagnostics)
+    log "--- STAGE 3.1: Raw Connectivity Checks ---"
+    log "🔎 DNS Test: nslookup $BACKEND_WS"
+    kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nslookup "$BACKEND_WS" || log "❌ DNS resolution failed!"
+
+    log "🔎 TCP Test: nc -zv $BACKEND_WS 8000"
+    # Using 'nc -zv' to check raw TCP connectivity. Exit code 0 means connection succeeded.
+    kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv "$BACKEND_WS" 8000 2>&1 || log "❌ TCP connection failed! (Possible NetworkPolicy issue)"
+    log "--- End Raw Connectivity Checks ---"
+    
+    # 2. Try health endpoint (Original functionality)
+    if check_http "health"; then
         log "✅ HTTP /health: 200 OK"
         HTTP_SUCCESS=1
         return 0
     fi
 
-    # 2. Try root endpoint
-    if timeout 10 check_http ""; then
+    # 3. Try root endpoint
+    if check_http ""; then
         log "✅ HTTP root: 200 OK"
         HTTP_SUCCESS=1
         return 0
     fi
     
-    # 3. Both failed - log-based fallback
+    # 4. Both failed - log-based fallback
     log "⚠️ Direct HTTP failed, checking logs..."
     if kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=20 2>/dev/null | \
         # Check for Uvicorn startup confirmation for better reliability
