@@ -1,6 +1,6 @@
 #!/bin/bash
-# k8s/mqtt-testk8s.sh — NON-DESTRUCTIVE MONITOR
-# Assumes the 'debug-mqtt' pod is created and managed externally (e.g., by k8s/mqtt-debugk8s.sh).
+# k8s/mqtt-testk8s.sh — NON-DESTRUCTIVE MONITOR (ENHANCED DIAGNOSTICS)
+# Performs health checks and executes detailed K8s diagnostics on HTTP failure.
 # This script performs health checks ONLY and does not modify any resources.
 
 set -euo pipefail
@@ -21,8 +21,7 @@ exec &> >(tee -a "$LOGFILE")
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
-# The cleanup_debug_pod function and its trap are explicitly REMOVED.
-# This makes the script non-destructive.
+# No cleanup trap or function, as this is a non-destructive monitor.
 
 error_exit() {
     log "❌ FATAL: $*" >&2
@@ -91,29 +90,39 @@ stage_http_health() {
 }
 
 
-# --- STAGE 4: BACKEND DIAGNOSTICS ---
+# --- STAGE 4: BACKEND DIAGNOSTICS (ENHANCED) ---
 stage_backend_diagnostics() {
     log "🔍 STAGE 4: Backend Service Diagnostics ($BACKEND_NAME & $BACKEND_WS)..."
     
+    # Enhanced check: Show full service YAML to inspect ports, selectors, and Endpoints
+    log "--- $BACKEND_WS Service Definition (YAML) ---"
+    kubectl get svc "$BACKEND_WS" -n "$NAMESPACE" -o yaml
+    log "--- $BACKEND_WS Service Description ---"
+    kubectl describe svc "$BACKEND_WS" -n "$NAMESPACE"
+
     local mqtt_pods_running
-    # Check MQTT Pod Status
+    # Check MQTT Pod Status (Foundation)
     mqtt_pods_running=$(kubectl get pods -l app="$BACKEND_NAME" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
     ((mqtt_pods_running > 0)) || error_exit "$BACKEND_NAME pods not Running"
-    log "✓ $BACKEND_NAME pods Running"
+    log "✓ $BACKEND_NAME pods Running: $mqtt_pods_running"
     kubectl get svc "$BACKEND_NAME" -n "$NAMESPACE" -o wide
     
     local ws_pods_running
     # Check WS Pod Status
     ws_pods_running=$(kubectl get pods -l app="$BACKEND_WS" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
-    ((ws_pods_running > 0)) || error_exit "$BACKEND_WS pods not Running"
-    log "✓ $BACKEND_WS pods Running"
-    kubectl get svc "$BACKEND_WS" -n "$NAMESPACE" -o wide
+    log "✓ $BACKEND_WS pods Running: $ws_pods_running"
+    ((ws_pods_running > 0)) || log "⚠️ WARNING: $BACKEND_WS pods are not Running."
+    kubectl get svc "$BACKEND_WS" -n "$NAMESPACE" -o wide 
     
-    log "--- $BACKEND_NAME (MQTT) Logs (Last 10) ---"
-    kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=10 2>/dev/null || log "No MQTT logs available"
+    # Increased tail for better crash investigation
+    log "--- $BACKEND_WS (WS API) Logs (Last 20) ---"
+    kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No WS logs available"
 
-    log "--- $BACKEND_WS (WS) Logs (Last 10) ---"
-    kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=10 2>/dev/null || log "No WS logs available"
+    log "--- $BACKEND_NAME (MQTT) Logs (Last 20) ---"
+    kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No MQTT logs available"
+
+    log "--- All Relevant Pods Overview ---"
+    kubectl get pods -n "$NAMESPACE" -l app in ($BACKEND_WS,$BACKEND_NAME) --show-labels
 }
 
 # --- STAGE 5: FRONTEND STATUS ---
@@ -133,16 +142,16 @@ main() {
     log "🚀 DarkSeek Health: $BACKEND_NAME (Non-destructive Monitor)"
     log "📁 Log: $LOGFILE"
     
-    stage_wait_debug_pod   # STAGE 1: Wait for the external pod to be ready.
+    stage_wait_debug_pod   # STAGE 1
     sleep 3
     stage_mqtt_connectivity # STAGE 2
     stage_http_health       # STAGE 3
     
-    # Check status and perform fatal exit if needed, but only after diagnostics
+    # Check status and perform fatal exit after diagnostics if HTTP failed
     if [[ "$HTTP_SUCCESS" -eq 0 ]]; then
         stage_backend_diagnostics # STAGE 4: Run diagnostics to gather failure info
         stage_frontend_status     # STAGE 5: Gather final status
-        error_exit "HTTP/WS API facade ($BACKEND_WS:8000) is unreachable. See STAGE 4 logs for details."
+        error_exit "HTTP/WS API facade ($BACKEND_WS:8000) is unreachable. See STAGE 4 logs (YAML, Describe, Pod Status) for details."
     fi
 
     # If successful, run remaining stages normally
