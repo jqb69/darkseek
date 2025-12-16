@@ -1,7 +1,6 @@
 #!/bin/bash
-# k8s/mqtt-testk8s.sh — NON-DESTRUCTIVE MONITOR (ENHANCED DIAGNOSTICS)
-# Performs health checks and executes detailed K8s diagnostics on HTTP failure.
-# This script performs health checks ONLY and does not modify any resources.
+# k8s/mqtt-testk8s.sh — NON-DESTRUCTIVE MONITOR (FIXED STAGE 4 LABEL SELECTOR)
+# Replaced the fragile set-based label selector with two robust equality selectors.
 
 set -euo pipefail
 
@@ -56,27 +55,33 @@ stage_mqtt_connectivity() {
     fi
 }
 
-# --- STAGE 3: HTTP/WS HEALTH ---
+# Helper function to execute wget inside the debug pod and check its exit code
+check_http() {
+    # The return status of this block is the return status of kubectl exec...
+    kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+    wget -qO- --timeout=8 --spider "http://$BACKEND_WS:8000/$1" 2>/dev/null
+}
+
+
+# --- STAGE 3: HTTP/WS HEALTH (REFACTORED) ---
 stage_http_health() {
     log "🌐 STAGE 3: HTTP $BACKEND_WS:8000/health..."
     
-    # NON-FATAL timeout - explicit check for /health endpoint
-    if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        wget -qO- --timeout=8 --spider http://"$BACKEND_WS":8000/health 2>/dev/null; then
+    # 1. Try health endpoint
+    if timeout 10 check_http "health"; then
         log "✅ HTTP /health: 200 OK"
-        HTTP_SUCCESS=1 # Set global success status
+        HTTP_SUCCESS=1
         return 0
     fi
-    
-    # Fallback check for root endpoint
-    if timeout 10 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        wget -qO- --timeout=8 --spider http://"$BACKEND_WS":8000/ 2>/dev/null; then
+
+    # 2. Try root endpoint
+    if timeout 10 check_http ""; then
         log "✅ HTTP root: 200 OK"
-        HTTP_SUCCESS=1 # Set global success status
+        HTTP_SUCCESS=1
         return 0
     fi
     
-    # Both failed - log-based fallback
+    # 3. Both failed - log-based fallback
     log "⚠️ Direct HTTP failed, checking logs..."
     if kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=20 2>/dev/null | \
         # Check for Uvicorn startup confirmation for better reliability
@@ -94,33 +99,40 @@ stage_http_health() {
 stage_backend_diagnostics() {
     log "🔍 STAGE 4: Backend Service Diagnostics ($BACKEND_NAME & $BACKEND_WS)..."
     
+    # Enhanced check: Show full service YAML to inspect ports, selectors, and Endpoints
     log "--- $BACKEND_WS Service Definition (YAML) ---"
     kubectl get svc "$BACKEND_WS" -n "$NAMESPACE" -o yaml
     log "--- $BACKEND_WS Service Description ---"
     kubectl describe svc "$BACKEND_WS" -n "$NAMESPACE"
 
     local mqtt_pods_running
+    # Check MQTT Pod Status (Foundation)
     mqtt_pods_running=$(kubectl get pods -l app="$BACKEND_NAME" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
     ((mqtt_pods_running > 0)) || error_exit "$BACKEND_NAME pods not Running"
     log "✓ $BACKEND_NAME pods Running: $mqtt_pods_running"
     kubectl get svc "$BACKEND_NAME" -n "$NAMESPACE" -o wide
     
     local ws_pods_running
+    # Check WS Pod Status
     ws_pods_running=$(kubectl get pods -l app="$BACKEND_WS" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
     log "✓ $BACKEND_WS pods Running: $ws_pods_running"
     ((ws_pods_running > 0)) || log "⚠️ WARNING: $BACKEND_WS pods are not Running."
     kubectl get svc "$BACKEND_WS" -n "$NAMESPACE" -o wide 
     
+    # Increased tail for better crash investigation
     log "--- $BACKEND_WS (WS API) Logs (Last 20) ---"
     kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No WS logs available"
 
     log "--- $BACKEND_NAME (MQTT) Logs (Last 20) ---"
     kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No MQTT logs available"
 
+    # FIXED: Replaced brittle set-based selector with two simple equality selectors.
     log "--- All Relevant Pods Overview ---"
-    kubectl get pods -n "$NAMESPACE" -l "app in ($BACKEND_WS,$BACKEND_NAME)" --show-labels
+    log "--- WS Backend Pods ---"
+    kubectl get pods -n "$NAMESPACE" -l app="$BACKEND_WS" --show-labels
+    log "--- MQTT Backend Pods ---"
+    kubectl get pods -n "$NAMESPACE" -l app="$BACKEND_NAME" --show-labels
 }
-
 
 # --- STAGE 5: FRONTEND STATUS ---
 stage_frontend_status() {
