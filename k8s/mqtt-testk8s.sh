@@ -78,7 +78,7 @@ check_http() {
             log "DEBUG: 🛑 Failed to reach $url. Exit status: $status (Potential connectivity failure)"
         fi
         return 1 # Failure
-    }
+    fi
 }
 
 # --- STAGE 3: HTTP/WS HEALTH (REFACTORED) ---
