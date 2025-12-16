@@ -1,18 +1,31 @@
+---
+# k8s/policies/07-allow-debug-to-backend.yaml.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-debug-to-backend
   namespace: default
 spec:
-  # This policy applies to all pods that match this selector.
-  # If empty, it applies to ALL pods in the namespace. Since the debug-mqtt
-  # pod has no custom labels, applying it to all pods is the safest way
-  # to grant the debug-mqtt pod the required egress.
+  # This policy applies to all pods with no labels (including debug-mqtt).
   podSelector: {}
   policyTypes:
     - Egress
   egress:
-    # Rule 1: Allow communication to the darkseek-backend-ws pods on port 8000 (HTTP/WS)
+    # RULE 1 (FIX): Allow DNS resolution to the kube-system namespace on port 53 (UDP/TCP).
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system # Target the kube-system namespace
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns # Target the DNS pods (e.g., CoreDNS)
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP # Required for large DNS responses
+        port: 53
+        
+    # RULE 2: Allow communication to the darkseek-backend-ws pods on port 8000 (HTTP/WS)
     - to:
       - podSelector:
           matchLabels:
@@ -20,7 +33,8 @@ spec:
       ports:
       - protocol: TCP
         port: 8000
-    # Rule 2: Allow communication to the darkseek-backend-mqtt pods on port 1883 (MQTT)
+        
+    # RULE 3: Allow communication to the darkseek-backend-mqtt pods on port 1883 (MQTT)
     - to:
       - podSelector:
           matchLabels:
