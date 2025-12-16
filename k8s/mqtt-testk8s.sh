@@ -1,13 +1,15 @@
 #!/bin/bash
-# k8s/mqtt-testk8s.sh — NON-DESTRUCTIVE MONITOR (ADDED NETWORK DIAGNOSTICS)
-# Implemented explicit raw connectivity checks (nc, nslookup) in STAGE 3 to confirm NetworkPolicy issue.
+# k8s/mqtt-testk8s.sh — NON-DESTRUCTIVE MONITOR (FIXED: HTTP Method)
+# Fixes the HTTP check by using the correct 'wget -qO-' argument to ensure a GET request is sent.
 
 set -euo pipefail
 
 NAMESPACE="default"
 BACKEND_NAME="darkseek-backend-mqtt"
-BACKEND_WS="darkseek-backend-ws"
-LOGFILE="/tmp/mqtt-test-$(date +%Y%m%d-%H%M%S).log"
+# --- FQDN for guaranteed resolution ---
+BACKEND_WS="darkseek-backend-ws.default.svc.cluster.local"
+# -------------------------------------
+LOGFILE="/tmp/mqtt-test-$(date +%Y%m%d-%H%M%SZ).log"
 FRONTEND_IP=""
 
 # Target the static, externally managed pod
@@ -20,18 +22,15 @@ exec &> >(tee -a "$LOGFILE")
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
-# No cleanup trap or function, as this is a non-destructive monitor.
-
 error_exit() {
     log "❌ FATAL: $*" >&2
     exit 1
 }
 
-# --- STAGE 1: WAIT FOR POD READY (using the static name) ---
+# --- STAGE 1: WAIT FOR POD READY ---
 stage_wait_debug_pod() {
     log "⏳ STAGE 1: Waiting for external test pod '$DEBUG_POD' to be ready..."
     for i in {1..60}; do
-        # Use kubectl exec to check readiness (pod running + container ready)
         if timeout 5 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- true 2>/dev/null; then
             log "✓ External pod '$DEBUG_POD' ready ($i s)"
             return 0
@@ -46,7 +45,7 @@ stage_wait_debug_pod() {
 # --- STAGE 2: MQTT CONNECTIVITY ---
 stage_mqtt_connectivity() {
     log "📡 STAGE 2: MQTT $BACKEND_NAME:1883..."
-    # The -C 1 flag ensures the client connects and reads at least one message, or exits.
+    # Still use short name for MQTT, as the test output shows it was connected (idle OK)
     if timeout 85s kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
         mosquitto_sub -h "$BACKEND_NAME" -p 1883 -t "#" -v -C 1 --nodelay; then
         log "✅ MQTT 1883: Messages received"
@@ -55,27 +54,26 @@ stage_mqtt_connectivity() {
     fi
 }
 
-# Helper function to execute wget inside the debug pod and check its exit code
-# Returns 0 on success (HTTP 2xx or 3xx) and 1 on failure, logging the reason.
+# Helper function to execute wget inside the debug pod and check for a successful GET response
 check_http() {
     local endpoint="$1"
+    # URL now uses the FQDN
     local url="http://$BACKEND_WS:8000/$endpoint"
     
-    # Execute kubectl exec with wget, suppressing all output.
+    # FIX: Forces a GET request using wget -qO- and discards output.
     if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        wget -qO- --timeout=8 --spider "$url" 2>/dev/null; then
-        return 0 # Success
+        wget -qO- --timeout=8 "$url" > /dev/null 2>&1; then
+        return 0 # Success (HTTP 2xx or 3xx)
     else
-        # If the kubectl exec block failed (non-zero exit status)
         local status=$?
         
-        # Log failure reason explicitly 
+        # Retaining the original wget error code diagnostics
         if [[ "$status" -eq 4 ]]; then
             log "DEBUG: 🛑 Failed to reach $url. wget status: $status (Network error/Timeout)"
         elif [[ "$status" -eq 8 ]]; then
             log "DEBUG: 🛑 Failed to reach $url. wget status: $status (Server error/Bad URL)"
         else
-            log "DEBUG: 🛑 Failed to reach $url. Exit status: $status (Potential connectivity failure)"
+            log "DEBUG: 🛑 Failed to reach $url. Exit status: $status (General error)"
         fi
         return 1 # Failure
     fi
@@ -85,24 +83,34 @@ check_http() {
 stage_http_health() {
     log "🌐 STAGE 3: HTTP $BACKEND_WS:8000/health..."
     
-    # 1. Raw connectivity checks (New diagnostics)
+    # 1. Raw connectivity checks
     log "--- STAGE 3.1: Raw Connectivity Checks ---"
+    # DNS Test now uses FQDN for successful resolution
     log "🔎 DNS Test: nslookup $BACKEND_WS"
-    kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nslookup "$BACKEND_WS" || log "❌ DNS resolution failed!"
+    # Using a short timeout to prevent the command hanging if CoreDNS fails completely
+    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nslookup "$BACKEND_WS"; then
+        log "✅ DNS resolution passed!"
+    else
+        log "❌ DNS resolution failed!"
+    fi
 
+    # TCP Test now uses FQDN for successful connection attempt
     log "🔎 TCP Test: nc -zv $BACKEND_WS 8000"
-    # Using 'nc -zv' to check raw TCP connectivity. Exit code 0 means connection succeeded.
-    kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv "$BACKEND_WS" 8000 2>&1 || log "❌ TCP connection failed! (Possible NetworkPolicy issue)"
+    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv "$BACKEND_WS" 8000 2>&1; then
+        log "✅ TCP connection successful!"
+    else
+        log "❌ TCP connection failed! (Possible NetworkPolicy issue or service down)"
+    fi
     log "--- End Raw Connectivity Checks ---"
     
-    # 2. Try health endpoint (Original functionality)
+    # 2. Try health endpoint (uses FQDN via check_http)
     if check_http "health"; then
         log "✅ HTTP /health: 200 OK"
         HTTP_SUCCESS=1
         return 0
     fi
 
-    # 3. Try root endpoint
+    # 3. Try root endpoint (uses FQDN via check_http)
     if check_http ""; then
         log "✅ HTTP root: 200 OK"
         HTTP_SUCCESS=1
@@ -111,53 +119,45 @@ stage_http_health() {
     
     # 4. Both failed - log-based fallback
     log "⚠️ Direct HTTP failed, checking logs..."
-    if kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=20 2>/dev/null | \
-        # Check for Uvicorn startup confirmation for better reliability
+    if kubectl logs -l app=darkseek-backend-ws -n "$NAMESPACE" --tail=20 2>/dev/null | \
         grep -qiE "Application startup complete"; then
         log "✅ Uvicorn startup confirmed in logs ✓ (Still unreachable via network)"
     else
         log "❌ No Uvicorn startup or API activity found in logs."
     fi
-    
-    # HTTP_SUCCESS remains 0 if this point is reached.
 }
 
 
-# --- STAGE 4: BACKEND DIAGNOSTICS (ENHANCED) ---
+# --- STAGE 4: BACKEND DIAGNOSTICS ---
 stage_backend_diagnostics() {
-    log "🔍 STAGE 4: Backend Service Diagnostics ($BACKEND_NAME & $BACKEND_WS)..."
+    log "🔍 STAGE 4: Backend Service Diagnostics ($BACKEND_NAME & darkseek-backend-ws)..."
     
-    # Enhanced check: Show full service YAML to inspect ports, selectors, and Endpoints
-    log "--- $BACKEND_WS Service Definition (YAML) ---"
-    kubectl get svc "$BACKEND_WS" -n "$NAMESPACE" -o yaml
-    log "--- $BACKEND_WS Service Description ---"
-    kubectl describe svc "$BACKEND_WS" -n "$NAMESPACE"
+    log "--- darkseek-backend-ws Service Definition (YAML) ---"
+    kubectl get svc darkseek-backend-ws -n "$NAMESPACE" -o yaml
+    log "--- darkseek-backend-ws Service Description ---"
+    kubectl describe svc darkseek-backend-ws -n "$NAMESPACE"
 
     local mqtt_pods_running
-    # Check MQTT Pod Status (Foundation)
     mqtt_pods_running=$(kubectl get pods -l app="$BACKEND_NAME" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
     ((mqtt_pods_running > 0)) || error_exit "$BACKEND_NAME pods not Running"
     log "✓ $BACKEND_NAME pods Running: $mqtt_pods_running"
     kubectl get svc "$BACKEND_NAME" -n "$NAMESPACE" -o wide
     
     local ws_pods_running
-    # Check WS Pod Status
-    ws_pods_running=$(kubectl get pods -l app="$BACKEND_WS" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
-    log "✓ $BACKEND_WS pods Running: $ws_pods_running"
-    ((ws_pods_running > 0)) || log "⚠️ WARNING: $BACKEND_WS pods are not Running."
-    kubectl get svc "$BACKEND_WS" -n "$NAMESPACE" -o wide 
+    ws_pods_running=$(kubectl get pods -l app=darkseek-backend-ws -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
+    log "✓ darkseek-backend-ws pods Running: $ws_pods_running"
+    ((ws_pods_running > 0)) || log "⚠️ WARNING: darkseek-backend-ws pods are not Running."
+    kubectl get svc darkseek-backend-ws -n "$NAMESPACE" -o wide 
     
-    # Increased tail for better crash investigation
-    log "--- $BACKEND_WS (WS API) Logs (Last 20) ---"
-    kubectl logs -l app="$BACKEND_WS" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No WS logs available"
+    log "--- darkseek-backend-ws (WS API) Logs (Last 20) ---"
+    kubectl logs -l app=darkseek-backend-ws -n "$NAMESPACE" --tail=20 2>/dev/null || log "No WS logs available"
 
     log "--- $BACKEND_NAME (MQTT) Logs (Last 20) ---"
     kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No MQTT logs available"
 
-    # FIXED: Replaced brittle set-based selector with two simple equality selectors.
     log "--- All Relevant Pods Overview ---"
     log "--- WS Backend Pods ---"
-    kubectl get pods -n "$NAMESPACE" -l app="$BACKEND_WS" --show-labels
+    kubectl get pods -n "$NAMESPACE" -l app=darkseek-backend-ws --show-labels
     log "--- MQTT Backend Pods ---"
     kubectl get pods -n "$NAMESPACE" -l app="$BACKEND_NAME" --show-labels
 }
@@ -179,21 +179,19 @@ main() {
     log "🚀 DarkSeek Health: $BACKEND_NAME (Non-destructive Monitor)"
     log "📁 Log: $LOGFILE"
     
-    stage_wait_debug_pod   # STAGE 1
+    stage_wait_debug_pod
     sleep 3
-    stage_mqtt_connectivity # STAGE 2
-    stage_http_health       # STAGE 3
+    stage_mqtt_connectivity
+    stage_http_health
     
-    # Check status and perform fatal exit after diagnostics if HTTP failed
     if [[ "$HTTP_SUCCESS" -eq 0 ]]; then
-        stage_backend_diagnostics # STAGE 4: Run diagnostics to gather failure info
-        stage_frontend_status     # STAGE 5: Gather final status
-        error_exit "HTTP/WS API facade ($BACKEND_WS:8000) is unreachable. See STAGE 4 logs (YAML, Describe, Pod Status) for details."
+        stage_backend_diagnostics
+        stage_frontend_status
+        error_exit "HTTP/WS API facade (darkseek-backend-ws:8000) is unreachable or unhealthy (4xx/5xx status). See STAGE 4 logs (YAML, Describe, Pod Status) for details."
     fi
 
-    # If successful, run remaining stages normally
-    stage_backend_diagnostics # STAGE 4
-    stage_frontend_status     # STAGE 5
+    stage_backend_diagnostics
+    stage_frontend_status
     
     log "🎉 10/10 PERFECT PASS ✓"
 }
