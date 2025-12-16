@@ -83,20 +83,23 @@ nuke_and_deploy() {
 apiVersion: v1
 kind: Pod
 metadata:
-  name: debug-mqtt
+  name: debug-mqtt
+  labels:
+    app: debug-mqtt
+    networking/allow: backend  # ← ADDED: Matches NetworkPolicy
 spec:
-  restartPolicy: Never
-  containers:
-  - name: debug-mqtt
-    image: $IMAGE
-    command: ["sleep", "infinity"]
-    resources:
-      requests:
-        memory: "128Mi"
-        cpu: "100m"
-      limits:
-        memory: "512Mi"
-        cpu: "500m"
+  restartPolicy: Never
+  containers:
+  - name: debug-mqtt
+    image: $IMAGE
+    command: ["sleep", "infinity"]
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
 EOF
 }
 
