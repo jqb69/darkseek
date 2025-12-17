@@ -2,8 +2,9 @@
 import streamlit as st
 import requests
 import json
+import uuid 
 import time # Import time for simple timestamp or delay if needed
-from app.frontend.static.clientconfig import MQTT_URI, LLM_OPTIONS
+from app.frontend.static.clientconfig import HTTP_BASE_API, LLM_OPTIONS
 
 # The following two functions (get_mqtt_client and publish) are REMOVED 
 # as they are replaced by the synchronous HTTP function send_query.
@@ -13,19 +14,13 @@ def ping_backend_test(user_id: str):
     Executes a simple HTTP POST request to the backend's /ping endpoint to verify connectivity
     and service health before the user attempts a full query.
     """
-    ping_url = f"{MQTT_URI}"
-    st.info(f"MQTT_URI= {ping_url}")
-    initial_message = f"Hello backend, I am {user_id}"
-    payload = {
-        "message": initial_message,
-        "user_id": user_id
-    }
+    ping_url = f"{HTTP_BASE_API}"  # Changed from HTTP_BASE_API to HTTP_BASE_API
+    st.info(f"HTTP_BASE_API= {ping_url}")
     
     st.markdown("---")
     st.markdown("### System Diagnostics")
     
     # CRITICAL URI VALIDATION CHECKS
-    # 1. Warn if HTTPS is used for internal communication.
     if ping_url.startswith("https://"):
         st.warning(
             f"**URI PROTOCOL WARNING:** The backend URI ({ping_url}) is using HTTPS. "
@@ -33,56 +28,44 @@ def ping_backend_test(user_id: str):
             "explicit TLS is configured. This may still cause issues."
         )
 
-    # 2. Warn if HTTP is used but a custom port is missing (common for 8000/8080 services).
-    # We check if the URI contains a colon after the initial "http://" prefix (meaning a port is specified).
-    # If the URI contains less than two colons (one for the protocol, one for the port), the port is missing.
     if ping_url.startswith("http://") and ping_url.count(':') < 2:
         st.error(
-            f"**URI PORT ERROR:** The backend URI ({ping_url}) is missing an explicit port number. "
-            "Internal APIs (like FastAPI/Uvicorn) rarely run on default HTTP port 80. "
+            f"**URI PORT ERROR:** The backend URI ({ping_url}) is missing an explicit port number."
+            " Internal APIs (like FastAPI/Uvicorn) rarely run on default HTTP port 80. "
             "The correct URI should likely be `http://darkseek-backend-mqtt:8001` (or 8080/8888)."
         )
-        # We can't proceed reliably if the URI is likely wrong, so we return False early.
         st.error("Cannot proceed with ping test due to incorrect URI format.")
         return False, "URI format error: Missing port number."
 
     # --- Proceed with Connection Test ---
     try:
-        # Note: Using a shorter timeout for the ping test is often better than the query timeout
         with st.spinner(f"Pinging backend at {ping_url}..."):
-            start_time = time.time()
-            # Send initial greeting via HTTP POST
-            resp = requests.post(f"{ping_url}/api/chat", json=payload, timeout=15) 
-            end_time = time.time()
-            resp.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
-            
-            response_json = resp.json()
-            
-            # The backend should reply with a specific message/status
-            backend_reply = response_json.get("reply", "No reply key in response.")
-            
-            st.success(f"Backend Ping SUCCESS! ({int((end_time - start_time) * 1000)}ms)")
-            st.code(f"Backend Reply: {backend_reply}", language="json")
-            
-            # Add the backend's successful reply to the chat board as the first message
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
-            
-            # Ensure the ping result is a visible first message
-            if not st.session_state.messages or st.session_state.messages[0].get("role") != "system":
-                 st.session_state.messages.insert(0, {
-                    "role": "system",
-                    "content": f"**System Status: Online**\nBackend successfully initialized and replied:\n> {backend_reply}"
-                })
-            
-            return True, None
+            test_query = f"Greetings, I am {user_id}. Respond briefly with any random name you choose"
+            payload = {
+                "query": test_query,
+                "session_id": f"ping-{user_id}-{uuid.uuid4()}",
+                "search_enabled": False,
+                "llm_name": LLM_OPTIONS[0],
+            }
+            # Send the test payload directly
+            test_resp = requests.post(f"{ping_url}/api/chat", json=payload, timeout=30)
+            if test_resp.status_code == 200:
+                response = test_resp.json().get("content", "No response")
+                with st.chat_message("assistant"):
+                    st.markdown(response)
+                st.success("Backend connected and responding!")
+                return True, None
+            else:
+                error_msg = f"Backend error {test_resp.status_code}: {test_resp.text}"
+                st.error(error_msg)
+                return False, error_msg
+
             
     except requests.exceptions.Timeout:
-        error_msg = f"Ping TIMEOUT (15s): Backend at {ping_url} did not respond. Check Network Policy or Backend Service Port."
+        error_msg = f"Ping TIMEOUT (30s): Backend at {ping_url} did not respond. Check Network Policy or Backend Service Port."
         st.error(error_msg)
         return False, error_msg
     except requests.exceptions.ConnectionError as e:
-        # This catches errors like 'Failed to establish a new connection' (DNS or unreachable service)
         error_msg = f"Ping CONNECTION ERROR: Failed to reach {ping_url}. Is the backend service running and accessible? Error: {e}"
         st.error(error_msg)
         return False, error_msg
@@ -98,6 +81,7 @@ def ping_backend_test(user_id: str):
         st.markdown("---")
 
 
+
 def send_query(user_input: str, selected_llm: str, search_enabled: bool):
     """
     Sends the user query and settings to the backend processing service via HTTP POST.
@@ -110,13 +94,13 @@ def send_query(user_input: str, selected_llm: str, search_enabled: bool):
         "user_id": st.session_state.get("username", "guest")
     }
     try:
-        resp = requests.post(f"{MQTT_URI}/api/chat", json=payload, timeout=90)
+        resp = requests.post(f"{HTTP_BASE_API}/api/chat", json=payload, timeout=90)
         resp.raise_for_status() 
         return resp.json().get("content", "Error: Backend returned an empty response.")
     except requests.exceptions.HTTPError as e:
         return f"HTTP Error: {e.response.status_code} - {e.response.text}"
     except Exception as e:
-        return f"Connection Error: Failed to reach backend service. Check MQTT_URI. {e}"
+        return f"Connection Error: Failed to reach backend service. Check HTTP_BASE_API. {e}"
 
 def chat2_interface():
     """Renders the main chat interface using Streamlit components."""
