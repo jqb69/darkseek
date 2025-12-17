@@ -36,7 +36,7 @@ spec:
       ports:
       - protocol: TCP
         port: 8000
-        
+ 
   # --- SECURE EGRESS RULES (Allowing connections OUT) ---
   egress:
     # Rule 1: Allow connection to the internal MQTT Broker on port 8885
@@ -53,7 +53,10 @@ spec:
       - podSelector:
           matchLabels:
             app: debug-mqtt
-        
+      ports:
+      - protocol: TCP
+        port: 8000        
+   
     # Rule 3: Allow DNS resolution (UDP/TCP 53) by targeting CoreDNS in kube-system
     - to:
       - namespaceSelector:
@@ -67,6 +70,14 @@ spec:
         port: 53
       - protocol: TCP
         port: 53
+
+    - to:
+      - podSelector:
+          matchLabels:
+             app: darkseek-redis  # ← Redis pod label
+      ports:
+      - protocol: TCP
+        port: 6379
 
     # Rule 4: Allow general Internet access for RAG/LLM API calls (HTTP/S)
     # This rule uses IP blocks to exclude private RFC1918 ranges, ensuring traffic 
