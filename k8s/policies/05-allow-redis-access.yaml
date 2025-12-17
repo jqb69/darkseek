@@ -17,7 +17,7 @@ spec:
     - podSelector:
         matchLabels:
           app: darkseek-backend-mqtt
-    - podSelector:
+    - podSelector:              # ← THIS WAS MISSING
         matchLabels:
           app: debug-mqtt
     ports:
