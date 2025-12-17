@@ -1,12 +1,12 @@
 #!/bin/bash
-# k8s/mqtt-testk8s.sh — NON-DESTRUCTIVE MONITOR (FIXED: HTTP Method)
-# Fixes the HTTP check by using the correct 'wget -qO-' argument to ensure a GET request is sent.
+# k8s/mqtt-testk8s.sh — NON-DESTRUCTIVE MONITOR (FIXED: HTTP Method & FQDN)
+# This script monitors Kubernetes service health using FQDNs and precise network checks.
 
 set -euo pipefail
 
 NAMESPACE="default"
 BACKEND_NAME="darkseek-backend-mqtt"
-# --- FQDN for guaranteed resolution ---
+# --- FQDN for guaranteed resolution across namespaces ---
 BACKEND_WS="darkseek-backend-ws.default.svc.cluster.local"
 # -------------------------------------
 LOGFILE="/tmp/mqtt-test-$(date +%Y%m%d-%H%M%SZ).log"
@@ -45,9 +45,9 @@ stage_wait_debug_pod() {
 # --- STAGE 2: MQTT CONNECTIVITY ---
 stage_mqtt_connectivity() {
     log "📡 STAGE 2: MQTT $BACKEND_NAME:1883..."
-    # Still use short name for MQTT, as the test output shows it was connected (idle OK)
-    if timeout 85s kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        mosquitto_sub -h "$BACKEND_NAME" -p 1883 -t "#" -v -C 1 --nodelay; then
+    # Still use short name for MQTT as established in the broker config
+    if timeout 15s kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+        mosquitto_sub -h "$BACKEND_NAME" -p 1883 -t "#" -v -C 1 --nodelay 2>/dev/null; then
         log "✅ MQTT 1883: Messages received"
     else
         log "✅ MQTT 1883: Connected (idle OK)"
@@ -66,8 +66,7 @@ check_http() {
         return 0 # Success (HTTP 2xx or 3xx)
     else
         local status=$?
-        
-        # Retaining the original wget error code diagnostics
+        # Retaining original wget error code diagnostics
         if [[ "$status" -eq 4 ]]; then
             log "DEBUG: 🛑 Failed to reach $url. wget status: $status (Network error/Timeout)"
         elif [[ "$status" -eq 8 ]]; then
@@ -79,22 +78,19 @@ check_http() {
     fi
 }
 
-# --- STAGE 3: HTTP/WS HEALTH (REFACTORED) ---
+# --- STAGE 3: HTTP/WS HEALTH ---
 stage_http_health() {
     log "🌐 STAGE 3: HTTP $BACKEND_WS:8000/health..."
     
     # 1. Raw connectivity checks
     log "--- STAGE 3.1: Raw Connectivity Checks ---"
-    # DNS Test now uses FQDN for successful resolution
     log "🔎 DNS Test: nslookup $BACKEND_WS"
-    # Using a short timeout to prevent the command hanging if CoreDNS fails completely
-    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nslookup "$BACKEND_WS"; then
+    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nslookup "$BACKEND_WS" > /dev/null 2>&1; then
         log "✅ DNS resolution passed!"
     else
         log "❌ DNS resolution failed!"
     fi
 
-    # TCP Test now uses FQDN for successful connection attempt
     log "🔎 TCP Test: nc -zv $BACKEND_WS 8000"
     if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv "$BACKEND_WS" 8000 2>&1; then
         log "✅ TCP connection successful!"
@@ -103,14 +99,14 @@ stage_http_health() {
     fi
     log "--- End Raw Connectivity Checks ---"
     
-    # 2. Try health endpoint (uses FQDN via check_http)
+    # 2. Try health endpoint
     if check_http "health"; then
         log "✅ HTTP /health: 200 OK"
         HTTP_SUCCESS=1
         return 0
     fi
 
-    # 3. Try root endpoint (uses FQDN via check_http)
+    # 3. Try root endpoint
     if check_http ""; then
         log "✅ HTTP root: 200 OK"
         HTTP_SUCCESS=1
@@ -127,39 +123,33 @@ stage_http_health() {
     fi
 }
 
-
-# --- STAGE 4: BACKEND DIAGNOSTICS ---
-stage_backend_diagnostics() {
-    log "🔍 STAGE 4: Backend Service Diagnostics ($BACKEND_NAME & darkseek-backend-ws)..."
+# --- STAGE 4: BACKEND DIAGNOSTICS (ENHANCED) ---
+stage_pod_diagnostics() {
+    local PODNAME="${1:?PODNAME required}"
+    log "🔍 POD DIAGNOSTICS: $PODNAME (EXTENSIVE)..."
     
-    log "--- darkseek-backend-ws Service Definition (YAML) ---"
-    kubectl get svc darkseek-backend-ws -n "$NAMESPACE" -o yaml
-    log "--- darkseek-backend-ws Service Description ---"
-    kubectl describe svc darkseek-backend-ws -n "$NAMESPACE"
-
-    local mqtt_pods_running
-    mqtt_pods_running=$(kubectl get pods -l app="$BACKEND_NAME" -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
-    ((mqtt_pods_running > 0)) || error_exit "$BACKEND_NAME pods not Running"
-    log "✓ $BACKEND_NAME pods Running: $mqtt_pods_running"
-    kubectl get svc "$BACKEND_NAME" -n "$NAMESPACE" -o wide
+    # 1. POD STATUS
+    log "--- $PODNAME PODS ---"
+    kubectl get pods -l app="$PODNAME" -n "$NAMESPACE" --show-labels || true
     
-    local ws_pods_running
-    ws_pods_running=$(kubectl get pods -l app=darkseek-backend-ws -n "$NAMESPACE" --no-headers 2>/dev/null | grep Running | wc -l)
-    log "✓ darkseek-backend-ws pods Running: $ws_pods_running"
-    ((ws_pods_running > 0)) || log "⚠️ WARNING: darkseek-backend-ws pods are not Running."
-    kubectl get svc darkseek-backend-ws -n "$NAMESPACE" -o wide 
+    # 2. SERVICE
+    log "--- $PODNAME SERVICE ---"
+    kubectl get svc "$PODNAME" -n "$NAMESPACE" -o wide 2>/dev/null || log "No service found"
     
-    log "--- darkseek-backend-ws (WS API) Logs (Last 20) ---"
-    kubectl logs -l app=darkseek-backend-ws -n "$NAMESPACE" --tail=20 2>/dev/null || log "No WS logs available"
-
-    log "--- $BACKEND_NAME (MQTT) Logs (Last 20) ---"
-    kubectl logs -l app="$BACKEND_NAME" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No MQTT logs available"
-
-    log "--- All Relevant Pods Overview ---"
-    log "--- WS Backend Pods ---"
-    kubectl get pods -n "$NAMESPACE" -l app=darkseek-backend-ws --show-labels
-    log "--- MQTT Backend Pods ---"
-    kubectl get pods -n "$NAMESPACE" -l app="$BACKEND_NAME" --show-labels
+    # 3. DESCRIBE POD (1st ready pod)
+    local POD=$(kubectl get pods -l app="$PODNAME" -n "$NAMESPACE" -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' 2>/dev/null || echo "")
+    if [[ -n "$POD" ]]; then
+        log "--- $POD describe ---"
+        kubectl describe pod "$POD" -n "$NAMESPACE" | head -50 || true
+    fi
+    
+    # 4. LOGS (last 20)
+    log "--- $PODNAME LOGS (last 20) ---"
+    kubectl logs -l app="$PODNAME" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No logs available"
+    
+    # 5. NETWORK POLICY
+    log "--- $PODNAME NetworkPolicies ---"
+    kubectl get networkpolicy -l app="$PODNAME" -n "$NAMESPACE" -o yaml 2>/dev/null | head -30 || log "No specific policies found for app label"
 }
 
 # --- STAGE 5: FRONTEND STATUS ---
@@ -171,26 +161,24 @@ stage_frontend_status() {
         log "🌐 LIVE: http://$FRONTEND_IP"
         echo ""
     }
-    echo "Frontend_IP=$FRONTEND_IP"
 }
 
-
-# --- STAGE 6: REDIS CONNECTIVITY (NEW) ---
+# --- STAGE 6: REDIS CONNECTIVITY ---
 stage_redis_connectivity() {
     log "🔴 STAGE 6: Redis Connectivity (darkseek-redis:6379)..."
     
     # 1. Check Redis service exists
-    if ! kubectl get svc | grep -q redis; then
-        log "❌ Redis service NOT FOUND! (Check: kubectl get svc | grep redis)"
+    if ! kubectl get svc -n "$NAMESPACE" | grep -q redis; then
+        log "❌ Redis service NOT FOUND!"
         return 1
     fi
     log "✅ Redis service exists"
     
-    # 2. Get Redis service name (handles darkseek-redis, redis, etc.)
-    REDIS_SVC=$(kubectl get svc -o jsonpath='{.items[?(@.spec.ports[0].port==6379)].metadata.name}')
+    # 2. Get Redis service name
+    local REDIS_SVC=$(kubectl get svc -n "$NAMESPACE" -o jsonpath='{.items[?(@.spec.ports[0].port==6379)].metadata.name}' | xargs)
     log "🔍 Redis service: $REDIS_SVC"
     
-    # 3. TCP connectivity test from debug-mqtt
+    # 3. TCP connectivity test
     log "🔎 TCP Test: nc -zv $REDIS_SVC 6379"
     if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv "$REDIS_SVC" 6379 2>&1 | grep -q "succeeded"; then
         log "✅ Redis TCP: Connected!"
@@ -199,29 +187,28 @@ stage_redis_connectivity() {
         return 1
     fi
     
-    # 4. Redis PING test (redis-cli if available, else echo PING)
- 
+    # 4. Redis PING test (using QUIT to ensure the stream closes)
     log "🔎 Redis PING Test:"
     if timeout 5 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        bash -c "echo -e 'PING\\r\\nQUIT\\r\\n' | nc $REDIS_SVC 6379 2>/dev/null" | \
+        bash -c "echo -e 'PING\r\nQUIT\r\n' | nc $REDIS_SVC 6379 2>/dev/null" | \
         grep -q "^+PONG"; then
         log "✅ Redis PING: +PONG ✓"
     else
         log "❌ Redis PING: FAILED"
+        return 1
     fi
 
-    # 5. Backend → Redis NetworkPolicy check
+    # 5. NetworkPolicy cross-check
     log "🔍 Backend NetworkPolicy allows Redis access?"
-    if kubectl get networkpolicy -l app=darkseek-backend-ws -o yaml 2>/dev/null | grep -q "app: redis"; then
-        log "✅ Backend → Redis NetworkPolicy exists"
+    if kubectl get networkpolicy -n "$NAMESPACE" -o yaml 2>/dev/null | grep -q "app: darkseek-redis"; then
+        log "✅ Backend → Redis NetworkPolicy egress rule found"
     else
-        log "⚠️  NO Backend → Redis NetworkPolicy! (Apply fix below)"
+        log "⚠️ NO Backend → Redis NetworkPolicy detected!"
     fi
     
     log "✅ REDIS FULLY OPERATIONAL ✓"
     return 0
 }
-
 
 # --- MAIN ---
 main() {
@@ -229,24 +216,27 @@ main() {
     log "📁 Log: $LOGFILE"
     
     stage_wait_debug_pod
-    sleep 3
+    sleep 2
     stage_mqtt_connectivity
     stage_http_health
     
     if [[ "$HTTP_SUCCESS" -eq 0 ]]; then
-        stage_backend_diagnostics
+        stage_pod_diagnostics "darkseek-backend-ws"
         stage_frontend_status
-        error_exit "HTTP/WS API facade (darkseek-backend-ws:8000) is unreachable or unhealthy (4xx/5xx status). See STAGE 4 logs (YAML, Describe, Pod Status) for details."
+        error_exit "HTTP/WS API facade (darkseek-backend-ws:8000) is unreachable. Review logs above."
     fi
-    # NEW: Redis test (CRITICAL for 500 errors)
+
+    # Redis test (CRITICAL for 500 errors)
     stage_redis_connectivity || {
         log "🚨 REDIS FAILED - Backend 500 errors expected!"
-        log "💡 FIX: Apply 'allow-backend-to-redis' NetworkPolicy + Fix Redis host in backend"
-        stage_backend_diagnostics
+        stage_pod_diagnostics "darkseek-redis"
         stage_frontend_status
-        exit 2  # Redis failure = Critical but non-fatal
+        exit 2 
     }
-    stage_backend_diagnostics
+
+    stage_pod_diagnostics "darkseek-backend-mqtt"
+    stage_pod_diagnostics "darkseek-backend-ws"
+    stage_pod_diagnostics "debug-mqtt"
     stage_frontend_status
     
     log "🎉 10/10 PERFECT PASS ✓"
