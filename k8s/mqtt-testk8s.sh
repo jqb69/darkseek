@@ -137,7 +137,7 @@ stage_pod_diagnostics() {
     kubectl get svc "$PODNAME" -n "$NAMESPACE" -o wide 2>/dev/null || log "No service found"
     
     # 3. DESCRIBE POD (1st ready pod)
-    local POD=$(kubectl get pods -l app="$PODNAME" -n "$NAMESPACE" -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' 2>/dev/null || echo "")
+    local POD=$(kubectl get pods -l app="$PODNAME" -n "$NAMESPACE" -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' 2>/dev/null | head -n 1 || echo "")
     if [[ -n "$POD" ]]; then
         log "--- $POD describe ---"
         kubectl describe pod "$POD" -n "$NAMESPACE" | head -50 || true
@@ -229,7 +229,8 @@ main() {
     # Redis test (CRITICAL for 500 errors)
     stage_redis_connectivity || {
         log "🚨 REDIS FAILED - Backend 500 errors expected!"
-        stage_pod_diagnostics "darkseek-redis"
+        stage_pod_diagnostics "debug-mqtt"     # ← CLIENT diagnostics FIRST
+        stage_pod_diagnostics "darkseek-redis" # ← SERVER diagnostics SECOND
         stage_frontend_status
         exit 2 
     }
