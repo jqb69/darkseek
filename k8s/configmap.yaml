@@ -10,3 +10,4 @@ data:
   MQTT_TLS: "true"
   WEBSOCKET_URI: "wss://darkseek-backend-ws/ws/"  # Internal service name
   MQTT_URI: "http://darkseek-backend-ws:8000"       # Internal service name
+  HTTP_API_BASE: "http://darkseek-backend-ws:8000"
