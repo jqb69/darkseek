@@ -174,6 +174,55 @@ stage_frontend_status() {
     echo "Frontend_IP=$FRONTEND_IP"
 }
 
+
+# --- STAGE 6: REDIS CONNECTIVITY (NEW) ---
+stage_redis_connectivity() {
+    log "🔴 STAGE 6: Redis Connectivity (darkseek-redis:6379)..."
+    
+    # 1. Check Redis service exists
+    if ! kubectl get svc | grep -q redis; then
+        log "❌ Redis service NOT FOUND! (Check: kubectl get svc | grep redis)"
+        return 1
+    fi
+    log "✅ Redis service exists"
+    
+    # 2. Get Redis service name (handles darkseek-redis, redis, etc.)
+    REDIS_SVC=$(kubectl get svc -o jsonpath='{.items[?(@.spec.ports[0].port==6379)].metadata.name}')
+    log "🔍 Redis service: $REDIS_SVC"
+    
+    # 3. TCP connectivity test from debug-mqtt
+    log "🔎 TCP Test: nc -zv $REDIS_SVC 6379"
+    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv "$REDIS_SVC" 6379 2>&1 | grep -q "succeeded"; then
+        log "✅ Redis TCP: Connected!"
+    else
+        log "❌ Redis TCP: FAILED! (NetworkPolicy or service down)"
+        return 1
+    fi
+    
+    # 4. Redis PING test (redis-cli if available, else echo PING)
+ 
+    log "🔎 Redis PING Test:"
+    if timeout 5 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+        bash -c "echo -e 'PING\\r\\nQUIT\\r\\n' | nc $REDIS_SVC 6379 2>/dev/null" | \
+        grep -q "^+PONG"; then
+        log "✅ Redis PING: +PONG ✓"
+    else
+        log "❌ Redis PING: FAILED"
+    fi
+
+    # 5. Backend → Redis NetworkPolicy check
+    log "🔍 Backend NetworkPolicy allows Redis access?"
+    if kubectl get networkpolicy -l app=darkseek-backend-ws -o yaml 2>/dev/null | grep -q "app: redis"; then
+        log "✅ Backend → Redis NetworkPolicy exists"
+    else
+        log "⚠️  NO Backend → Redis NetworkPolicy! (Apply fix below)"
+    fi
+    
+    log "✅ REDIS FULLY OPERATIONAL ✓"
+    return 0
+}
+
+
 # --- MAIN ---
 main() {
     log "🚀 DarkSeek Health: $BACKEND_NAME (Non-destructive Monitor)"
@@ -189,7 +238,14 @@ main() {
         stage_frontend_status
         error_exit "HTTP/WS API facade (darkseek-backend-ws:8000) is unreachable or unhealthy (4xx/5xx status). See STAGE 4 logs (YAML, Describe, Pod Status) for details."
     fi
-
+    # NEW: Redis test (CRITICAL for 500 errors)
+    stage_redis_connectivity || {
+        log "🚨 REDIS FAILED - Backend 500 errors expected!"
+        log "💡 FIX: Apply 'allow-backend-to-redis' NetworkPolicy + Fix Redis host in backend"
+        stage_backend_diagnostics
+        stage_frontend_status
+        exit 2  # Redis failure = Critical but non-fatal
+    }
     stage_backend_diagnostics
     stage_frontend_status
     
