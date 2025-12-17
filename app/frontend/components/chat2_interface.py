@@ -1,9 +1,7 @@
 # app/frontend/components/chat2_interface.py — FINAL ETERNAL VERSION (GEMINI-APPROVED)
 import streamlit as st
 import requests
-import json
 import uuid 
-import time # Import time for simple timestamp or delay if needed
 from app.frontend.static.clientconfig import HTTP_BASE_API, LLM_OPTIONS
 
 # The following two functions (get_mqtt_client and publish) are REMOVED 
@@ -11,16 +9,18 @@ from app.frontend.static.clientconfig import HTTP_BASE_API, LLM_OPTIONS
 
 def ping_backend_test(user_id: str):
     """
-    Executes a simple HTTP POST request to the backend's /ping endpoint to verify connectivity
-    and service health before the user attempts a full query.
+    Executes a simple HTTP POST request to the backend's /api/chat endpoint to verify 
+    connectivity and service health before the user attempts a full query.
+    
+    Returns: (bool: success_status, str: error_message_or_None)
     """
-    ping_url = f"{HTTP_BASE_API}"  # Changed from HTTP_BASE_API to HTTP_BASE_API
+    ping_url = f"{HTTP_BASE_API}"
     st.info(f"HTTP_BASE_API= {ping_url}")
     
     st.markdown("---")
     st.markdown("### System Diagnostics")
     
-    # CRITICAL URI VALIDATION CHECKS
+    # CRITICAL URI VALIDATION CHECKS (Retained for diagnostic help)
     if ping_url.startswith("https://"):
         st.warning(
             f"**URI PROTOCOL WARNING:** The backend URI ({ping_url}) is using HTTPS. "
@@ -39,28 +39,32 @@ def ping_backend_test(user_id: str):
 
     # --- Proceed with Connection Test ---
     try:
-        with st.spinner(f"Pinging backend at {ping_url}..."):
+        with st.spinner(f"Pinging backend at {ping_url}/api/chat..."):
             test_query = f"Greetings, I am {user_id}. Respond briefly with any random name you choose"
             payload = {
                 "query": test_query,
-                "session_id": f"ping-{user_id}-{uuid.uuid4()}",
+                "session_id": f"ping-{user_id}-{uuid.uuid4()}", # Uses unique UUID for ping test
                 "search_enabled": False,
                 "llm_name": LLM_OPTIONS[0],
             }
-            # Send the test payload directly
+            # Send the test payload directly to /api/chat
             test_resp = requests.post(f"{ping_url}/api/chat", json=payload, timeout=30)
+            
             if test_resp.status_code == 200:
                 response = test_resp.json().get("content", "No response")
                 with st.chat_message("assistant"):
                     st.markdown(response)
                 st.success("Backend connected and responding!")
+                
+                # Ensure success message and True return are only here
+                st.success("Backend ping test completed successfully!") 
                 return True, None
             else:
+                # Return False and detailed error immediately on failure status code
                 error_msg = f"Backend error {test_resp.status_code}: {test_resp.text}"
                 st.error(error_msg)
                 return False, error_msg
 
-            
     except requests.exceptions.Timeout:
         error_msg = f"Ping TIMEOUT (30s): Backend at {ping_url} did not respond. Check Network Policy or Backend Service Port."
         st.error(error_msg)
@@ -91,13 +95,15 @@ def send_query(user_input: str, selected_llm: str, search_enabled: bool):
         "session_id": st.session_state.get("session_id", "default_session"),
         "llm_name": selected_llm,
         "search_enabled": search_enabled,
-        "user_id": st.session_state.get("username", "guest")
+        # FIX: Removed 'user_id' from the payload for guaranteed compatibility with QueryRequest
     }
     try:
         resp = requests.post(f"{HTTP_BASE_API}/api/chat", json=payload, timeout=90)
+        # Raise for status handles 4xx/5xx responses as exceptions
         resp.raise_for_status() 
         return resp.json().get("content", "Error: Backend returned an empty response.")
     except requests.exceptions.HTTPError as e:
+        # Return the error details to the user
         return f"HTTP Error: {e.response.status_code} - {e.response.text}"
     except Exception as e:
         return f"Connection Error: Failed to reach backend service. Check HTTP_BASE_API. {e}"
@@ -108,8 +114,11 @@ def chat2_interface():
     # Initialize session state for messages and session_id if they don't exist
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    
+    # FIX: Use a safe, unique UUID for session initialization
     if "session_id" not in st.session_state:
-        st.session_state.session_id = st.runtime.script_requests.get_session_id()
+        st.session_state.session_id = f"ui-{uuid.uuid4()}"
+        
     if "username" not in st.session_state:
         st.session_state.username = "guest"
         
@@ -119,11 +128,15 @@ def chat2_interface():
         
         # --- UI controls ---
         search = st.checkbox("Enable Web Search", value=True)
-        llm = st.selectbox("Select LLM", LLM_OPTIONS if 'LLM_OPTIONS' in locals() else ["gemma_flash_2.0", "llama3.2"])
+        llm = st.selectbox("Select LLM", LLM_OPTIONS)
         
         # --- Run Backend Connectivity Test ---
-        # The app should refresh if the test changes status.
-        backend_ready, _ = ping_backend_test(st.session_state.username) 
+        # FIX: Cache the result of ping_backend_test so it only runs once per session
+        if "backend_ready" not in st.session_state:
+             st.session_state.backend_ready, _ = ping_backend_test(st.session_state.username) 
+        
+        # Use the cached state for the rest of the script execution
+        backend_ready = st.session_state.backend_ready 
 
     st.title("DarkSeek Chatbot")
 
