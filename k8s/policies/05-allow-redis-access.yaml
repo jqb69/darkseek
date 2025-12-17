@@ -17,6 +17,9 @@ spec:
     - podSelector:
         matchLabels:
           app: darkseek-backend-mqtt
+    - podSelector:
+        matchLabels:
+          app: debug-mqtt
     ports:
     - protocol: TCP
       port: 6379
