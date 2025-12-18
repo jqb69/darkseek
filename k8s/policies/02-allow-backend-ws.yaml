@@ -16,10 +16,10 @@ spec:
   policyTypes:
     - Ingress
     - Egress
-  
-  # --- INGRESS RULES (Allowing connections IN) ---
+    
+  # --- INGRESS RULES ---
   ingress:
-    # Rule 1: Allow connections from the debug-mqtt pod on port 8000 (HTTP/WS health checks)
+    # Rule 1: Allow connections from the debug-mqtt pod
     - from:
       - podSelector:
           matchLabels:
@@ -27,8 +27,8 @@ spec:
       ports:
       - protocol: TCP
         port: 8000
-    
-    # Rule 2: Allow connections from the frontend on port 8000
+      
+    # Rule 2: Allow connections from the frontend
     - from:
       - podSelector:
           matchLabels:
@@ -36,10 +36,24 @@ spec:
       ports:
       - protocol: TCP
         port: 8000
- 
-  # --- SECURE EGRESS RULES (Allowing connections OUT) ---
+  
+  # --- SECURE EGRESS RULES ---
   egress:
-    # Rule 1: Allow connection to the internal MQTT Broker on port 8885
+    # RULE 1: GKE 2025 DNS RESOLUTION (Verified for Autopilot)
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: coredns  # Verified GKE 2025 Label
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+
+    # Rule 2: Allow connection to the internal MQTT Broker
     - to:
       - podSelector:
           matchLabels:
@@ -48,45 +62,38 @@ spec:
       - protocol: TCP
         port: 8885
 
-    # Rule 2: Allow connection back to the debug-mqtt pod (to send the HTTP response)
+    # Rule 3: Allow connection back to the debug-mqtt pod
     - to:
       - podSelector:
           matchLabels:
             app: debug-mqtt
       ports:
       - protocol: TCP
-        port: 8000        
-   
-    # Rule 3: Allow DNS resolution (UDP/TCP 53) by targeting CoreDNS in kube-system
-    - to:
-      - namespaceSelector:
-          matchLabels:
-            kubernetes.io/metadata.name: kube-system
-        podSelector:
-          matchLabels:
-            k8s-app: coredns
-      ports:
-      - protocol: UDP
-        port: 53
-      - protocol: TCP
-        port: 53
+        port: 8000      
 
+    # Rule 4: Allow egress to the Redis cache
     - to:
       - podSelector:
           matchLabels:
-             app: darkseek-redis  # ← Redis pod label
+            app: darkseek-redis
       ports:
       - protocol: TCP
         port: 6379
 
-    # Rule 4: Allow general Internet access for RAG/LLM API calls (HTTP/S)
-    # This rule uses IP blocks to exclude private RFC1918 ranges, ensuring traffic 
-    # destined for the public internet is allowed while restricting internal, private network access.
+    # Rule 5: Allow egress to the PostgreSQL Database
+    - to:
+      - podSelector:
+          matchLabels:
+            app: darkseek-db
+      ports:
+      - protocol: TCP
+        port: 5432
+
+    # Rule 6: Allow general Internet access for LLM/Search APIs
     - to:
       - ipBlock:
           cidr: 0.0.0.0/0
           except:
-            # Exclude standard private ranges
             - 10.0.0.0/8
             - 172.16.0.0/12
             - 192.168.0.0/16
