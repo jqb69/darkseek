@@ -78,10 +78,33 @@ stage_redis_check() {
 }
 
 # --- STAGE 5: POD DIAGNOSTICS ---
+# --- BACKEND DIAGNOSTICS (ENHANCED) ---
 stage_pod_diagnostics() {
-    local label="$1"
-    log "🔍 Diagnostics for pods with label app=$label..."
-    kubectl get pods -l app="$label" -n "$NAMESPACE" -o wide || true
+    local PODNAME="${1:?PODNAME required}"
+    log "🔍 POD DIAGNOSTICS: $PODNAME (EXTENSIVE)..."
+    
+    # 1. POD STATUS
+    log "--- $PODNAME PODS ---"
+    kubectl get pods -l app="$PODNAME" -n "$NAMESPACE" --show-labels || true
+    
+    # 2. SERVICE
+    log "--- $PODNAME SERVICE ---"
+    kubectl get svc "$PODNAME" -n "$NAMESPACE" -o wide 2>/dev/null || log "No service found"
+    
+    # 3. DESCRIBE POD (1st ready pod)
+    local POD=$(kubectl get pods -l app="$PODNAME" -n "$NAMESPACE" -o jsonpath='{.items[?(@.status.containerStatuses[0].ready==true)].metadata.name}' 2>/dev/null | head -n 1 || echo "")
+    if [[ -n "$POD" ]]; then
+        log "--- $POD describe ---"
+        kubectl describe pod "$POD" -n "$NAMESPACE" | head -50 || true
+    fi
+    
+    # 4. LOGS (last 20)
+    log "--- $PODNAME LOGS (last 20) ---"
+    kubectl logs -l app="$PODNAME" -n "$NAMESPACE" --tail=20 2>/dev/null || log "No logs available"
+    
+    # 5. NETWORK POLICY
+    log "--- $PODNAME NetworkPolicies ---"
+    kubectl get networkpolicy -l app="$PODNAME" -n "$NAMESPACE" -o yaml 2>/dev/null | head -30 || log "No specific policies found for app label"
 }
 
 # --- STAGE 6: FRONTEND STATUS ---
@@ -130,31 +153,31 @@ main() {
     # Check HTTP Health First
     if ! stage_http_health; then
         log "🚨 BACKEND HTTP FAILURE DETECTED"
-        stage_pod_diagnostics "debug-mqtt"           # Check Client First
-        stage_pod_diagnostics "darkseek-backend-ws" # Check Server Second
+        stage_pod_diagnostics "$DEBUG_POD"           # Check Client First
+        stage_pod_diagnostics "$BACKEND_WS" # Check Server Second
         exit 1
     fi
 
     # Then Check Redis Connectivity
     if ! stage_redis_check; then
         log "🚨 REDIS FAILURE DETECTED"
-        stage_pod_diagnostics "debug-mqtt"
-        stage_pod_diagnostics "darkseek-redis"
+        stage_pod_diagnostics "$DEBUG_POD"
+        stage_pod_diagnostics "$REDIS_NAME"
         exit 1
     fi
 
     # Backend DNS + Redis (catches 500 errors)
     if ! stage_backend_dns; then
         log "🚨 BACKEND-WS DNS/REDIS FAILURE - 500 errors expected"
-        stage_pod_diagnostics "darkseek-backend-ws"
-        stage_pod_diagnostics "darkseek-redis"
+        stage_pod_diagnostics "$BACKEND_WS"
+        stage_pod_diagnostics "$REDIS_NAME"
         exit 1
     fi
 
     # Summary diagnostics on success
-    stage_pod_diagnostics "debug-mqtt"
-    stage_pod_diagnostics "darkseek-backend-ws"
-    stage_pod_diagnostics "darkseek-backend-mqtt"
+    stage_pod_diagnostics "$DEBUG_POD"
+    stage_pod_diagnostics "$BACKEND_WS"
+    stage_pod_diagnostics "$BACKEND_NAME"
     stage_frontend_status
 
     log "✅ All tests passed"
