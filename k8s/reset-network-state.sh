@@ -42,7 +42,7 @@ fi
 
 # 3. FORCE RESTART PODS (Clears stale conntrack entries)
 log "🔌 Killing pods to force fresh veth pairs..."
-kubectl delete pod -l app=debug-mqtt --force --grace-period=0 || true
+
 kubectl delete pod -l app=darkseek-redis --force --grace-period=0 || true
 kubectl rollout restart deployment darkseek-backend-ws
 
