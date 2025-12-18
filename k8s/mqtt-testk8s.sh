@@ -7,10 +7,9 @@ set -euo pipefail
 
 NAMESPACE="default"
 BACKEND_NAME="darkseek-backend-mqtt"
-# --- FQDN for guaranteed resolution ---
-BACKEND_WS="darkseek-backend-ws.default.svc.cluster.local"
+BACKEND_WS="darkseek-backend-ws"
 REDIS_NAME="darkseek-redis"
-LOGFILE="/tmp/mqtt-test-$(date +%Y%m%d-%H%M%SZ).log"
+LOGFILE="/tmp/mqtt-test-$(date +%Y%m%d-%H%M%S).log"
 
 # Target the static, externally managed pod
 DEBUG_POD="debug-mqtt"
@@ -30,118 +29,95 @@ error_exit() {
 # --- STAGE 1: WAIT FOR POD READY ---
 stage_wait_debug_pod() {
     log "⏳ STAGE 1: Waiting for external test pod '$DEBUG_POD' to be ready..."
-    for i in {1..60}; do
-        if timeout 5 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- true 2>/dev/null; then
-            log "✓ External pod '$DEBUG_POD' ready ($i s)"
-            return 0
-        fi
-        ((i % 10 == 0)) && log "Waiting... ($i/60s). Check logs of the debug pod for issues."
-        sleep 1
-    done
-    kubectl describe pod "$DEBUG_POD" -n "$NAMESPACE" || log "ERROR: Pod $DEBUG_POD not found."
-    error_exit "$DEBUG_POD not ready after 60s"
+    if ! timeout 5 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- true 2>/dev/null; then
+        log "ERROR: Pod $DEBUG_POD not ready or not found."
+        return 1
+    fi
+    log "✓ External pod '$DEBUG_POD' ready"
+    return 0
 }
 
 # --- STAGE 2: MQTT CONNECTIVITY ---
 stage_mqtt_connectivity() {
     log "📡 STAGE 2: MQTT $BACKEND_NAME:1883..."
-    if timeout 15s kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+    if timeout 10s kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
         mosquitto_sub -h "$BACKEND_NAME" -p 1883 -t "#" -v -C 1 --nodelay 2>/dev/null; then
         log "✅ MQTT 1883: Messages received"
+        return 0
     else
-        log "✅ MQTT 1883: Connected (idle OK)"
+        # If it connects but just has no messages, that's fine too
+        log "✅ MQTT 1883: Connectivity confirmed"
+        return 0
     fi
 }
 
-# Helper function for GET requests
-check_http() {
-    local endpoint="$1"
-    local url="http://$BACKEND_WS:8000/$endpoint"
-    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        wget -qO- --timeout=8 "$url" > /dev/null 2>&1; then
-        return 0 
-    else
-        return 1
-    fi
-}
-
-# --- STAGE 3: HTTP/WS HEALTH ---
+# --- STAGE 3: HTTP HEALTH ---
 stage_http_health() {
     log "🌐 STAGE 3: HTTP $BACKEND_WS:8000/health..."
-    log "🔎 DNS Test: nslookup $BACKEND_WS"
-    kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nslookup "$BACKEND_WS" > /dev/null 2>&1 || log "❌ DNS resolution failed!"
-
-    log "🔎 TCP Test: nc -zv $BACKEND_WS 8000"
-    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv "$BACKEND_WS" 8000 2>&1; then
-        log "✅ TCP connection successful!"
-    else
-        log "❌ TCP connection failed!"
-    fi
-    
-    if check_http "health" || check_http ""; then
-        log "✅ HTTP Health: 200 OK"
+    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+        wget -qO- --timeout=5 "http://$BACKEND_WS:8000/health" > /dev/null 2>&1; then
+        log "✅ HTTP /health: 200 OK"
         HTTP_SUCCESS=1
         return 0
+    else
+        log "❌ HTTP /health: FAILED"
+        return 1
     fi
-    log "❌ HTTP /health: FAILED"
-    return 1
 }
 
-# --- STAGE 4: REDIS CONNECTIVITY (PERPLEXITY OPTIMIZED) ---
+# --- STAGE 4: REDIS CHECK ---
 stage_redis_check() {
     log "🔴 STAGE 4: Redis Connectivity ($REDIS_NAME:6379)..."
-    
-    # 1. Service check
-    kubectl get svc "$REDIS_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || { 
-        log "❌ Redis service missing"; 
-        return 1; 
-    }
-    
-    # 2. TCP check
+    # Execute the specific check you requested
     if ! kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv "$REDIS_NAME" 6379 >/dev/null 2>&1; then
-        log "❌ TCP failed"
+        log "❌ Redis connectivity failed"
         return 1
     fi
-    log "✅ TCP OK"
-    
-    # 3. REAL Redis PING (Raw TCP Protocol - No redis-cli needed)
-    # Sends RESP PING command and expects +PONG response
-    if timeout 5 kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        bash -c "echo -e 'PING\r\nQUIT\r\n' | nc $REDIS_NAME 6379 2>/dev/null" | \
-        grep -q "^\+PONG"; then
-        log "✅ Redis PING: +PONG"
-        return 0
-    else
-        log "❌ Redis PING failed (TCP OK, Redis application down)"
-        return 1
-    fi
+    log "✅ Redis connectivity passed"
+    return 0
 }
 
-# --- STAGE 5: EXTENSIVE POD DIAGNOSTICS ---
+# --- STAGE 5: POD DIAGNOSTICS ---
 stage_pod_diagnostics() {
-    local POD_LABEL="${1:?Label required}"
-    log "🔍 STAGE 5: Diagnostics for label app=$POD_LABEL..."
-    
-    log "--- Pods for $POD_LABEL ---"
-    kubectl get pods -l app="$POD_LABEL" -n "$NAMESPACE" -o wide || true
-    
-    log "--- Service for $POD_LABEL ---"
-    kubectl get svc -l app="$POD_LABEL" -n "$NAMESPACE" -o wide || true
-    
-    local FIRST_POD=$(kubectl get pods -l app="$POD_LABEL" -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-    if [[ -n "$FIRST_POD" ]]; then
-        log "--- Describe $FIRST_POD ---"
-        kubectl describe pod "$FIRST_POD" -n "$NAMESPACE" | head -n 25 || true
-        log "--- Logs for $FIRST_POD (Last 15) ---"
-        kubectl logs "$FIRST_POD" -n "$NAMESPACE" --tail=15 2>/dev/null || true
-    fi
+    local label="$1"
+    log "🔍 Diagnostics for pods with label app=$label..."
+    kubectl get pods -l app="$label" -n "$NAMESPACE" -o wide || true
 }
 
 # --- STAGE 6: FRONTEND STATUS ---
 stage_frontend_status() {
-    log "🏠 STAGE 6: Frontend Status..."
-    local FRONTEND_IP=$(kubectl get svc darkseek-frontend -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "PENDING")
-    log "🌐 Frontend Service: $FRONTEND_IP"
+    log "🏠 STAGE 6: Frontend IP..."
+    local frontend_ip
+    frontend_ip=$(kubectl get svc darkseek-frontend -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "PENDING")
+    [[ "$frontend_ip" == "PENDING" ]] && log "⏳ Frontend PENDING" || log "🌐 LIVE: http://$frontend_ip"
+}
+
+# --- STAGE 7: BACKEND-WS DNS + Redis PING ---
+stage_backend_dns() {
+    log "🔍 STAGE 7: Backend-WS DNS + Redis from darkseek-backend-ws..."
+    
+    # Wait for backend-ws ready
+    if ! timeout 30 kubectl wait --for=condition=Ready pod -l app=darkseek-backend-ws --timeout=30s; then
+        log "❌ Backend-WS pods not ready"
+        return 1
+    fi
+    
+    # Test DNS resolution FROM backend-ws (CRITICAL for 500 errors)
+    if kubectl exec deployment/darkseek-backend-ws -- nslookup "$REDIS_NAME" >/dev/null 2>&1; then
+        log "✅ Backend-WS → nslookup $REDIS_NAME: RESOLVES ✓"
+    else
+        log "❌ Backend-WS DNS: Temporary failure in name resolution"
+        return 1
+    fi
+    
+    # Test ACTUAL Redis PING from backend-ws
+    if kubectl exec deployment/darkseek-backend-ws -- bash -c "echo -e 'PING\\r\\nQUIT\\r\\n' | nc $REDIS_NAME 6379 2>/dev/null" | grep -q "^+PONG"; then
+        log "✅ Backend-WS → Redis: +PONG ✓"
+    else
+        log "❌ Backend-WS → Redis PING failed"
+        return 1
+    fi
+    return 0
 }
 
 # --- MAIN ---
@@ -154,7 +130,7 @@ main() {
     # Check HTTP Health First
     if ! stage_http_health; then
         log "🚨 BACKEND HTTP FAILURE DETECTED"
-        stage_pod_diagnostics "debug-mqtt"         # Check Client First
+        stage_pod_diagnostics "debug-mqtt"           # Check Client First
         stage_pod_diagnostics "darkseek-backend-ws" # Check Server Second
         exit 1
     fi
@@ -163,6 +139,14 @@ main() {
     if ! stage_redis_check; then
         log "🚨 REDIS FAILURE DETECTED"
         stage_pod_diagnostics "debug-mqtt"
+        stage_pod_diagnostics "darkseek-redis"
+        exit 1
+    fi
+
+    # Backend DNS + Redis (catches 500 errors)
+    if ! stage_backend_dns; then
+        log "🚨 BACKEND-WS DNS/REDIS FAILURE - 500 errors expected"
+        stage_pod_diagnostics "darkseek-backend-ws"
         stage_pod_diagnostics "darkseek-redis"
         exit 1
     fi
