@@ -305,8 +305,8 @@ jobs:
       - name: Test MQTT Spy Connectivity (90s max)
         if: success()
         run: |
-          chmod +x ./k8s/mqtt-testk8s.sh
-          timeout 95 ./k8s/mqtt-testk8s.sh || {
+          chmod +x ./k8s/run-mqtt-tests-with-fix.sh
+          timeout 95 ./k8s/run-mqtt-tests-with-fix.sh || {
             echo "MQTT TEST FAILED — dumping debug pod logs..."
             kubectl logs debug-mqtt --tail=100 || true
             kubectl describe pod debug-mqtt || true
