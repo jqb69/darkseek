@@ -538,6 +538,9 @@ apply_with_retry backend-mqtt-service.yaml
 apply_with_retry frontend-service.yaml
 apply_with_retry db-service.yaml
 apply_with_retry redis-service.yaml
+#🔧 CRITICAL: Give pods 10s to fully spawn BEFORE policies
+log "⏳ Waiting 10s for pods to initialize before policy lockdown..."
+sleep 18
 
 # 5. Lock it down
 apply_network_policies
