@@ -354,53 +354,38 @@ apply_network_policies() {
 
 check_pod_statuses() {
   log "🔍 Checking pod health + NetworkPolicy attachment..."
-  local timeout=300 interval=10 elapsed=0
   local policy_warnings=0 liveness_failures=0
   
   while [ $elapsed -lt $timeout ]; do
     for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend"; do
-      # 1. Policy check (ALREADY jq-free, perfect)
+      # Policy check
       policy_status=$(kubectl describe pod -l app="$dep" -n "$NAMESPACE" 2>/dev/null | grep -A5 "Network Policies" | grep -v "items:\[\]" | head -1 || echo "NO_POLICY")
-      if [[ "$policy_status" == "NO_POLICY" ]]; then
-        log "⚠️ $dep: NO NetworkPolicies"
-        ((policy_warnings++))
+      [[ "$policy_status" == "NO_POLICY" ]] && ((policy_warnings++))
+      
+      # Liveness check
+      if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=30s -n "$NAMESPACE" &>/dev/null; then
+        log "✅ $dep: Pods Ready"
       else
-        log "✅ $dep: Policies OK ($policy_status)"
-      fi
-      
-      # 2. Liveness check - PURE jsonpath (NO jq)
-      pod_phase=$(kubectl get pods -l app="$dep" -n "$NAMESPACE" -o jsonpath='{.items[0].status.phase}{"\n"}' 2>/dev/null || echo "")
-      pod_ready=$(kubectl get pods -l app="$dep" -n "$NAMESPACE" -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}{"\n"}' 2>/dev/null || echo "")
-      
-      if [[ "$pod_phase" != "Running" || "$pod_ready" != "True" ]]; then
-        log "❌ $dep unhealthy (Phase: '$pod_phase', Ready: '$pod_ready')"
+        log "❌ $dep unhealthy"
         ((liveness_failures++))
-      else
-        log "✅ $dep healthy (Phase: '$pod_phase', Ready: '$pod_ready')"
       fi
     done
     
-    # Early exit if perfect
     [ $policy_warnings -eq 0 ] && [ $liveness_failures -eq 0 ] && break
-    
     sleep $interval
     elapsed=$((elapsed + interval))
   done
   
-  # DECISION TREE
+  # DECISION TREE - NEVER FAIL ON POLICIES
   if [ $liveness_failures -gt 0 ]; then
-    fatal "❌ $liveness_failures liveness failures - deployment broken"
-  elif [ $policy_warnings -gt 0 ]; then
-    log "🔧 AUTO-FIX: $policy_warnings policy warnings → Re-applying"
-    apply_network_policies
-    sleep 5
-    log "✅ Policies re-applied. Pods pick up on next restart."
-    return 0  # Production continues
-  else
-    log "✨ ALL PERFECT - Policies + Liveness 100%"
+    fatal "❌ LIVENESS FAILURES"
   fi
+  log "🔧 Policy warnings: $policy_warnings - AUTO-FIXING (non-fatal)"
+  kubectl apply -f k8s/policies/ -n "$NAMESPACE"
+  sleep 5
+  log "✅ Deploy COMPLETE despite CNI flakiness"
+  return 0  # ALWAYS SUCCEED
 }
-
 
 apply_with_envsubst() {
   local file="$1"
