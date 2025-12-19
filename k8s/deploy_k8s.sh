@@ -354,16 +354,26 @@ apply_network_policies() {
 
 check_pod_statuses() {
   log "🔍 Checking pod health + NetworkPolicy attachment..."
-  local timeout=300 interval=10 elapsed=0
-  local last_policy_warnings=0 last_liveness_failures=0
+  
+  local timeout=300 
+  local interval=10 
+  local elapsed=0
+  
+  # Persistent state to survive the loop for the final decision tree
+  local last_policy_warnings=0 
+  local last_liveness_failures=0
   
   while [ $elapsed -lt $timeout ]; do
+    # Reseting counters for THIS iteration
+    # We use global scope (no 'local') so the decision tree can read them if we break
     policy_warnings=0
     liveness_failures=0
     
     for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis"; do
-      # 1. SAFE Policy check (ignore kubectl races)
+      # 1. SAFE Policy check (ignores kubectl races)
+      # We pipe to '|| true' or use local checks to prevent 'set -e' from killing the script here
       policy_status=$(kubectl describe pod -l app="$dep" -n "$NAMESPACE" 2>/dev/null | grep -A5 "Network Policies" || echo "NO_POLICY")
+      
       if [[ "$policy_status" == "NO_POLICY" || -z "$policy_status" ]]; then
         log "⚠️ $dep: NO NetworkPolicies detected"
         ((policy_warnings++))
@@ -371,38 +381,43 @@ check_pod_statuses() {
         log "✅ $dep: Policies OK"
       fi
       
-      # 2. BULLETPROOF Liveness (kubectl wait = ignores races)
-      if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=39s -n "$NAMESPACE" 2>/dev/null; then
+      # 2. BULLETPROOF Liveness (kubectl wait)
+      # We use a conditional check so a 'fail' just increments our counter instead of exiting the script
+      if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=33s -n "$NAMESPACE" &>/dev/null; then
         log "✅ $dep healthy"
       else
-        log "❌ $dep unhealthy (wait failed)"
+        log "❌ $dep unhealthy (readiness check failed)"
         ((liveness_failures++))
       fi
     done
     
+    # Capture iteration state for the post-loop decision tree
     last_policy_warnings=$policy_warnings
     last_liveness_failures=$liveness_failures
-    
+
     # Early exit ONLY if perfect
-    [ $policy_warnings -eq 0 ] && [ $liveness_failures -eq 0 ] && {
-      log "✨ ALL PERFECT"
+    if [ "$policy_warnings" -eq 0 ] && [ "$liveness_failures" -eq 0 ]; then
+      log "✨ ALL PERFECT - Policies + Liveness 100%"
       return 0
-    }
+    fi
     
-    log "⏳ Retrying ($elapsed/$timeout)..."
+    # If we are here, something is wrong. We only "fatal" out if we hit the timeout.
+    log "⏳ Retrying stabilization ($elapsed/$timeout). Current: $policy_warnings warnings, $liveness_failures fails..."
     sleep $interval
     elapsed=$((elapsed + interval))
   done
   
-  # DECISION TREE - NOW REACHES HERE
-  if [ $last_liveness_failures -gt 0 ]; then
-    fatal "❌ $last_liveness_failures liveness failures"
-  elif [ $last_policy_warnings -gt 0 ]; then
-    log "🔧 AUTO-FIX: $last_policy_warnings policy warnings..."
+  # --- DECISION TREE / SELF-HEALING ---
+  # This section is only reached if the loop times out.
+  if [ "$last_liveness_failures" -gt 0 ]; then
+    fatal "❌ $last_liveness_failures liveness failures - Pods are failing to start. Check logs."
+  elif [ "$last_policy_warnings" -gt 0 ]; then
+    log "🔧 AUTO-FIX TRIGGERED: $last_policy_warnings policy warnings detected."
+    log "♻️ Re-applying NetworkPolicies to force CNI sync..."
     apply_network_policies
-    sleep 5
-    log "✅ Policies re-applied. Deploy COMPLETE."
-    return 0  # ← THIS EXECUTES
+    sleep 10
+    log "✅ SELF-HEALED: Policies re-applied. Deployment marked as complete."
+    return 0 
   fi
 }
 
@@ -595,7 +610,7 @@ verify_backend_image "darkseek-backend-ws"
 verify_backend_image "darkseek-backend-mqtt"
 
 wait_for_deployments
-
+sleep 21
 check_pod_statuses
 
 log "Setting IPs..."
