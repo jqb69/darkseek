@@ -1,6 +1,6 @@
 #!/bin/bash
 # k8s/reset-network-state.sh — Flushes CNI cache and reloads policies
-# FIXED: Corrected paths for 07-allow-debug-to-backend.yaml and 02-allow-backend-ws.yaml
+# This version checks for file existence and avoids deleting the debug-mqtt pod.
 
 set -e
 
@@ -10,44 +10,39 @@ log "☢️ STARTING NUCLEAR RESET OF NETWORK STATE..."
 
 # 1. DELETE ALL RELATED POLICIES
 log "🗑️ Deleting NetworkPolicies..."
-# Delete by label (bulk)
 kubectl delete networkpolicy -l app=darkseek-policy --ignore-not-found=true
-# Delete specific names to be sure
 kubectl delete networkpolicy allow-backend-ws allow-to-redis allow-debug-to-backend --ignore-not-found=true
 
-# 2. RE-APPLY POLICIES (FIXED PATHS)
+# 2. RE-APPLY POLICIES (CRITICAL ORDER)
 log "♻️ Re-applying fresh policies..."
 
-# Re-apply the specific backend-ws policy
-if [ -f "k8s/policies/02-allow-backend-ws.yaml" ]; then
-    kubectl apply -f k8s/policies/02-allow-backend-ws.yaml
-else
-    log "⚠️ WARNING: k8s/policies/02-allow-backend-ws.yaml not found!"
-fi
+apply_if_exists() {
+    if [ -f "$1" ]; then
+        log "Applying: $1"
+        kubectl apply -f "$1"
+    else
+        log "⚠️ Skipping: $1 (File not found)"
+    fi
+}
 
-# Re-apply Redis policy
-if [ -f "k8s/policies/05-allow-redis-access.yaml" ]; then
-    kubectl apply -f k8s/policies/05-allow-redis-access.yaml
-else
-    log "⚠️ WARNING: k8s/policies/05-allow-redis-access.yaml not found!"
-fi
+apply_if_exists "k8s/policies/02-allow-backend-ws.yaml"      # DNS + Redis EGRESS
+apply_if_exists "k8s/policies/05-allow-redis-access.yaml"    # Redis INGRESS
+apply_if_exists "k8s/policies/07-allow-debug-to-backend.yaml" # Debug EGRESS
 
-# Re-apply Debug policy (FIXED PATH to k8s/policies/)
-if [ -f "k8s/policies/07-allow-debug-to-backend.yaml" ]; then
-    log "Applying Debug Policy: k8s/policies/07-allow-debug-to-backend.yaml"
-    kubectl apply -f k8s/policies/07-allow-debug-to-backend.yaml
-else
-    log "❌ ERROR: k8s/policies/07-allow-debug-to-backend.yaml not found! Debug pod will be isolated."
-fi
+# 3. FORCE RESTART CRITICAL PODS (Fresh veth + policy attachment)
+# Note: debug-mqtt pod deletion removed per user request.
+log "🔌 Killing pods to force fresh veth pairs + policy attachment..."
 
-# 3. FORCE RESTART PODS (Clears stale conntrack entries)
-log "🔌 Killing pods to force fresh veth pairs..."
-
-kubectl delete pod -l app=darkseek-redis --force --grace-period=0 || true
+log "Restarting Backend-WS..."
+kubectl delete pod -l app=darkseek-backend-ws --force --grace-period=0 || true
 kubectl rollout restart deployment darkseek-backend-ws
 
-log "⏳ Waiting for pods to stabilize..."
-sleep 20
-kubectl get pods -o wide
+log "Restarting Redis..."
+kubectl delete pod -l app=darkseek-redis --force --grace-period=0 || true
+kubectl rollout restart deployment darkseek-redis
 
-log "✅ Reset complete. Run ./k8s/mqtt-testk8s.sh to verify."
+log "⏳ Waiting for pods + CNI to stabilize..."
+sleep 25
+kubectl get pods -l 'app in (darkseek-backend-ws, debug-mqtt, darkseek-redis)' -o wide
+
+log "✅ Reset complete. Run ./k8s/run-mqtt-tests-with-fix.sh to verify."
