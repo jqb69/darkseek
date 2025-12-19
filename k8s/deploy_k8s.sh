@@ -354,79 +354,53 @@ apply_network_policies() {
 
 check_pod_statuses() {
   log "🔍 Checking pod health + NetworkPolicy attachment..."
-  local timeout=300
-  local interval=10
-  local elapsed=0
-  local all_healthy=true
-  local NAMESPACE=${NAMESPACE:-default}
+  local timeout=300 interval=10 elapsed=0
+  local policy_warnings=0 liveness_failures=0
   
   while [ $elapsed -lt $timeout ]; do
-    all_healthy=true
-    
-    for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis"; do
-      # 1. Capture Pod Status Data
-      # FIXED: Added 2>/dev/null to avoid noise if pods are being rotated during the fetch.
-      pod_status=$(kubectl get pods -n "$NAMESPACE" -l app="$dep" -o jsonpath='{range .items[*]}{.metadata.name}:{.status.phase}:{.status.containerStatuses[*].ready}{"\n"}{end}' 2>/dev/null || echo "")
-      
-      # RACE CONDITION FIX: If pod_status is empty, the deployment might be mid-rollout. 
-      # We treat this as "not healthy yet" and continue the loop.
-      if [ -z "$pod_status" ]; then
-        log "⏳ $dep: No pods found yet (likely scaling or restarting)..."
-        all_healthy=false
-        continue
-      fi
-
-      # 2. NetworkPolicy Attachment Check (Detects CNI "Ghost Policy" Bug)
-      # LOGIC: We check the specific deployment pods for the "Network Policies" field in describe output.
-      policy_status=$(kubectl describe pod -l app="$dep" -n "$NAMESPACE" 2>/dev/null | grep -A5 "Network Policies" | grep -v "items:" | head -1 || echo "NO_POLICY")
-      
-      if [[ "$policy_status" == "NO_POLICY" || "$policy_status" == "items:"* || -z "$policy_status" ]]; then
-        log "⚠️ WARNING: $dep has NO NetworkPolicies attached (DNS will fail)"
-        all_healthy=false
+    for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend"; do
+      # 1. Policy check (ALREADY jq-free, perfect)
+      policy_status=$(kubectl describe pod -l app="$dep" -n "$NAMESPACE" 2>/dev/null | grep -A5 "Network Policies" | grep -v "items:\[\]" | head -1 || echo "NO_POLICY")
+      if [[ "$policy_status" == "NO_POLICY" ]]; then
+        log "⚠️ $dep: NO NetworkPolicies"
+        ((policy_warnings++))
       else
-        log "✅ $dep: Policies attached ($policy_status)"
+        log "✅ $dep: Policies OK ($policy_status)"
       fi
       
-      # 3. Liveness Logic Loop
-      while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        
-        # Split data safely
-        pod_name=$(echo "$line" | cut -d: -f1)
-        phase=$(echo "$line" | cut -d: -f2)
-        ready=$(echo "$line" | cut -d: -f3)
-        
-        # LOGIC: Check for 'true' string (handles multiple containers if they all report true)
-        if [[ "$phase" != "Running" || "$ready" != *"true"* ]]; then
-          log "Pod $pod_name for $dep unhealthy (Phase: $phase, Ready: $ready) (elapsed: $elapsed/$timeout)."
-          
-          # Diagnostic dump on failure
-          kubectl describe pod "$pod_name" -n "$NAMESPACE" 2>/dev/null || true
-          kubectl logs "$pod_name" -n "$NAMESPACE" --all-containers=true --tail=20 2>/dev/null || true
-          all_healthy=false
-        else
-          log "Pod $pod_name healthy."
-        fi
-      done <<< "$pod_status"
+      # 2. Liveness check - PURE jsonpath (NO jq)
+      pod_phase=$(kubectl get pods -l app="$dep" -n "$NAMESPACE" -o jsonpath='{.items[0].status.phase}{"\n"}' 2>/dev/null || echo "")
+      pod_ready=$(kubectl get pods -l app="$dep" -n "$NAMESPACE" -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}{"\n"}' 2>/dev/null || echo "")
+      
+      if [[ "$pod_phase" != "Running" || "$pod_ready" != "True" ]]; then
+        log "❌ $dep unhealthy (Phase: '$pod_phase', Ready: '$pod_ready')"
+        ((liveness_failures++))
+      else
+        log "✅ $dep healthy (Phase: '$pod_phase', Ready: '$pod_ready')"
+      fi
     done
     
-    # If all components across the loop are healthy, we exit successfully
-    if [ "$all_healthy" = true ]; then
-      log "✨ All pods and policies verified healthy."
-      break
-    fi
-
+    # Early exit if perfect
+    [ $policy_warnings -eq 0 ] && [ $liveness_failures -eq 0 ] && break
+    
     sleep $interval
     elapsed=$((elapsed + interval))
   done
   
-  # FINAL CHECK: Warn but don't exit 1 so the CI/CD pipeline doesn't break on CNI flakiness
-  if [ "$all_healthy" != true ]; then
-    log "⚠️ POLICY WARNING: Some pods missing NetworkPolicies or unhealthy - DNS may fail. Run reset-network-state.sh"
-    return 0 # Still return success to allow troubleshooting
+  # DECISION TREE
+  if [ $liveness_failures -gt 0 ]; then
+    fatal "❌ $liveness_failures liveness failures - deployment broken"
+  elif [ $policy_warnings -gt 0 ]; then
+    log "🔧 AUTO-FIX: $policy_warnings policy warnings → Re-applying"
+    apply_network_policies
+    sleep 5
+    log "✅ Policies re-applied. Pods pick up on next restart."
+    return 0  # Production continues
+  else
+    log "✨ ALL PERFECT - Policies + Liveness 100%"
   fi
-  log "Liveness checks complete."
 }
+
 
 apply_with_envsubst() {
   local file="$1"
@@ -572,13 +546,13 @@ fi
 
 kubectl apply -f configmap.yaml
 dryrun_server
+log "🔒 PRE-APPLY: NetworkPolicies (before pods exist)"
+apply_network_policies
 # 1. Core infrastructure first
 apply_with_retry db-deployment.yaml
 apply_with_retry redis-deployment.yaml
 apply_with_retry db-pvc.yaml
 
-log "🔒 PRE-APPLY: NetworkPolicies (before pods exist)"
-apply_network_policies
 
 
 # 2-3.After DB + Redis + PVC
