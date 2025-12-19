@@ -366,8 +366,8 @@ check_pod_statuses() {
   
   while [ $elapsed -lt $timeout ]; do
     # Reset local counters for THIS iteration
-    local policy_warnings=0
-    local liveness_failures=0
+    policy_warnings=0
+    liveness_failures=0
     
     for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis"; do
       # 1. Policy check (Detects CNI "Ghost Policy" Bug)
