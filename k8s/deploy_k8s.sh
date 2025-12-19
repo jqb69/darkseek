@@ -383,12 +383,14 @@ check_pod_statuses() {
       
       # 2. BULLETPROOF Liveness (kubectl wait)
       # We use a conditional check so a 'fail' just increments our counter instead of exiting the script
-      if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=33s -n "$NAMESPACE" &>/dev/null; then
+      # Liveness (60s = bulletproof)
+      if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=60s -n "$NAMESPACE" &>/dev/null; then
         log "✅ $dep healthy"
       else
-        log "❌ $dep unhealthy (readiness check failed)"
+        log "❌ $dep unhealthy"
         ((liveness_failures++))
-      fi
+      fi    
+
     done
     
     # Capture iteration state for the post-loop decision tree
