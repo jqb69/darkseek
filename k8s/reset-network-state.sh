@@ -1,48 +1,47 @@
 #!/bin/bash
-# k8s/reset-network-state.sh — Flushes CNI cache and reloads policies
-# This version checks for file existence and avoids deleting the debug-mqtt pod.
-
-set -e
+# k8s/reset-network-state.sh — FIXED VERSION
+set -euo pipefail
 
 log() { echo "[$(date +'%H:%M:%S')] $*"; }
 
-log "☢️ STARTING NUCLEAR RESET OF NETWORK STATE..."
+log "☢️ NUCLEAR NETWORK RESET STARTING..."
 
-# 1. DELETE ALL RELATED POLICIES
-log "🗑️ Deleting NetworkPolicies..."
-kubectl delete networkpolicy -l app=darkseek-policy --ignore-not-found=true
-kubectl delete networkpolicy allow-backend-ws allow-to-redis allow-debug-to-backend --ignore-not-found=true
+# 1. DELETE ALL NETWORKPOLICIES (nuclear)
+log "🗑️ Deleting ALL NetworkPolicies..."
+kubectl delete networkpolicy --all --ignore-not-found=true || true
 
-# 2. RE-APPLY POLICIES (CRITICAL ORDER)
-log "♻️ Re-applying fresh policies..."
+# 2. RE-APPLY CRITICAL POLICIES (DNS FIRST if exists)
+log "♻️ Re-applying policies (DNS → WS → Redis → Debug)..."
 
 apply_if_exists() {
     if [ -f "$1" ]; then
         log "Applying: $1"
         kubectl apply -f "$1"
     else
-        log "⚠️ Skipping: $1 (File not found)"
+        log "⚠️ Skipping: $1 (missing)"
     fi
 }
 
-apply_if_exists "k8s/policies/02-allow-backend-ws.yaml"      # DNS + Redis EGRESS
-apply_if_exists "k8s/policies/05-allow-redis-access.yaml"    # Redis INGRESS
-apply_if_exists "k8s/policies/07-allow-debug-to-backend.yaml" # Debug EGRESS
+# CRITICAL ORDER:
+apply_if_exists "k8s/policies/00-allow-dns.yaml"           # DNS FIRST
+apply_if_exists "k8s/policies/02-allow-backend-ws.yaml"    # WS
+apply_if_exists "k8s/policies/05-allow-redis-access.yaml"  # Redis
+apply_if_exists "k8s/policies/07-allow-debug-to-backend.yaml"
 
-# 3. FORCE RESTART CRITICAL PODS (Fresh veth + policy attachment)
-# Note: debug-mqtt pod deletion removed per user request.
-log "🔌 Killing pods to force fresh veth pairs + policy attachment..."
-
-log "Restarting Backend-WS..."
+# 3. FORCE KILL PODS (fresh veth pairs)
+log "🔌 Force killing pods..."
 kubectl delete pod -l app=darkseek-backend-ws --force --grace-period=0 || true
-kubectl rollout restart deployment darkseek-backend-ws
-
-log "Restarting Redis..."
 kubectl delete pod -l app=darkseek-redis --force --grace-period=0 || true
-kubectl rollout restart deployment darkseek-redis
 
-log "⏳ Waiting for pods + CNI to stabilize..."
-sleep 25
-kubectl get pods -l 'app in (darkseek-backend-ws, debug-mqtt, darkseek-redis)' -o wide
+# 4. WAIT FOR STABILIZATION (NO DOUBLE RESTART)
+log "⏳ Waiting for fresh pods (handles 90s startup)..."
+kubectl rollout status deployment/darkseek-backend-ws --timeout=180s
+kubectl rollout status deployment/darkseek-redis --timeout=60s
 
-log "✅ Reset complete. Run ./k8s/run-mqtt-tests-with-fix.sh to verify."
+log "✅ Pods stable. CNI attaching..."
+sleep 25  # CNI propagation
+
+log "📊 Pod status:"
+kubectl get pods -l 'app in (darkseek-backend-ws,darkseek-redis,debug-mqtt)' -o wide
+
+log "✅ RESET COMPLETE. Test: ./k8s/run-mqtt-tests-with-fix.sh"
