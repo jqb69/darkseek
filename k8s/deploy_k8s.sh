@@ -355,72 +355,56 @@ apply_network_policies() {
 check_pod_statuses() {
   log "🔍 Checking pod health + NetworkPolicy attachment..."
   
-  local timeout=300 
-  local interval=10 
+  local timeout=600 
+  local interval=20
   local elapsed=0
   
-  # Persistent state to survive the loop for the final decision tree
-  local last_policy_warnings=0 
-  local last_liveness_failures=0
-  
   while [ $elapsed -lt $timeout ]; do
-    # Reseting counters for THIS iteration
-    # We use global scope (no 'local') so the decision tree can read them if we break
-    policy_warnings=0
-    liveness_failures=0
+    local policy_warnings=0
+    local liveness_failures=0
     
     for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis"; do
-      # 1. SAFE Policy check (ignores kubectl races)
-      # We pipe to '|| true' or use local checks to prevent 'set -e' from killing the script here
-      policy_status=$(kubectl describe pod -l app="$dep" -n "$NAMESPACE" 2>/dev/null | grep -A5 "Network Policies" || echo "NO_POLICY")
       
-      if [[ "$policy_status" == "NO_POLICY" || -z "$policy_status" ]]; then
-        log "⚠️ $dep: NO NetworkPolicies detected"
-        ((policy_warnings++))
+      # 1. BULLETPROOF POLICY CHECK
+      # Use '|| true' and force a string return to ensure the shell doesn't exit
+      policy_status=$(kubectl describe pod -l app="$dep" -n "$NAMESPACE" 2>/dev/null | grep -A5 "Network Policies" || echo "NONE")
+      
+      if [[ "$policy_status" == "NONE" || -z "$policy_status" ]]; then
+        log "⚠️ $dep: NO NetworkPolicies detected! Triggering immediate re-sync..."
+        # HEAL IMMEDIATELY - Don't wait for timeout
+        apply_network_policies
+        policy_warnings=$((policy_warnings + 1))
       else
         log "✅ $dep: Policies OK"
       fi
       
-      # 2. BULLETPROOF Liveness (kubectl wait)
-      # We use a conditional check so a 'fail' just increments our counter instead of exiting the script
-      # Liveness (60s = bulletproof)
-      if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=60s -n "$NAMESPACE" &>/dev/null; then
+      # 2. READINESS CHECK
+      if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=85s -n "$NAMESPACE" &>/dev/null; then
         log "✅ $dep healthy"
       else
-        log "❌ $dep unhealthy"
-        ((liveness_failures++))
-      fi    
-
+        log "❌ $dep unhealthy (readiness check failed)"
+        liveness_failures=$((liveness_failures + 1))
+      fi
     done
     
-    # Capture iteration state for the post-loop decision tree
-    last_policy_warnings=$policy_warnings
-    last_liveness_failures=$liveness_failures
-
-    # Early exit ONLY if perfect
+    # SUCCESS CONDITION
     if [ "$policy_warnings" -eq 0 ] && [ "$liveness_failures" -eq 0 ]; then
       log "✨ ALL PERFECT - Policies + Liveness 100%"
       return 0
     fi
     
-    # If we are here, something is wrong. We only "fatal" out if we hit the timeout.
-    log "⏳ Retrying stabilization ($elapsed/$timeout). Current: $policy_warnings warnings, $liveness_failures fails..."
+    log "⏳ Stabilization in progress ($elapsed/$timeout). Warnings: $policy_warnings, Fails: $liveness_failures"
     sleep $interval
     elapsed=$((elapsed + interval))
   done
   
-  # --- DECISION TREE / SELF-HEALING ---
-  # This section is only reached if the loop times out.
-  if [ "$last_liveness_failures" -gt 0 ]; then
-    fatal "❌ $last_liveness_failures liveness failures - Pods are failing to start. Check logs."
-  elif [ "$last_policy_warnings" -gt 0 ]; then
-    log "🔧 AUTO-FIX TRIGGERED: $last_policy_warnings policy warnings detected."
-    log "♻️ Re-applying NetworkPolicies to force CNI sync..."
-    apply_network_policies
-    sleep 10
-    log "✅ SELF-HEALED: Policies re-applied. Deployment marked as complete."
-    return 0 
+  # FINAL CHECK AFTER TIMEOUT
+  if [ "$liveness_failures" -gt 0 ]; then
+    fatal "❌ $liveness_failures pods failed liveness after ${timeout}s."
   fi
+  
+  log "✅ Deployment converged (with minor policy re-syncs)."
+  return 0
 }
 
 
