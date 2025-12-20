@@ -338,13 +338,19 @@ apply_networking() {
   log "🛡️ Applying DNS-Aware Zero-Trust Policies..."
   
   # 1. DNS FIRST (ALL pods need CoreDNS)
+  # This ensures pods can resolve names even when deny-all is applied next
   kubectl apply -f k8s/policies/00-allow-dns.yaml
   
   # 2. DENY-ALL SECOND (blocks everything else)
+  # Isolates the namespace completely
   kubectl apply -f k8s/policies/01-deny-all.yaml
   
   # 3. APP POLICIES LAST (General application of allow rules)
+  # Applies all numbered allow rules (02-backend, 05-redis, etc.)
   kubectl apply -f k8s/policies/0*.yaml --ignore-not-found
+
+  # 4. FRONTEND INGRESS (Explicitly ensuring frontend access)
+  kubectl apply -f k8s/policies/allow-front*.yaml --ignore-not-found
 }
 
 verify_dns_and_health() {
