@@ -353,10 +353,10 @@ apply_networking() {
  
   # 3. APP POLICIES LAST (General application of allow rules)
   # Applies all numbered allow rules (02-backend, 05-redis, etc.)
-  kubectl apply -f $policy_dir/0*.yaml --ignore-not-found
+  kubectl apply -f $policy_dir/0*.yaml 
 
   # 4. FRONTEND INGRESS (Explicitly ensuring frontend access)
-  kubectl apply -f $policy_dir/allow-front*.yaml --ignore-not-found
+  kubectl apply -f $policy_dir/allow-front*.yaml 
 }
 
 verify_dns_and_health() {
