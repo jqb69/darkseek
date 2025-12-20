@@ -334,6 +334,42 @@ wait_for_deployments() {
   done
 }
 
+apply_networking() {
+  log "🛡️ Applying DNS-Aware Zero-Trust Policies..."
+  
+  # 1. DNS FIRST (ALL pods need CoreDNS)
+  kubectl apply -f k8s/policies/00-allow-dns.yaml
+  
+  # 2. DENY-ALL SECOND (blocks everything else)
+  kubectl apply -f k8s/policies/01-deny-all.yaml
+  
+  # 3. APP POLICIES LAST (General application of allow rules)
+  kubectl apply -f k8s/policies/0*.yaml --ignore-not-found
+}
+
+verify_dns_and_health() {
+  log "🔍 Verifying DNS Propagation and Redis connectivity..."
+  
+  # Wait for CoreDNS to reflect the service
+  local retry=0
+  while [ $retry -lt 10 ]; do
+    if kubectl exec -it deploy/darkseek-backend-ws -- nslookup darkseek-redis &>/dev/null; then
+      log "✅ DNS Resolution: darkseek-redis resolved successfully."
+      break
+    fi
+    log "⏳ Waiting for DNS propagation... ($retry/10)"
+    sleep 5
+    retry=$((retry+1))
+  done
+
+  # Force restart if DNS is still stuck to flush stale states
+  if [ $retry -eq 10 ]; then
+    log "⚠️ DNS stuck. Performing rolling restart of backend layer..."
+    kubectl rollout restart deployment/darkseek-backend-ws
+    kubectl rollout status deployment/darkseek-backend-ws --timeout=90s
+  fi
+}
+
 apply_network_policies() {
   log "Applying Zero-Trust Network Policies..."
   local policy_dir="./policies"
@@ -354,58 +390,58 @@ apply_network_policies() {
 
 check_pod_statuses() {
   log "🔍 Checking pod health + NetworkPolicy attachment..."
-  
-  local timeout=600 
-  local interval=20
-  local elapsed=0
+  local timeout=600 interval=20 elapsed=0
+  local policy_last_apply=0
+  local MIN_APPLY_GAP=30
+  local liveness_failures=0
   
   while [ $elapsed -lt $timeout ]; do
     local policy_warnings=0
-    local liveness_failures=0
     
     for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis"; do
-      
-      # 1. BULLETPROOF POLICY CHECK
-      # Use '|| true' and force a string return to ensure the shell doesn't exit
-      policy_status=$(kubectl describe pod -l app="$dep" -n "$NAMESPACE" 2>/dev/null | grep -A5 "Network Policies" || echo "NONE")
+      # 1. POLICY CHECK (debounced)
+      policy_status=$(kubectl describe pod -l app="$dep" 2>/dev/null | grep -A5 "Network Policies" || echo "NONE")
       
       if [[ "$policy_status" == "NONE" || -z "$policy_status" ]]; then
-        log "⚠️ $dep: NO NetworkPolicies detected! Triggering immediate re-sync..."
-        # HEAL IMMEDIATELY - Don't wait for timeout
-        apply_network_policies
-        policy_warnings=$((policy_warnings + 1))
+        log "⚠️ $dep: NO NetworkPolicies (CNI lag)"
+        ((policy_warnings++))
+        
+        # DEBOUNCE APPLY
+        now=$(date +%s)
+        if [ $((now - policy_last_apply)) -ge $MIN_APPLY_GAP ]; then
+          log "🔧 Policy apply #$((++policy_last_apply)) (30s debounce)"
+          apply_network_policies
+          sleep 10
+        fi
       else
         log "✅ $dep: Policies OK"
       fi
       
-      # 2. READINESS CHECK
+      # 2. LIVENESS CHECK (85s - CRITICAL)
       if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=85s -n "$NAMESPACE" &>/dev/null; then
         log "✅ $dep healthy"
       else
-        log "❌ $dep unhealthy (readiness check failed)"
-        liveness_failures=$((liveness_failures + 1))
+        log "❌ $dep unhealthy"
+        ((liveness_failures++))
       fi
     done
     
-    # SUCCESS CONDITION
-    if [ "$policy_warnings" -eq 0 ] && [ "$liveness_failures" -eq 0 ]; then
+    # SUCCESS: Zero warnings AND zero liveness failures
+    if [ $policy_warnings -eq 0 ] && [ $liveness_failures -eq 0 ]; then
       log "✨ ALL PERFECT - Policies + Liveness 100%"
       return 0
     fi
     
-    log "⏳ Stabilization in progress ($elapsed/$timeout). Warnings: $policy_warnings, Fails: $liveness_failures"
+    log "⏳ ($elapsed/$timeout) Warnings: $policy_warnings, Liveness fails: $liveness_failures"
     sleep $interval
     elapsed=$((elapsed + interval))
   done
   
-  # FINAL CHECK AFTER TIMEOUT
-  if [ "$liveness_failures" -gt 0 ]; then
-    fatal "❌ $liveness_failures pods failed liveness after ${timeout}s."
-  fi
-  
-  log "✅ Deployment converged (with minor policy re-syncs)."
-  return 0
+  # FINAL FATAL ONLY LIVENESS
+  [ $liveness_failures -gt 0 ] && fatal "❌ Liveness failed: $liveness_failures pods"
+  log "✅ COMPLETE (policies debounced)"
 }
+
 
 
 apply_with_envsubst() {
@@ -597,6 +633,8 @@ verify_backend_image "darkseek-backend-mqtt"
 
 wait_for_deployments
 sleep 21
+apply_networking     # DNS FIRST → No more DNS fails
+verify_dns_and_health  # Verify + auto-restart if stuck
 check_pod_statuses
 
 log "Setting IPs..."
