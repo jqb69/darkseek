@@ -5,6 +5,7 @@ set -euo pipefail
 
 NAMESPACE="default"
 K8S_DIR="./k8s"
+POLICY_DIR="./policies"
 RETRY_APPLY=3
 APPLY_SLEEP=3
 
@@ -336,27 +337,43 @@ wait_for_deployments() {
 
 apply_networking() {
   log "🛡️ Applying DNS-Aware Zero-Trust Policies..."
-  local policy_dir="./policies"
+  
+  # Local assignment for scoped usage
+  local policy_dir="${POLICY_DIR}"
   
   if [ ! -d "$policy_dir" ]; then
-    log "No policies directory found. Skipping NetworkPolicy application."
+    log "⚠️ Policy directory $policy_dir not found. Skipping networking layer."
     return 0
   fi
-  
+
+  log "📂 Using policy source: $policy_dir"
+
   # 1. DNS FIRST (ALL pods need CoreDNS)
-  # This ensures pods can resolve names even when deny-all is applied next
-  kubectl apply -f $policy_dir/00-allow-dns.yaml
+  if [ -f "$policy_dir/00-allow-dns.yaml" ]; then
+    kubectl apply -f "$policy_dir/00-allow-dns.yaml"
+  fi
   
   # 2. DENY-ALL SECOND (blocks everything else)
-  # Isolates the namespace completely
-  kubectl apply -f $policy_dir/01-deny-all.yaml
- 
-  # 3. APP POLICIES LAST (General application of allow rules)
-  # Applies all numbered allow rules (02-backend, 05-redis, etc.)
-  kubectl apply -f $policy_dir/0*.yaml 
+  if [ -f "$policy_dir/01-deny-all.yaml" ]; then
+    kubectl apply -f "$policy_dir/01-deny-all.yaml"
+  fi
+  
+  # 3. APP POLICIES (Numbered allow rules)
+  log "Applying application allow-rules (0*.yaml)..."
+  for f in "$policy_dir"/0*.yaml; do
+    # Ensure we don't re-apply 00 and 01 in this loop to keep logs clean
+    if [[ -e "$f" && "$f" != *"00-allow-dns"* && "$f" != *"01-deny-all"* ]]; then
+      kubectl apply -f "$f"
+    fi
+  done
 
-  # 4. FRONTEND INGRESS (Explicitly ensuring frontend access)
-  kubectl apply -f $policy_dir/allow-front*.yaml 
+  # 4. FRONTEND INGRESS (Specific patterns)
+  log "Applying frontend ingress rules..."
+  for f in "$policy_dir"/allow-front*.yaml; do
+    if [ -e "$f" ]; then
+      kubectl apply -f "$f"
+    fi
+  done
 }
 
 verify_dns_and_health() {
