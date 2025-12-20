@@ -374,30 +374,33 @@ apply_networking() {
       kubectl apply -f "$f"
     fi
   done
+  sleep 5
 }
 
 verify_dns_and_health() {
   log "🔍 Verifying DNS Propagation and Redis connectivity..."
   
-  # Wait for CoreDNS to reflect the service
   local retry=0
   while [ $retry -lt 10 ]; do
-    if kubectl exec -it deploy/darkseek-backend-ws -- nslookup darkseek-redis &>/dev/null; then
+    # Verify DNS from the backend-ws perspective
+    if kubectl exec deployment/darkseek-backend-ws -- nslookup darkseek-redis &>/dev/null; then
       log "✅ DNS Resolution: darkseek-redis resolved successfully."
       break
     fi
     log "⏳ Waiting for DNS propagation... ($retry/10)"
-    sleep 5
+    sleep 10 # Increased sleep between retries
     retry=$((retry+1))
   done
 
-  # Force restart if DNS is still stuck to flush stale states
+  # Force restart if DNS is still stuck to flush stale states/CNI cache
   if [ $retry -eq 10 ]; then
     log "⚠️ DNS stuck. Performing rolling restart of backend layer..."
     kubectl rollout restart deployment/darkseek-backend-ws
-    kubectl rollout status deployment/darkseek-backend-ws --timeout=90s
+    # Increased timeout to 120s to allow for slow CNI attachment
+    kubectl rollout status deployment/darkseek-backend-ws --timeout=120s
   fi
 }
+
 
 apply_network_policies() {
   log "Applying Zero-Trust Network Policies..."
