@@ -401,6 +401,52 @@ verify_dns_and_health() {
   fi
 }
 
+check_dns_resolution() {
+  # Test if backend can see redis
+  kubectl exec deployment/darkseek-backend-ws -- nslookup darkseek-redis &>/dev/null
+}
+
+verify_and_fix_networking() {
+  log "🔍 Verifying Network Connectivity..."
+  
+  local attempt=0
+  while [ $attempt -lt $MAX_RETRIES ]; do
+    if check_dns_resolution; then
+      log "✅ DNS Resolution Verified: backend -> redis is ACTIVE."
+      return 0
+    fi
+    
+    log "⏳ ($attempt/$MAX_RETRIES) DNS blocked or CNI lagging. Retrying in ${RETRY_INTERVAL}s..."
+    sleep $RETRY_INTERVAL
+    ((attempt++))
+    
+    if [ $attempt -eq 6 ]; then
+      log "🔧 Intervention: Re-applying DNS policy to trigger CNI refresh..."
+      kubectl apply -f "${POLICY_DIR}/00-allow-dns.yaml"
+    fi
+  done
+
+  log "⚠️ DNS still stuck. Attempting GRACEFUL RESTART + CNI SETTLING..."
+  kubectl rollout restart deployment/darkseek-backend-ws
+  
+  # CRITICAL: Wait for the new Pod to be actually assigned an IP and for CNI to react
+  log "⏳ Waiting 30s for CNI to attach policies to new pods..."
+  sleep 30
+
+  if ! kubectl rollout status deployment/darkseek-backend-ws --timeout=90s; then
+    error "Rollout slow, but checking connectivity anyway..."
+  fi
+  
+  # FINAL CHECK: Give the CNI one last moment
+  sleep 10
+  if check_dns_resolution; then
+    log "✅ DNS stabilized after restart and settling period."
+    return 0
+  else
+    error "Network isolation persists. Pods are running but CNI is not plumbing rules."
+    return 1
+  fi
+}
 
 apply_network_policies() {
   log "Applying Zero-Trust Network Policies..."
@@ -620,8 +666,8 @@ fi
 
 kubectl apply -f configmap.yaml
 dryrun_server
-log "🔒 PRE-APPLY: NetworkPolicies (before pods exist)"
-apply_network_policies
+#log "🔒 PRE-APPLY: NetworkPolicies (before pods exist)"
+#apply_network_policies
 # 1. Core infrastructure first
 apply_with_retry db-deployment.yaml
 apply_with_retry redis-deployment.yaml
@@ -665,8 +711,9 @@ verify_backend_image "darkseek-backend-mqtt"
 
 wait_for_deployments
 sleep 21
+log "🔒 LOCKING DOWN NETWORK..
 apply_networking     # DNS FIRST → No more DNS fails
-verify_dns_and_health  # Verify + auto-restart if stuck
+verify_and_fix_networking # Verify + auto-restart if stuck
 check_pod_statuses
 
 log "Setting IPs..."
