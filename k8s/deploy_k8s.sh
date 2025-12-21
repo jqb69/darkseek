@@ -711,9 +711,9 @@ verify_backend_image "darkseek-backend-mqtt"
 
 wait_for_deployments
 sleep 21
-log "🔒 LOCKING DOWN NETWORK..
+log "🔒 LOCKING DOWN NETWORK.."
 apply_networking     # DNS FIRST → No more DNS fails
-verify_and_fix_networking # Verify + auto-restart if stuck
+verify_and_fix_networking 
 check_pod_statuses
 
 log "Setting IPs..."
