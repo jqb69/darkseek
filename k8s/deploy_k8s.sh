@@ -409,46 +409,47 @@ check_dns_resolution() {
 }
 
 verify_and_fix_networking() {
-  log "🔍 Verifying Network Connectivity..."
+  log "🔍 Verifying Network Connectivity (with CNI settling)..."
+  
+  # CRITICAL: Wait 15s for CNI to process NetworkPolicies
+  log "⏳ Waiting 15s for CNI + CoreDNS to attach policies..."
+  sleep 15
   
   local attempt=0
   while [ $attempt -lt $MAX_RETRIES ]; do
     if check_dns_resolution; then
-      log "✅ DNS Resolution Verified: backend -> redis is ACTIVE."
+      log "✅ DNS Resolution Verified: backend -> redis ACTIVE."
       return 0
     fi
     
-    log "⏳ ($attempt/$MAX_RETRIES) DNS blocked or CNI lagging. Retrying in ${RETRY_INTERVAL}s..."
+    log "⏳ ($attempt/$MAX_RETRIES) DNS blocked. Retrying in ${RETRY_INTERVAL}s..."
     sleep $RETRY_INTERVAL
     ((attempt++))
     
-    if [ $attempt -eq 6 ]; then
-      log "🔧 Intervention: Re-applying DNS policy to trigger CNI refresh..."
-      kubectl apply -f "${POLICY_DIR}/00-allow-dns.yaml"
+    # Intervention at attempt 4 (after initial CNI settle)
+    if [ $attempt -eq 4 ]; then
+      log "🔧 Re-applying DNS policy → CNI refresh..."
+      kubectl apply -f "${POLICY_DIR}/00-allow-dns.yaml" >/dev/null
+      sleep 10
     fi
   done
 
-  log "⚠️ DNS still stuck. Attempting GRACEFUL RESTART + CNI SETTLING..."
-  kubectl rollout restart deployment/darkseek-backend-ws
+  # Graceful restart ONLY as last resort
+  log "⚠️ DNS stuck → Rolling restart backend-ws + 45s CNI settle..."
+  kubectl rollout restart deployment/darkseek-backend-ws >/dev/null
+  sleep 45  # Full CNI reattach cycle
   
-  # CRITICAL: Wait for the new Pod to be actually assigned an IP and for CNI to react
-  log "⏳ Waiting 30s for CNI to attach policies to new pods..."
-  sleep 30
-
-  if ! kubectl rollout status deployment/darkseek-backend-ws --timeout=90s; then
-    error "Rollout slow, but checking connectivity anyway..."
-  fi
-  
-  # FINAL CHECK: Give the CNI one last moment
-  sleep 10
   if check_dns_resolution; then
-    log "✅ DNS stabilized after restart and settling period."
+    log "✅ DNS stabilized after restart + CNI settling."
     return 0
-  else
-    error "Network isolation persists. Pods are running but CNI is not plumbing rules."
-    return 1
   fi
+  
+  log "❌ Network isolation persists → Manual intervention required."
+  kubectl get netpol -n "$NAMESPACE" -o wide
+  kubectl get pods -n "$NAMESPACE" -o wide
+  fatal "CNI deadlock detected. Check NetworkPolicies manually."
 }
+
 
 apply_network_policies() {
   log "Applying Zero-Trust Network Policies..."
