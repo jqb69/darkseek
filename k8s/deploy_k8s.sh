@@ -8,6 +8,8 @@ K8S_DIR="./k8s"
 POLICY_DIR="./policies"
 RETRY_APPLY=3
 APPLY_SLEEP=3
+MAX_RETRIES=10
+RETRY_INTERVAL=10
 
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 fatal() { echo "ERROR: $*" >&2; exit 1; }
@@ -466,60 +468,39 @@ apply_network_policies() {
   log "All network policies applied. Cluster now in Zero-Trust mode."
 }
 
-check_pod_statuses() {
-  log "🔍 Checking pod health + NetworkPolicy attachment..."
-  local timeout=600 interval=20 elapsed=0
-  local policy_last_apply=0
-  local MIN_APPLY_GAP=30
-  local liveness_failures=0
+check_system_health() {
+  log "🔍 Validating Deployment Convergence..."
+  local timeout=600 interval=30 elapsed=0
+  apply_network_policies  # Initial sync
   
   while [ $elapsed -lt $timeout ]; do
-    local policy_warnings=0
+    local unhealthy_count=0
+    local policy_count=$(kubectl get netpol -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l)
+    
+    [ "$policy_count" -lt 5 ] && {
+      log "⚠️ Low policy count ($policy_count). Re-applying..."
+      apply_network_policies
+    }
     
     for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis"; do
-      # 1. POLICY CHECK (debounced)
-      policy_status=$(kubectl describe pod -l app="$dep" 2>/dev/null | grep -A5 "Network Policies" || echo "NONE")
-      
-      if [[ "$policy_status" == "NONE" || -z "$policy_status" ]]; then
-        log "⚠️ $dep: NO NetworkPolicies (CNI lag)"
-        ((policy_warnings++))
-        
-        # DEBOUNCE APPLY
-        now=$(date +%s)
-        if [ $((now - policy_last_apply)) -ge $MIN_APPLY_GAP ]; then
-          log "🔧 Policy apply #$((++policy_last_apply)) (30s debounce)"
-          apply_network_policies
-          sleep 10
-        fi
+      if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=85s &>/dev/null; then
+        log "✅ $dep: Ready"
       else
-        log "✅ $dep: Policies OK"
-      fi
-      
-      # 2. LIVENESS CHECK (85s - CRITICAL)
-      if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=85s -n "$NAMESPACE" &>/dev/null; then
-        log "✅ $dep healthy"
-      else
-        log "❌ $dep unhealthy"
-        ((liveness_failures++))
+        log "❌ $dep: Unhealthy"
+        unhealthy_count=$((unhealthy_count + 1))
       fi
     done
     
-    # SUCCESS: Zero warnings AND zero liveness failures
-    if [ $policy_warnings -eq 0 ] && [ $liveness_failures -eq 0 ]; then
-      log "✨ ALL PERFECT - Policies + Liveness 100%"
+    [ "$unhealthy_count" -eq 0 ] && {
+      log "✨ ALL SYSTEMS GO"
       return 0
-    fi
+    }
     
-    log "⏳ ($elapsed/$timeout) Warnings: $policy_warnings, Liveness fails: $liveness_failures"
     sleep $interval
     elapsed=$((elapsed + interval))
   done
-  
-  # FINAL FATAL ONLY LIVENESS
-  [ $liveness_failures -gt 0 ] && fatal "❌ Liveness failed: $liveness_failures pods"
-  log "✅ COMPLETE (policies debounced)"
+  fatal "Convergence failed"
 }
-
 
 
 apply_with_envsubst() {
@@ -714,7 +695,7 @@ sleep 21
 log "🔒 LOCKING DOWN NETWORK.."
 apply_networking     # DNS FIRST → No more DNS fails
 verify_and_fix_networking 
-check_pod_statuses
+check_system_health
 
 log "Setting IPs..."
 WEBSOCKET_URI="wss://darkseek-backend-ws:8443/ws/"
