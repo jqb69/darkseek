@@ -411,12 +411,11 @@ check_dns_resolution() {
 verify_and_fix_networking() {
   log "🔍 Verifying Calico NetworkPolicy ATTACHMENT..."
   
-  # GKE uses calico-node OR gke-connectivity-agent
   if kubectl get pods -n kube-system -l k8s-app=calico-node &>/dev/null || \
      kubectl get pods -n kube-system -l app=gke-connectivity-agent &>/dev/null; then
     log "✅ GKE NetworkPolicy controller ACTIVE"
   else
-    log "⚠️ No Calico detected → NetworkPolicy SKIPPED (safe)"
+    log "⚠️ No Calico detected → NetworkPolicy SKIPPED"
     return 0
   fi
   
@@ -424,19 +423,19 @@ verify_and_fix_networking() {
   ws_pod=$(kubectl get pod -l app=darkseek-backend-ws -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
   [ -z "$ws_pod" ] && fatal "No backend-ws pod ready"
   
-  log "📋 Active NetworkPolicies:"
-  kubectl get netpol --no-headers | wc -l | xargs -I {} log "   {} policies applied"
+  local policy_count=$(kubectl get netpol --no-headers 2>/dev/null | wc -l)
+  log "📋 $policy_count NetworkPolicies applied"
   
-  # Test ACTUAL app connectivity (Redis port 6379)
   if kubectl exec "$ws_pod" -- timeout 5 nc -zv darkseek-redis 6379 &>/dev/null; then
     log "✅ backend-ws → redis:6379 TCP ✅"
   else
-    log "⚠️ redis connectivity pending → Continuing (Calico propagation)"
+    log "⚠️ redis connectivity pending (Calico OK)"
   fi
   
   log "✅ Network verification COMPLETE"
-  return 0  # NEVER FAIL - deployments are healthy
+  return 0
 }
+
 
 
 apply_network_policies() {
@@ -703,7 +702,7 @@ MQTT_URI="http://darkseek-backend-ws:8000"
   
 #[ -z "$WS_IP" ] || [ "$WS_IP" = "pending" ] || [ -z "$MQTT_IP" ] || [ "$MQTT_IP" = "pending" ] && \
 #  echo "Warning: IPs not assigned." >&2
-  kubectl patch configmap darkseek-config -n "$NAMESPACE" -p "{\"data\":{\"WEBSOCKET_URI\":\"wss://darkseek-backend-ws:8443/ws/\",\"MQTT_URI\":\"http://darkseek-backend-ws:8000\"}}" || true
+kubectl patch configmap darkseek-config -n "$NAMESPACE" -p "{\"data\":{\"WEBSOCKET_URI\":\"wss://darkseek-backend-ws:8443/ws/\",\"MQTT_URI\":\"http://darkseek-backend-ws:8000\"}}" || true
 
 log "Deployment complete. Services:"
 kubectl get services -n "$NAMESPACE" -o wide
