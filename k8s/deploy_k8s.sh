@@ -408,46 +408,43 @@ check_dns_resolution() {
   kubectl exec deployment/darkseek-backend-ws -- nslookup darkseek-redis &>/dev/null
 }
 
-verify_and_fix_networking() {
-  log "🔍 Verifying Network Connectivity (with CNI settling)..."
+vverify_and_fix_networking() {
+  log "🔍 Verifying Calico NetworkPolicy ATTACHMENT to backend-ws..."
   
-  # CRITICAL: Wait 15s for CNI to process NetworkPolicies
-  log "⏳ Waiting 15s for CNI + CoreDNS to attach policies..."
-  sleep 15
+  # 1. Confirm Calico is running (GKE NetworkPolicy controller)
+  if ! kubectl get pods -n kube-system -l k8s-app=calico-node &>/dev/null; then
+    fatal "❌ Calico NOT running - NetworkPolicy disabled in GKE"
+  fi
+  log "✅ Calico active in kube-system"
   
-  local attempt=0
-  while [ $attempt -lt $MAX_RETRIES ]; do
-    if check_dns_resolution; then
-      log "✅ DNS Resolution Verified: backend -> redis ACTIVE."
-      return 0
-    fi
-    
-    log "⏳ ($attempt/$MAX_RETRIES) DNS blocked. Retrying in ${RETRY_INTERVAL}s..."
-    sleep $RETRY_INTERVAL
-    ((attempt++))
-    
-    # Intervention at attempt 4 (after initial CNI settle)
-    if [ $attempt -eq 4 ]; then
-      log "🔧 Re-applying DNS policy → CNI refresh..."
-      kubectl apply -f "${POLICY_DIR}/00-allow-dns.yaml" >/dev/null
-      sleep 10
-    fi
-  done
-
-  # Graceful restart ONLY as last resort
-  log "⚠️ DNS stuck → Rolling restart backend-ws + 45s CNI settle..."
-  kubectl rollout restart deployment/darkseek-backend-ws >/dev/null
-  sleep 45  # Full CNI reattach cycle
+  # 2. List ALL policies targeting backend-ws pods
+  local ws_pods
+  ws_pods=$(kubectl get pods -l app=darkseek-backend-ws -o name)
+  [ -z "$ws_pods" ] && fatal "No backend-ws pods found"
   
-  if check_dns_resolution; then
-    log "✅ DNS stabilized after restart + CNI settling."
-    return 0
+  log "📋 Policies targeting backend-ws pods:"
+  kubectl get netpol -o custom-columns=NAME:.metadata.name,POLICY-TYPE:.spec.policyTypes,SELECTOR:.spec.podSelector.matchLabels --no-headers | grep -E "(backend-ws|redis|postgres)" || true
+  
+  # 3. ACTUAL connectivity test FROM backend-ws pod (not nslookup)
+  log "🧪 Testing backend-ws → redis connectivity..."
+  if kubectl exec $(kubectl get pod -l app=darkseek-backend-ws -o jsonpath='{.items[0].metadata.name}') -- nc -zv darkseek-redis 6379 &>/dev/null; then
+    log "✅ backend-ws → redis:6379 TCP CONNECTED"
+  else
+    log "❌ backend-ws → redis connectivity BLOCKED"
+    kubectl exec $(kubectl get pod -l app=darkseek-backend-ws -o jsonpath='{.items[0].metadata.name}') -- nc -zv darkseek-redis 6379 || true
+    return 1
   fi
   
-  log "❌ Network isolation persists → Manual intervention required."
-  kubectl get netpol -n "$NAMESPACE" -o wide
-  kubectl get pods -n "$NAMESPACE" -o wide
-  fatal "CNI deadlock detected. Check NetworkPolicies manually."
+  # 4. Test DNS resolution inside pod
+  if kubectl exec $(kubectl get pod -l app=darkseek-backend-ws -o jsonpath='{.items[0].metadata.name}') -- nslookup darkseek-redis &>/dev/null; then
+    log "✅ DNS resolution: darkseek-redis OK"
+  else
+    log "❌ DNS resolution FAILED inside pod"
+    return 1
+  fi
+  
+  log "✅ NetworkPolicy + Connectivity VERIFIED"
+  return 0
 }
 
 
