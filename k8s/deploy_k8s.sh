@@ -350,8 +350,8 @@ apply_networking() {
   log "📂 Using policy source: $policy_dir"
 
   # CRITICAL DEPENDENCY ORDER: DB → Redis → WS
-  kubectl apply -f "$policy_dir"/00-allow-dns-egress.yaml -n "$NAMESPACE" && sleep 2
-  kubectl apply -f "$policy_dir"/01-deny-all-ingress.yaml -n "$NAMESPACE" && sleep 2
+  kubectl apply -f "$policy_dir"/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
+  kubectl apply -f "$policy_dir"/01-deny-all.yaml -n "$NAMESPACE" && sleep 2
   
   # 1. DB FIRST (backend-ws needs postgres:5432)
   kubectl apply -f "$policy_dir"/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 3
