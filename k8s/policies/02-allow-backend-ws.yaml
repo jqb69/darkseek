@@ -8,8 +8,10 @@ metadata:
 spec:
   # This policy targets the darkseek-backend-ws pod
   podSelector:
-    matchLabels:
-      app: darkseek-backend-ws
+    matchExpressions:
+    - key: app
+      operator: In
+      values: ["darkseek-backend-ws"]  
   
   policyTypes:
     - Ingress
