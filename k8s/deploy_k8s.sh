@@ -442,7 +442,7 @@ check_system_health() {
   local timeout=300 max_iters=3 iter_count=0
   local max_unhealthy=3  # Exit gracefully after 3 unhealthy cycles
   
-  apply_networking  # Initial sync
+  #apply_networking  # Initial sync
   
   while [ $iter_count -lt $max_iters ]; do
     local unhealthy_count=0
