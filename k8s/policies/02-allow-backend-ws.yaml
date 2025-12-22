@@ -5,8 +5,6 @@ kind: NetworkPolicy
 metadata:
   name: allow-backend-ws
   namespace: default
-  labels:
-    app: darkseek-policy
 spec:
   # This policy targets the darkseek-backend-ws pod
   podSelector:
