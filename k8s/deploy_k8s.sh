@@ -378,29 +378,6 @@ apply_networking() {
 
 
 
-verify_dns_and_health() {
-  log "🔍 Verifying DNS Propagation and Redis connectivity..."
-  
-  local retry=0
-  while [ $retry -lt 10 ]; do
-    # Verify DNS from the backend-ws perspective
-    if kubectl exec deployment/darkseek-backend-ws -- nslookup darkseek-redis &>/dev/null; then
-      log "✅ DNS Resolution: darkseek-redis resolved successfully."
-      break
-    fi
-    log "⏳ Waiting for DNS propagation... ($retry/10)"
-    sleep 10 # Increased sleep between retries
-    retry=$((retry+1))
-  done
-
-  # Force restart if DNS is still stuck to flush stale states/CNI cache
-  if [ $retry -eq 10 ]; then
-    log "⚠️ DNS stuck. Performing rolling restart of backend layer..."
-    kubectl rollout restart deployment/darkseek-backend-ws
-    # Increased timeout to 120s to allow for slow CNI attachment
-    kubectl rollout status deployment/darkseek-backend-ws --timeout=120s
-  fi
-}
 
 check_dns_resolution() {
   # Test if backend can see redis
@@ -573,7 +550,7 @@ deploy_main_apps() {
     local label="${entry%%:*}"
     local file="${entry##*:}"
     log "Deploying $file (app label: $label)..."
-    force_delete_pods "$label"
+    #force_delete_pods "$label"
     apply_with_sed "$file"
   done
 }
@@ -676,7 +653,7 @@ sleep 21
 log "🔒 LOCKING DOWN NETWORK.."
 apply_networking     # DNS FIRST → No more DNS fails
 verify_and_fix_networking 
-check_system_health
+#check_system_health
 
 log "Setting IPs..."
 WEBSOCKET_URI="wss://darkseek-backend-ws:8443/ws/"
