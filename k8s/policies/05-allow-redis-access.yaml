@@ -7,8 +7,10 @@ metadata:
   namespace: default 
 spec:
   podSelector:
-    matchLabels:
-      app: darkseek-redis
+    matchExpressions:
+    - key: app
+      operator: In
+      values: ["darkseek-redis"]  # Exact pod label from diagnostics
   policyTypes: [Ingress]
   ingress:
   - from:
