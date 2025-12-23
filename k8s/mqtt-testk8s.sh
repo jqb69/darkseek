@@ -62,47 +62,41 @@ dump_network_diagnostics() {
 
 
 nuclear_network_reset() {
-    # ... existing delete + restart ...\\
     log "☢️ STAGE 7 FAILURE DETECTED: Triggering Recovery..."
     
     dump_network_diagnostics
     
     log "🗑️ Purging ALL NetPols..."
     kubectl delete netpol --all -n "$NAMESPACE" --timeout=30s || true
-    log "🔄 ROLLING RESTART WS (clears CNI cache)..."
-    kubectl rollout restart deployment/$BACKEND_WS -n "$NAMESPACE"
-    kubectl rollout status deployment/$BACKEND_WS -n "$NAMESPACE" --timeout=90s || true
-    sleep 20
+    
+    log "🔄 FORCE-KILL WS PODS (NO rollout status BLOCK)..."
+    kubectl delete pod -l app=darkseek-backend-ws -n "$NAMESPACE" --force --grace-period=0 || true
+    
+    sleep 25  # Deployment spawns new pods
+    
     log "♻️ RE-APPLYING + FORCING matchLabels..."
     
-    kubectl apply -f k8s/policies/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
+    # 1. DNS FIRST
+    kubectl apply -f k8s/policies/00-allow-dns.yaml -n "$NAMESPACE" && sleep 3
     
-    # 3. DB/Redis (WS dependencies)
-    kubectl apply -f k8s/policies/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 2
-  
-    
-    # FORCE WS POLICY WITH matchLabels
+    # 2. WS POLICY (matchLabels FORCED)
     kubectl apply -f k8s/policies/02-allow-backend-ws.yaml -n "$NAMESPACE"
     kubectl patch netpol allow-backend-ws -n "$NAMESPACE" --patch '{"spec":{"podSelector":{"matchLabels":{"app":"darkseek-backend-ws"}}}}' --type=merge && sleep 5
     
-    # FORCE REDIS/DB
+    # 3. DEPENDENCIES
+    kubectl apply -f k8s/policies/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 2
     kubectl apply -f k8s/policies/05-allow-redis-access.yaml -n "$NAMESPACE"
-    kubectl patch netpol allow-to-redis -n "$NAMESPACE" --patch '{"spec":{"podSelector":{"matchLabels":{"app":"darkseek-redis"}}}}' --type=merge && sleep 2
+    kubectl patch netpol allow-to-redis -n "$NAMESPACE" --patch '{"spec":{"podSelector":{"matchLabels":{"app":"darkseek-redis"}}}}' --type=merge && sleep 3
     
-    sleep 15  # WS pods READY
-    
-    log "♻️ CRITICAL ORDER - NO DENY-ALL UNTIL LAST..."
-    
-  
-    
-    # 4. DENY-ALL LAST (after WS is protected)
+    # 4. DENY LAST
     kubectl apply -f k8s/policies/01-deny-all.yaml -n "$NAMESPACE" && sleep 3
     
-    # 5. Rest safe
+    # 5. Rest
     kubectl apply -f k8s/policies/ -n "$NAMESPACE"
     
-    log "✅ WS-PROTECTED RECOVERY COMPLETE"
-
+    log "✅ SELF-HEAL COMPLETE - TESTING..."
+    sleep 5
+    kubectl exec deployment/$BACKEND_WS -- nslookup darkseek-redis &>/dev/null && log "🎉 DNS FIXED!" || log "⚠️ DNS PENDING"
 }
 
 
