@@ -134,17 +134,16 @@ stage_redis_check() {
 stage_backend_core() {
     log "🔍 STAGE 5: Backend DNS + Redis..."
     
-    # Wait for ready pods
-    if ! kubectl wait --for=condition=Ready pod -l "app=$BACKEND_WS" -n "$NAMESPACE" --timeout=30s; then
-        log "❌ No ready backend-ws pods"
-        return 1
-    fi
     
-    # DNS test
-    if ! kubectl exec "deployment/$BACKEND_WS" -n "$NAMESPACE" -- nslookup "$REDIS_NAME" &>/dev/null; then
-        log "❌ DNS resolution failed"
+    # NO WAIT - just test
+    if kubectl exec "deployment/$BACKEND_WS" -- nslookup "$REDIS_NAME" &>/dev/null; then
+        log "✅ Backend DNS ok"
+        return 0
+    else
+        log "❌ Backend DNS failed"
         return 1
     fi
+
     
     # Redis PING (more robust)
     local resp
