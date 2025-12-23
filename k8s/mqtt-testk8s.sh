@@ -73,21 +73,29 @@ nuclear_network_reset() {
     kubectl rollout restart deployment/$BACKEND_WS -n "$NAMESPACE"
     kubectl rollout status deployment/$BACKEND_WS -n "$NAMESPACE" --timeout=90s || true
     
-    sleep 15
+    sleep 15  # WS pods READY
     
-    log "♻️ RE-APPLYING POLICIES IN CRITICAL ORDER..."
-    # DNS FIRST → Deny → DB → Redis → WS
-    kubectl apply -f k8s/policies/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
-    kubectl apply -f k8s/policies/01-deny-all.yaml -n "$NAMESPACE" && sleep 2
+    log "♻️ CRITICAL ORDER - NO DENY-ALL UNTIL LAST..."
+    
+    # 1. DNS FIRST (WS needs this IMMEDIATELY)
+    kubectl apply -f k8s/policies/00-allow-dns.yaml -n "$NAMESPACE" && sleep 5
+    
+    # 2. WS EGRESS SECOND (before any deny)
+    kubectl apply -f k8s/policies/02-allow-backend-ws.yaml -n "$NAMESPACE" && sleep 5
+    
+    # 3. DB/Redis (WS dependencies)
     kubectl apply -f k8s/policies/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 2
     kubectl apply -f k8s/policies/05-allow-redis-access.yaml -n "$NAMESPACE" && sleep 2
-    kubectl apply -f k8s/policies/02-allow-backend-ws.yaml -n "$NAMESPACE" && sleep 3
     
-    # Rest alphabetical (safe)
+    # 4. DENY-ALL LAST (after WS is protected)
+    kubectl apply -f k8s/policies/01-deny-all.yaml -n "$NAMESPACE" && sleep 3
+    
+    # 5. Rest safe
     kubectl apply -f k8s/policies/ -n "$NAMESPACE"
     
-    log "✅ ORDERED POLICY RECOVERY COMPLETE"
+    log "✅ WS-PROTECTED RECOVERY COMPLETE"
 }
+
 
 # --- STAGE 1: WAIT FOR POD READY ---
 stage_wait_debug_pod() {
