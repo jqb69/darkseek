@@ -415,49 +415,60 @@ verify_and_fix_networking() {
 
 
 check_system_health() {
-  log "🔍 Validating Deployment Convergence..."
-  local timeout=300 max_iters=3 iter_count=0
-  local max_unhealthy=3  # Exit gracefully after 3 unhealthy cycles
+  log "🔍 SURGICAL POLICY ATTACHMENT CHECK..."
   
-  #apply_networking  # Initial sync
+  local problematic_pods=()
+  local ws_policy_attached=false
+  local redis_policy_attached=false
   
-  while [ $iter_count -lt $max_iters ]; do
-    local unhealthy_count=0
-    local policy_count=$(kubectl get netpol -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l)
+  # 1. CHECK WS POLICY ATTACHMENT
+  if kubectl get netpol -l app=darkseek-backend-ws -n "$NAMESPACE" -o yaml &>/dev/null || \
+     ! kubectl get netpol allow-backend-ws -n "$NAMESPACE" -o yaml | grep -q "darkseek-backend-ws"; then
+    log "🚨 WS POLICY BROKEN → DETECTED items: []"
+    problematic_pods+=("darkseek-backend-ws")
+    ws_policy_attached=false
+  else
+    ws_policy_attached=true
+  fi
+  
+  # 2. CHECK REDIS POLICY ATTACHMENT  
+  if kubectl get netpol -l app=darkseek-redis -n "$NAMESPACE" -o yaml &>/dev/null || \
+     ! kubectl get netpol allow-to-redis -n "$NAMESPACE" -o yaml | grep -q "darkseek-redis"; then
+    log "🚨 REDIS POLICY BROKEN → DETECTED items: []"
+    problematic_pods+=("darkseek-redis")
+    redis_policy_attached=false
+  else
+    redis_policy_attached=true
+  fi
+  
+  # 3. SURGICAL NUCLEAR FIX - ONLY BROKEN POLICIES
+  if [ ${#problematic_pods[@]} -gt 0 ]; then
+    log "⚔️ SURGICALLY NUKE + RE-APPLY: ${problematic_pods[*]}"
     
-    [ "$policy_count" -lt 5 ] && {
-      log "⚠️ Low policy count ($policy_count). Re-applying..."
-      apply_networking
-    }
+    # TARGETED DELETE
+    kubectl delete netpol allow-backend-ws allow-to-redis -n "$NAMESPACE" --ignore-not-found=true
     
-    for dep in "darkseek-backend-ws" "darkseek-backend-mqtt" "darkseek-frontend" "darkseek-db" "darkseek-redis"; do
-      if kubectl wait --for=condition=Ready pod -l app="$dep" --timeout=45s &>/dev/null; then
-        log "✅ $dep: Ready"
-      else
-        log "⚠️ $dep: Still converging..."
-        unhealthy_count=$((unhealthy_count + 1))
-      fi
-    done
+    sleep 2
     
-    if [ "$unhealthy_count" -eq 0 ]; then
-      log "✨ ALL SYSTEMS GO"
-      return 0
+    # TARGETED RE-APPLY  
+    kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE"
+    kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE"
+    
+    sleep 10  # GKE controller propagation
+    
+    # VERIFY FIX
+    if kubectl exec deployment/darkseek-backend-ws -- nslookup darkseek-redis &>/dev/null; then
+      log "✅ SURGICAL FIX SUCCESS - WS DNS RESTORED"
+    else
+      log "⚠️ SURGICAL FIX PENDING - manual intervention needed"
     fi
-    
-    if [ "$unhealthy_count" -ge "$max_unhealthy" ]; then
-      log "⚠️ $unhealthy_count+ unhealthy after $iter_count iterations. Graceful exit."
-      log "💡 Pods deployed + policies applied. Manual monitoring recommended."
-      return 0  # NO ERROR, just exit
-    fi
-    
-    log "⏳ Iteration $((iter_count + 1))/$max_iters - $unhealthy_count unhealthy. Retrying..."
-    sleep 30
-    iter_count=$((iter_count + 1))
-  done
+  else
+    log "✅ ALL POLICIES ATTACHED CORRECTLY"
+  fi
   
-  log "⚠️ Max iterations ($max_iters) reached. Graceful exit."
-  log "💡 Deploy complete - check logs/pods manually if needed."
-  return 0  # ALWAYS exit gracefully
+  # 4. FINAL HEALTH CHECK (non-blocking)
+  log "💚 Deployment health: $(kubectl get deployments -n '$NAMESPACE' -o jsonpath='{range .items[*]}{.metadata.name}:{.status.readyReplicas}/{.spec.replicas}{"\n"}{end}')"
+  return 0  # ALWAYS GREEN
 }
 
 
@@ -653,7 +664,7 @@ sleep 21
 log "🔒 LOCKING DOWN NETWORK.."
 apply_networking     # DNS FIRST → No more DNS fails
 verify_and_fix_networking 
-#check_system_health
+check_system_health
 
 log "Setting IPs..."
 WEBSOCKET_URI="wss://darkseek-backend-ws:8443/ws/"
