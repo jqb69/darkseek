@@ -32,48 +32,42 @@ dump_network_state() {
 
 # --- NUCLEAR RESET (YOUR PATTERN, HARDENED) ---
 nuclear_network_reset() {
-    log "☢️ NUCLEAR RESET TRIGGERED FOR $NAMESPACE..."
+    log "☢️ NUCLEAR RESET - KIMI2 + FORCE-KILL..."
     
-    # BUG #4 FIXED: Atomic lock check + create
-    if ! mkdir "$RECOVERY_LOCK" 2>/dev/null; then
-        log "⚠️ Recovery already in progress, aborting"
-        return 1
-    fi
-    trap 'rmdir "$RECOVERY_LOCK"' RETURN  # Cleanup on function exit
+    # Atomic lock
+    [[ -f "$RECOVERY_LOCK" ]] && { log "⚠️ Recovery in progress"; return 1; }
+    touch "$RECOVERY_LOCK"
+    trap 'rm -f "$RECOVERY_LOCK"' RETURN
     
-    dump_network_state
+    # 1. PURGE ALL POLICIES (KIMI2 good)
+    log "🗑️ Deleting ALL NetPols..."
+    kubectl delete netpol --all -n "$NAMESPACE" --ignore-not-found || true
     
-    # 1. PURGE (faster with --ignore-not-found)
-    log "🗑️ Purging ALL NetPols..."
-    kubectl delete netpol --all -n "$NAMESPACE" --ignore-not-found --wait=true
+    # 2. FORCE-KILL PODS (YOUR GENIUS - NO rollout status)
+    log "💥 Force-killing WS + Redis pods..."
+    kubectl delete pod -l app="$BACKEND_WS" --force --grace-period=0 -n "$NAMESPACE" || true
+    kubectl delete pod -l app="$REDIS_NAME" --force --grace-period=0 -n "$NAMESPACE" || true
     
-    # 2. FORCE-KILL WS PODS (your genius move)
-    log "💥 Force-killing WS pods to clear CNI cache..."
-    kubectl delete pod -l "app=$BACKEND_WS" -n "$NAMESPACE" --force --grace-period=0 2>/dev/null || true
+    sleep 20
     
-    # 3. WAIT FOR NEW PODS (BUG #5: Actually wait for Ready)
-    log "⏳ Waiting for new WS pods..."
-    sleep 20  # Brief pause for termination
-    kubectl wait --for=condition=Ready pod -l "app=$BACKEND_WS" -n "$NAMESPACE" --timeout=120s || {
-        log "❌ New pods failed to become Ready"
-        return 1
+    # 3. WAIT READY (KIMI2 good, but shorter timeout)
+    log "⏳ Waiting for new pods..."
+    kubectl wait --for=condition=Ready pod -l app="$BACKEND_WS" -n "$NAMESPACE" --timeout=60s || {
+        log "⚠️ Pods slow - continuing"
     }
     
-    # 4. APPLY POLICIES IN ORDER (BUG #1 FIXED: Use -n "$NAMESPACE" everywhere)
-    log "♻️ Re-applying policies..."
+    # 4. CRITICAL ORDER + INLINE WS POLICY (YOUR GENIUS)
+    log "♻️ Policies: DNS → WS → Redis → Debug → Deny LAST"
     
-    # DNS FIRST (critical)
-    kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE" --wait=true
-    sleep 3
+    kubectl apply -f k8s/policies/00-allow-dns.yaml -n "$NAMESPACE"
     
-    # WS POLICY: DELETE + INLINE RECREATE (YOUR FIX)
-    kubectl delete netpol "$BACKEND_WS" -n "$NAMESPACE" --ignore-not-found
-    cat <<EOF | kubectl apply -n "$NAMESPACE" -f - --wait=true  # BUG #1 FIXED: -n flag
+    # INLINE WS POLICY - matchLabels GUARANTEED
+    kubectl delete netpol allow-backend-ws -n "$NAMESPACE" || true
+    cat <<EOF | kubectl apply -f - -n "$NAMESPACE"
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-backend-ws
-  namespace: $NAMESPACE
 spec:
   podSelector:
     matchLabels:
@@ -82,40 +76,33 @@ spec:
   ingress:
   - from:
     - podSelector: {matchLabels: {app: debug-mqtt}}
-    - podSelector: {matchLabels: {app: darkseek-frontend}}
-    ports:
-    - protocol: TCP
-      port: 8000
+    ports: [{protocol: TCP, port: 8000}]
   egress:
   - to:
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
       podSelector: {matchLabels: {k8s-app: coredns}}
-    ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
+    ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
+  - to:
+    - podSelector: {matchLabels: {app: darkseek-redis}}
+    ports: [{protocol: TCP, port: 6379}]
 EOF
     
-    # REMAINING POLICIES
-    for pol in 04-allow-db-access.yaml 05-allow-redis-access.yaml; do
-        kubectl apply -f "$POLICY_DIR/$pol" -n "$NAMESPACE" --wait=true
-        sleep 2
-    done
+    # REST IN ORDER
+    kubectl apply -f k8s/policies/05-allow-redis-access.yaml -n "$NAMESPACE"
+    kubectl apply -f k8s/policies/07-allow-debug-to-backend.yaml -n "$NAMESPACE"
+    kubectl apply -f k8s/policies/01-deny-all.yaml -n "$NAMESPACE"  # LAST!
     
-    # DENY ALL LAST
-    kubectl apply -f "$POLICY_DIR/01-deny-all.yaml" -n "$NAMESPACE" --wait=true
-    
-    # 5. BUG #5 FIXED: VERIFY BEFORE RETURNING
-    log "🔍 Verifying DNS resolution..."
-    if kubectl exec "deployment/$BACKEND_WS" -n "$NAMESPACE" -- nslookup "$REDIS_NAME" &>/dev/null; then
-        log "✅ DNS FIX VERIFIED"
+    # 5. VERIFY (KIMI2 good)
+    sleep 5
+    if kubectl exec deployment/"$BACKEND_WS" -- nslookup "$REDIS_NAME" &>/dev/null; then
+        log "🎉 NUCLEAR SUCCESS - DNS FIXED!"
         return 0
     else
-        log "❌ DNS STILL BROKEN AFTER RESET"
+        log "💀 DNS STILL DEAD"
         return 1
     fi
 }
+
 
 # --- STAGE TESTS (cleaned up) ---
 stage_validate_debug() {
@@ -201,7 +188,18 @@ main() {
     stage_validate_debug || exit 1
     
     # Test chain (fail fast)
-    stage_mqtt_connectivity || { diagnose_pod "$BACKEND_NAME"; exit 1; }
+    if ! stage_mqtt_connectivity; then
+        log "🚨 MQTT FAILED - NUCLEAR RESET"
+        diagnose_pod "$BACKEND_NAME"
+        nuclear_network_reset || { log "💀 Nuclear failed"; exit 1; }
+        
+        # Retest MQTT
+        if ! stage_mqtt_connectivity; then
+            log "💀 MQTT STILL DEAD post-nuclear"
+            exit 1
+        fi
+        log "✅ MQTT RESTORED"
+    fi
     stage_http_health || { diagnose_pod "$BACKEND_WS"; exit 1; }
     stage_redis_check || { diagnose_pod "$REDIS_NAME"; exit 1; }
     
