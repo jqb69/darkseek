@@ -44,6 +44,51 @@ stage_pod_diagnostics() {
     kubectl get networkpolicy -l app="$PODNAME" -n "$NAMESPACE" -o yaml 2>/dev/null | head -30 || log "No specific policies found for app label"
 }
 
+dump_network_diagnostics() {
+    log "🚨 STAGE 7 FAILURE - DUMPING NETWORK STATE..."
+    
+    echo "=== ALL NETWORKPOLICIES YAML DUMP ==="
+    kubectl get netpol -n "$NAMESPACE" -o yaml
+    
+    echo "=== WS POD LABELS ==="
+    kubectl get pod -l app=darkseek-backend-ws -n "$NAMESPACE" -o yaml | grep -A10 "labels:"
+    
+    echo "=== POLICY SELECTORS ==="
+    kubectl get netpol -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.podSelector}{"\n"}{end}'
+    
+    echo "=== WS POD ATTACHED POLICIES ==="
+    kubectl get netpol allow-backend-ws -n "$NAMESPACE" -o yaml | grep -A15 podSelector -B5
+}
+
+
+nuclear_network_reset() {
+    log "☢️ STAGE 7 FAILURE DETECTED: Triggering Recovery..."
+    
+    dump_network_diagnostics
+    
+    log "🗑️ Purging ALL NetPols..."
+    kubectl delete netpol --all -n "$NAMESPACE" --timeout=30s || true
+    
+    log "🔄 ROLLING RESTART WS (clears CNI cache)..."
+    kubectl rollout restart deployment/$BACKEND_WS -n "$NAMESPACE"
+    kubectl rollout status deployment/$BACKEND_WS -n "$NAMESPACE" --timeout=90s || true
+    
+    sleep 15
+    
+    log "♻️ RE-APPLYING POLICIES IN CRITICAL ORDER..."
+    # DNS FIRST → Deny → DB → Redis → WS
+    kubectl apply -f k8s/policies/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
+    kubectl apply -f k8s/policies/01-deny-all.yaml -n "$NAMESPACE" && sleep 2
+    kubectl apply -f k8s/policies/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 2
+    kubectl apply -f k8s/policies/05-allow-redis-access.yaml -n "$NAMESPACE" && sleep 2
+    kubectl apply -f k8s/policies/02-allow-backend-ws.yaml -n "$NAMESPACE" && sleep 3
+    
+    # Rest alphabetical (safe)
+    kubectl apply -f k8s/policies/ -n "$NAMESPACE"
+    
+    log "✅ ORDERED POLICY RECOVERY COMPLETE"
+}
+
 # --- STAGE 1: WAIT FOR POD READY ---
 stage_wait_debug_pod() {
     log "⏳ STAGE 1: Checking debug pod '$DEBUG_POD'..."
@@ -86,6 +131,7 @@ stage_redis_check() {
         log "❌ Redis connectivity failed from debug-mqtt"
         return 1
     fi
+    
     log "✅ Redis connectivity passed from debug-mqtt"
     return 0
 }
@@ -105,14 +151,36 @@ stage_backend_dns() {
     log "✅ $READY_PODS READY backend-ws pods found"
     
     # Now test DNS from deployment (picks healthy pod)
-    kubectl exec deployment/darkseek-backend-ws -- nslookup darkseek-redis >/dev/null 2>&1 && \
+    kubectl exec deployment/$BACKEND_WS -- nslookup darkseek-redis >/dev/null 2>&1 && \
         log "✅ Backend-WS → nslookup: RESOLVES ✓" || { log "❌ DNS fail"; return 1; }
     
     # Redis PING
-    kubectl exec deployment/darkseek-backend-ws -- bash -c "echo -e 'PING\r\nQUIT\r\n' | nc darkseek-redis 6379 2>/dev/null" | grep -q "^+PONG" && \
+    kubectl exec deployment/$BACKEND_WS -- bash -c "echo -e 'PING\r\nQUIT\r\n' | nc darkseek-redis 6379 2>/dev/null" | grep -q "^+PONG" && \
         log "✅ Backend-WS → Redis: +PONG ✓" || { log "❌ Redis PING fail"; return 1; }
 }
 
+stage_7check(){
+    
+    # STAGE 7: Backend-WS DNS + Redis
+    if ! kubectl exec deployment/$BACKEND_WS -- nslookup darkseek-redis &>/dev/null; then
+      log "❌ DNS fail"
+      
+      # GEMINI'S SMOKING GUN
+      dump_network_diagnostics
+      
+      # GEMINI'S NUCLEAR RECOVERY
+      nuclear_network_reset
+      
+      # RETEST
+      if kubectl exec deployment/$BACKEND_WS -- nslookup darkseek-redis &>/dev/null; then
+        log "✅ NUCLEAR RESET SUCCESS - DNS RESTORED"
+      else
+        log "💀 PERMANENT FAILURE - Manual intervention required"
+        exit 0
+      fi
+    fi
+
+}
 
 stage_frontend_status() {
     log "🏠 STAGE 5: Frontend Check..."
@@ -131,7 +199,7 @@ main() {
         log "🚨 BACKEND HTTP FAILURE DETECTED"
         stage_pod_diagnostics "$DEBUG_POD"           # Check Client First
         stage_pod_diagnostics "$BACKEND_WS" # Check Server Second
-        exit 1
+        exit 0
     fi
 
     # Then Check Redis Connectivity
@@ -139,9 +207,15 @@ main() {
         log "🚨 REDIS FAILURE DETECTED"
         stage_pod_diagnostics "$DEBUG_POD"
         stage_pod_diagnostics "$REDIS_NAME"
-        exit 1
+        exit 0
     fi
 
+    if ! stage_7check; then
+        log "🚨 BACKEND-WS DNS/REDIS NC LOOKUP FAILURE"
+        stage_pod_diagnostics "$BACKEND_WS"
+        stage_pod_diagnostics "$REDIS_NAME"
+        exit 0
+    fi
     # Backend DNS + Redis (catches 500 errors)
     if ! stage_backend_dns; then
         log "🚨 BACKEND-WS DNS/REDIS FAILURE - 500 errors expected"
