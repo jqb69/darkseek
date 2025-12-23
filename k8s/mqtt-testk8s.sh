@@ -62,30 +62,38 @@ dump_network_diagnostics() {
 
 
 nuclear_network_reset() {
+    # ... existing delete + restart ...\\
     log "☢️ STAGE 7 FAILURE DETECTED: Triggering Recovery..."
     
     dump_network_diagnostics
     
     log "🗑️ Purging ALL NetPols..."
     kubectl delete netpol --all -n "$NAMESPACE" --timeout=30s || true
-    
     log "🔄 ROLLING RESTART WS (clears CNI cache)..."
     kubectl rollout restart deployment/$BACKEND_WS -n "$NAMESPACE"
     kubectl rollout status deployment/$BACKEND_WS -n "$NAMESPACE" --timeout=90s || true
+    sleep 20
+    log "♻️ RE-APPLYING + FORCING matchLabels..."
+    
+    kubectl apply -f k8s/policies/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
+    
+    # 3. DB/Redis (WS dependencies)
+    kubectl apply -f k8s/policies/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 2
+  
+    
+    # FORCE WS POLICY WITH matchLabels
+    kubectl apply -f k8s/policies/02-allow-backend-ws.yaml -n "$NAMESPACE"
+    kubectl patch netpol allow-backend-ws -n "$NAMESPACE" --patch '{"spec":{"podSelector":{"matchLabels":{"app":"darkseek-backend-ws"}}}}' --type=merge && sleep 5
+    
+    # FORCE REDIS/DB
+    kubectl apply -f k8s/policies/05-allow-redis-access.yaml -n "$NAMESPACE"
+    kubectl patch netpol allow-to-redis -n "$NAMESPACE" --patch '{"spec":{"podSelector":{"matchLabels":{"app":"darkseek-redis"}}}}' --type=merge && sleep 2
     
     sleep 15  # WS pods READY
     
     log "♻️ CRITICAL ORDER - NO DENY-ALL UNTIL LAST..."
     
-    # 1. DNS FIRST (WS needs this IMMEDIATELY)
-    kubectl apply -f k8s/policies/00-allow-dns.yaml -n "$NAMESPACE" && sleep 5
-    
-    # 2. WS EGRESS SECOND (before any deny)
-    kubectl apply -f k8s/policies/02-allow-backend-ws.yaml -n "$NAMESPACE" && sleep 5
-    
-    # 3. DB/Redis (WS dependencies)
-    kubectl apply -f k8s/policies/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 2
-    kubectl apply -f k8s/policies/05-allow-redis-access.yaml -n "$NAMESPACE" && sleep 2
+  
     
     # 4. DENY-ALL LAST (after WS is protected)
     kubectl apply -f k8s/policies/01-deny-all.yaml -n "$NAMESPACE" && sleep 3
@@ -94,6 +102,7 @@ nuclear_network_reset() {
     kubectl apply -f k8s/policies/ -n "$NAMESPACE"
     
     log "✅ WS-PROTECTED RECOVERY COMPLETE"
+
 }
 
 
