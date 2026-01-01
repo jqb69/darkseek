@@ -348,10 +348,11 @@ apply_networking() {
   fi
 
   log "📂 Using policy source: $policy_dir"
-
+  # ONE tiE ONLY!!!!!
+  kubectl delete netpol deny-all-ingress -n "$NAMESPACE" && sleep 2 || true
   # CRITICAL DEPENDENCY ORDER: DB → Redis → WS
   kubectl apply -f "$policy_dir"/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
-  kubectl apply -f "$policy_dir"/01-deny-all.yaml -n "$NAMESPACE" && sleep 2
+  
   
   # 1. DB FIRST (backend-ws needs postgres:5432)
   kubectl apply -f "$policy_dir"/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 3
@@ -372,7 +373,7 @@ apply_networking() {
   for policy in "$policy_dir"/allow-frontend*.yaml; do
     [ -f "$policy" ] && kubectl apply -f "$policy" -n "$NAMESPACE"
   done
-
+  #kubectl apply -f "$policy_dir"/01-deny-all.yaml -n "$NAMESPACE" && sleep 2
   log "✅ Policies: DNS→Deny→DB→Redis→WS→All ✅"
 }
 
