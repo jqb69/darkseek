@@ -34,53 +34,42 @@ dump_network_state() {
 nuclear_network_reset() {
     log "☢️ NUCLEAR RESET - NO WAITS..."
     
-    # LOCK
+    # LOCK (good)
     [[ -f "$RECOVERY_LOCK" ]] && { log "⚠️ Recovery in progress"; return 1; }
     touch "$RECOVERY_LOCK"
     
-    # 1. PURGE POLICIES
+    # 1. PURGE
     kubectl delete netpol --all -n "$NAMESPACE" --ignore-not-found || true
     
-    # 2. FORCE-KILL PODS
-    kubectl delete pod -l app="$BACKEND_WS" --force --grace-period=0 -n "$NAMESPACE" || true
-    kubectl delete pod -l app="$REDIS_NAME" --force --grace-period=0 -n "$NAMESPACE" || true
+    # 2. KILL
+    kubectl delete pod -l app=darkseek-backend-ws --force --grace-period=0 -n "$NAMESPACE" || true
+    kubectl delete pod -l app=darkseek-redis --force --grace-period=0 -n "$NAMESPACE" || true
     
-    # 3. FIXED SLEEP ONLY - NO kubectl wait
-    sleep 30  # Pods spawn + stabilize
+    sleep 30
     
-    # 4. REAPPLY IMMEDIATELY
-    log "♻️ Policies: DNS → WS → Redis → Debug → Deny LAST"
-    kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE" || true
-    kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE" || true  # Your matchLabels file
+    # 3. EXACTLY LIKE apply_networking() - NO deny-all
+    log "♻️ Policies: DNS→DB→Redis→WS→Debug (NO deny-all)"
     
-    # INLINE WS POLICY (backup)
-    kubectl delete netpol allow-backend-ws -n "$NAMESPACE" || true
-    cat <<EOF | kubectl apply -f - -n "$NAMESPACE" || true
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-backend-ws
-spec:
-  podSelector:
-    matchLabels:
-      app: darkseek-backend-ws
-  policyTypes: [Ingress, Egress]
-  egress:
-  - to:
-    - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
-      podSelector: {matchLabels: {k8s-app: coredns}}
-    ports: [{protocol: UDP, port: 53}, {protocol: TCP, port: 53}]
-EOF
+    kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE" || true && sleep 2
     
-    # REST (ignore failures - CI green)
-    kubectl apply -f "$POLICY_DIR/" -n "$NAMESPACE" || true
+    kubectl apply -f "$POLICY_DIR/04-allow-db-access.yaml" -n "$NAMESPACE" || true && sleep 3
     
-    sleep 10  # Calico propagation
+    kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE" || true && sleep 3
+    
+    kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE" || true && sleep 3
+    
+    # Remaining (03,06,07 + frontend) - NO blanket apply
+    for policy in "$POLICY_DIR"/{03,06,07}-*.yaml "$POLICY_DIR"/allow-frontend*.yaml; do
+        [ -f "$policy" ] && kubectl apply -f "$policy" -n "$NAMESPACE" || true
+    done
+    
+    sleep 10
     
     rm -f "$RECOVERY_LOCK"
-    log "✅ NUCLEAR COMPLETE - Policies restored"
-    return 0  # ALWAYS succeed for CI
+    log "✅ NUCLEAR COMPLETE - Policies restored (NO deny-all)"
+    return 0
 }
+
 
 
 
