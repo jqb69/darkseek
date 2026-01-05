@@ -1,20 +1,36 @@
----
-# k8s/policies/06-allow-frontend-to-backend-mqtt.yaml
+# k8s/07-allow-debug-to-backend.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-frontend-to-backend-mqtt
+  name: allow-debug-all-egress
   namespace: default
 spec:
   podSelector:
     matchLabels:
-      app: darkseek-backend-mqtt
-  policyTypes: [Ingress]
-  ingress:
-  - from:
+      app: debug-mqtt
+  policyTypes:
+  - Egress
+  egress:
+  # Rule 1: MQTT broker (1883)
+  - to:
     - podSelector:
         matchLabels:
-          app: darkseek-frontend
+          app: darkseek-backend-mqtt
     ports:
     - protocol: TCP
-      port: 8001
+      port: 1883
+  # Rule 2: DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: coredns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Rule 3: Allow all else (temporary - remove later)
+  - {}
