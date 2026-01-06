@@ -235,31 +235,52 @@ ensure_db_exists() {
 }
 
 check_db_initialization() {
-  log "Checking PostgreSQL initialization..."
-  local pod_name=""
-  local timeout=300
-  local elapsed=0
-
-  while [ $elapsed -lt $timeout ]; do
-    pod_name=$(kubectl get pods -n "$NAMESPACE" -l app=darkseek-db -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-    if [ -n "$pod_name" ] && [ "$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}')" = "Running" ]; then
+  log "🔄 Checking PostgreSQL initialization (with retries)..."
+  
+  local pod_name
+  pod_name=$(kubectl get pod -l app=darkseek-db -n "$NAMESPACE" --no-headers -o custom-columns=":metadata.name" | head -1)
+  if [ -z "$pod_name" ]; then
+    log "❌ No darkseek-db pod found"
+    return 1
+  fi
+  
+  # Wait for pod to be Running (ignore init container phase)
+  for i in {1..30}; do
+    if kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Running; then
+      log "✅ Postgres pod Running"
       break
     fi
-    log "Waiting for darkseek-db pod... ($elapsed/$timeout)"
-    sleep 10
-    elapsed=$((elapsed + 10))
+    log "⏳ Waiting for pod Running... ($i/30)"
+    sleep 2
   done
-
-  [ -z "$pod_name" ] && fatal "darkseek-db pod never appeared"
-
-  kubectl exec -n "$NAMESPACE" "$pod_name" -- pg_isready -U "$POSTGRES_USER" -q || \
-    { log "pg_isready failed"; kubectl logs "$pod_name" -n "$NAMESPACE"; fatal "Postgres not ready"; }
-
-  kubectl exec -n "$NAMESPACE" "$pod_name" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 1;" >/dev/null 2>&1 || \
-    { log "Cannot query database $POSTGRES_DB"; kubectl logs "$pod_name" -n "$NAMESPACE"; fatal "DB not functional"; }
-
-  log "PostgreSQL fully ready and accepting connections"
+  
+  # RETRY pg_isready up to 3 minutes
+  for i in {1..90}; do
+    if kubectl exec "$pod_name" -n "$NAMESPACE" -- pg_isready -U "$POSTGRES_USER" -q 2>/dev/null; then
+      log "✅ PostgreSQL ready (attempt $i)"
+      
+      # Bonus: verify we can actually query
+      if kubectl exec "$pod_name" -n "$NAMESPACE" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 1;" >/dev/null 2>&1; then
+        log "✅ Database $POSTGRES_DB fully operational"
+        return 0
+      fi
+    fi
+    
+    # Show pod logs every 10 attempts for debugging
+    if [ $((i % 10)) -eq 0 ]; then
+      log "⏳ Postgres still starting... (attempt $i/90)"
+      kubectl logs "$pod_name" -n "$NAMESPACE" --tail=5 || true
+    fi
+    
+    sleep 2
+  done
+  
+  log "❌ Postgres failed to become ready after 3 minutes"
+  kubectl logs "$pod_name" -n "$NAMESPACE" || true
+  kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
+  return 1
 }
+
 
 verify_backend_image() {
   local deployment_name="$1"
