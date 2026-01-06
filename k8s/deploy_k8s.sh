@@ -414,62 +414,88 @@ verify_and_fix_networking() {
 }
 
 
-
 check_system_health() {
   log "🔍 SURGICAL POLICY ATTACHMENT CHECK..."
   
   local problematic_pods=()
   local ws_policy_attached=false
   local redis_policy_attached=false
-  
+
+  # Helper: verify that a given policy is listed on a pod's "Network Policies" section
+  verify_policy_on_pod() {
+    local pod_label="$1"      # e.g. app=darkseek-backend-ws
+    local policy_name="$2"    # e.g. allow-backend-ws
+    local kind_label="$3"     # human name for logs, e.g. WS or REDIS
+
+    local pod_name
+    pod_name=$(kubectl get pod -l "app=${pod_label}" -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    if [ -z "$pod_name" ]; then
+      log "⚠️ No pod with app=${pod_label} found. Skipping ${kind_label} attachment check."
+      return 0
+    fi
+
+    # Policy object must exist
+    if ! kubectl get netpol "$policy_name" -n "$NAMESPACE" &>/dev/null; then
+      log "🚨 ${kind_label} POLICY MISSING → $policy_name not found in API"
+      return 1
+    fi
+
+    # Check if policy name appears in the 'Network Policies' section of the pod description
+    if kubectl describe pod "$pod_name" -n "$NAMESPACE" | grep -A10 "Network Policies" | grep -q "$policy_name"; then
+      log "✅ ${kind_label} policy $policy_name listed on pod $pod_name"
+      return 0
+    else
+      log "⚠️ ${kind_label} policy $policy_name exists but is NOT listed on pod $pod_name under 'Network Policies'"
+      log "   → Possible causes: label mismatch, namespace mismatch, or CNI/controller delay."
+      return 1
+    fi
+  }
+
   # 1. CHECK WS POLICY ATTACHMENT
-  if kubectl get netpol -l app=darkseek-backend-ws -n "$NAMESPACE" -o yaml &>/dev/null || \
-     ! kubectl get netpol allow-backend-ws -n "$NAMESPACE" -o yaml | grep -q "darkseek-backend-ws"; then
-    log "🚨 WS POLICY BROKEN → DETECTED items: []"
+  if verify_policy_on_pod "darkseek-backend-ws" "allow-backend-ws" "WS"; then
+    ws_policy_attached=true
+  else
     problematic_pods+=("darkseek-backend-ws")
     ws_policy_attached=false
-  else
-    ws_policy_attached=true
   fi
-  
-  # 2. CHECK REDIS POLICY ATTACHMENT  
-  if kubectl get netpol -l app=darkseek-redis -n "$NAMESPACE" -o yaml &>/dev/null || \
-     ! kubectl get netpol allow-to-redis -n "$NAMESPACE" -o yaml | grep -q "darkseek-redis"; then
-    log "🚨 REDIS POLICY BROKEN → DETECTED items: []"
+
+  # 2. CHECK REDIS POLICY ATTACHMENT
+  if verify_policy_on_pod "darkseek-redis" "allow-to-redis" "REDIS"; then
+    redis_policy_attached=true
+  else
     problematic_pods+=("darkseek-redis")
     redis_policy_attached=false
-  else
-    redis_policy_attached=true
   fi
-  
+
   # 3. SURGICAL NUCLEAR FIX - ONLY BROKEN POLICIES
   if [ ${#problematic_pods[@]} -gt 0 ]; then
-    log "⚔️ SURGICALLY NUKE + RE-APPLY: ${problematic_pods[*]}"
-    
+    log "⚔️ SURGICALLY NUKE + RE-APPLY (WS/REDIS policies)"
+
     # TARGETED DELETE
-    kubectl delete netpol allow-backend-ws allow-to-redis -n "$NAMESPACE" --ignore-not-found=true
-    
+    kubectl delete netpol allow-backend-ws allow-to-redis -n "$NAMESPACE" --ignore-not-found=true || true
     sleep 2
-    
+
     # TARGETED RE-APPLY  
-    kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE"
-    kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE"
-    
-    sleep 10  # GKE controller propagation
-    
-    # VERIFY FIX
-    if kubectl exec deployment/darkseek-backend-ws -- nslookup darkseek-redis &>/dev/null; then
-      log "✅ SURGICAL FIX SUCCESS - WS DNS RESTORED"
+    kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE" || true
+    kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE" || true
+
+    sleep 17  # controller propagation
+
+    # VERIFY FIX BEHAVIORALLY (WS → Redis DNS)
+    if kubectl exec deployment/darkseek-backend-ws -n "$NAMESPACE" -- nslookup darkseek-redis &>/dev/null; then
+      log "✅ SURGICAL FIX SUCCESS - WS can resolve redis (DNS OK)"
     else
-      log "⚠️ SURGICAL FIX PENDING - manual intervention needed"
+      log "⚠️ SURGICAL FIX PENDING - WS still cannot resolve redis. Manual intervention needed."
     fi
   else
-    log "✅ ALL POLICIES ATTACHED CORRECTLY"
+    log "✅ ALL POLICIES APPEAR ATTACHED CORRECTLY"
   fi
-  
+
   # 4. FINAL HEALTH CHECK (non-blocking)
-  log "💚 Deployment health: $(kubectl get deployments -n '$NAMESPACE' -o jsonpath='{range .items[*]}{.metadata.name}:{.status.readyReplicas}/{.spec.replicas}{"\n"}{end}')"
-  return 0  # ALWAYS GREEN
+  log "💚 Deployment health:"
+  kubectl get deployments -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}:{.status.readyReplicas}/{.spec.replicas}{"\n"}{end}' || true
+
+  return 0  # NEVER hard-fail from this helper
 }
 
 
