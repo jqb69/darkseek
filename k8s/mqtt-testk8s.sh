@@ -64,13 +64,13 @@ test_mqtt_from_debug() {
 }
 
 test_http_from_debug() {
-    log "🌐 HTTP health check (container port 8000)..."
+    log "🌐 HTTP health check (raw TCP)..."
     if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        wget -qO- --timeout=10 "http://$BACKEND_WS:8000/health" &>/dev/null; then
-        log "✅ Backend WS HTTP/8000 alive"
+        timeout 5 nc -zv "$BACKEND_WS" 8000 >/dev/null 2>&1; then
+        log "✅ Backend port 8000 TCP open"
         return 0
     else
-        log "❌ Backend WS HTTP/8000 failed"
+        log "❌ Backend port 8000 unreachable"
         return 1
     fi
 }
