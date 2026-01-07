@@ -370,7 +370,7 @@ apply_networking() {
 
   log "📂 Using policy source: $policy_dir"
   # ONE tiE ONLY!!!!!
-  kubectl delete netpol deny-all-ingress -n "$NAMESPACE" && sleep 2 || true
+  #kubectl delete netpol deny-all-ingress -n "$NAMESPACE" && sleep 2 || true
   # CRITICAL DEPENDENCY ORDER: DB → Redis → WS
   kubectl apply -f "$policy_dir"/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
   
