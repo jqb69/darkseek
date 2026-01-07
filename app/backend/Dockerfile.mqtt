@@ -23,5 +23,8 @@ RUN /app/venv/bin/pip install --no-cache-dir --no-cache -r /app/darkseek/app/bac
 ENV PYTHONPATH=/app/darkseek
 
 EXPOSE 8001
+# Health check file created by your mqttmain.py
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD test -f /tmp/mqtt-healthy || exit 1
 # The CMD is correct for this structure: app.backend.mqttmain:app
 CMD ["python", "-u", "-m", "app.backend.mqttmain"]
