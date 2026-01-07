@@ -408,53 +408,50 @@ check_dns_resolution() {
 
 verify_and_fix_networking() {
   log "🔍 Verifying Calico NetworkPolicy enforcement..."
-  
-  # 1. Verify Calico CNI is running
+
+  # 1. Verify controller (Grok's clean version)
   if kubectl get pods -n kube-system -l k8s-app=calico-node &>/dev/null && \
      kubectl get daemonset calico-node -n kube-system &>/dev/null; then
-    log "✅ Calico CNI active ($(kubectl get pods -n kube-system -l k8s-app=calico-node | wc -l) pods)"
+    log "✅ Calico CNI active"
   elif kubectl get pods -n kube-system -l app=gke-connectivity-agent &>/dev/null; then
     log "✅ GKE NetworkPolicy controller active"
   else
-    log "⚠️ No Calico/GKE NetworkPolicy support → Skipping enforcement checks"
+    log "⚠️ No NetworkPolicy support → Skipping"
     return 0
   fi
-  
-  # 2. Verify WS pod exists + running
-  local ws_pod
-  ws_pod=$(kubectl get pod -l app=darkseek-backend-ws -n "$NAMESPACE" --no-headers -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-  [ -z "$ws_pod" ] && { log "❌ No darkseek-backend-ws pod ready"; return 1; }
-  
-  # 3. Count policies + check attachment via describe
+
+  # 2. Get WS pod
+  local ws_pod=$(kubectl get pod -l app=darkseek-backend-ws -n "$NAMESPACE" --no-headers -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  [ -z "$ws_pod" ] && { log "❌ No backend-ws pod"; return 1; }
+
+  # 3. Policy count
   local policy_count=$(kubectl get netpol -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l)
-  log "📋 $policy_count NetworkPolicies in $NAMESPACE"
-  
+  log "📋 $policy_count NetworkPolicies"
+
+  # 4. Policy attachment check
   if kubectl describe pod "$ws_pod" -n "$NAMESPACE" | grep -A15 "Network Policies" | grep -q "allow-backend-ws"; then
-    log "✅ WS policy attached to $ws_pod"
+    log "✅ WS policy attached"
   else
-    log "⚠️ WS policy NOT listed on $ws_pod (CNI propagation pending?)"
+    log "⚠️ WS policy NOT attached (CNI delay?)"  # Normal for 2-3min
   fi
-  
-  # 4. Test actual connectivity WITH RETRY (15s total)
-  if kubectl exec "$ws_pod" -n "$NAMESPACE" -- timeout 10 nc -zv darkseek-redis 6379 2>/dev/null; then
-    log "✅ WS → Redis:6379 TCP connected"
+
+  # 5. TCP connectivity
+  if kubectl exec "$ws_pod" -n "$NAMESPACE" -- timeout 10 nc -zv darkseek-redis 6379 &>/dev/null; then
+    log "✅ WS → Redis TCP OK"
   else
-    log "⚠️ WS → Redis:6379 TCP pending (normal during CNI propagation)"
-    # Show what's actually happening
-    kubectl exec "$ws_pod" -n "$NAMESPACE" -- nslookup darkseek-redis 2>&1 || true
+    log "⚠️ WS → Redis TCP pending"
   fi
-  
-  # 5. Test DNS (critical path)
-  if kubectl exec "$ws_pod" -n "$NAMESPACE" -- nslookup darkseek-redis >/dev/null 2>&1; then
-    log "✅ WS → Redis DNS resolution OK"
+
+  # 6. DNS resolution (GENIUS PYTHON TEST)
+  if kubectl exec "$ws_pod" -n "$NAMESPACE" -- python3 -c "import socket; socket.gethostbyname('darkseek-redis')" &>/dev/null; then
+    log "✅ WS → Redis DNS OK"
   else
     log "⚠️ WS → Redis DNS failing"
   fi
-  
-  log "✅ Network verification COMPLETE (some delays normal)"
-  return 0  # NEVER FAIL - just report
-}
 
+  log "✅ Verification complete"
+  return 0  # NEVER FAILS
+}
 
 
 check_system_health() {
@@ -747,8 +744,8 @@ wait_for_deployments
 log "🔒 PHASE 5: Network lockdown..."
 apply_networking  # DNS → DB → Redis → Apps
 
-log "⏳ 75s CRITICAL: Calico CNI propagation..."
-sleep 75  # NO TESTS UNTIL CNI FINISHED
+log "⏳ 120s CRITICAL Calico CNI propagation..."
+sleep 120  # NO TESTS UNTIL CNI FINISHED
 
 verify_and_fix_networking
 wait_for_policy_propagation
