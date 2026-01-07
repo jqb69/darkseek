@@ -726,9 +726,9 @@ verify_backend_image "darkseek-backend-ws"
 verify_backend_image "darkseek-backend-mqtt"
 
 # =======================================================
-# PHASE 4: ALL REMAINING SERVICES
+# PHASE 4.5: ALL SERVICES BEFORE WAIT (CRITICAL FIX)
 # =======================================================
-log "🌐 PHASE 4: All services..."
+log "🌐 PHASE 4.5: All services (BEFORE wait)..."
 apply_with_retry backend-ws-service.yaml
 apply_with_retry backend-mqtt-service.yaml
 apply_with_retry frontend-service.yaml
@@ -736,7 +736,7 @@ apply_with_retry frontend-service.yaml
 log "⏳ 30s: Service endpoints ready..."
 sleep 30
 
-wait_for_deployments
+wait_for_deployments  # NOW waits for ALL deployments + services
 
 # =======================================================
 # PHASE 5: NETWORK LOCKDOWN (Everything else ready)
@@ -751,7 +751,10 @@ sleep 180  # NO TESTS UNTIL CNI FINISHED
 #wait_for_policy_propagation
 
 log "🌐 QUICK TCP TESTS (proof everything works):"
-kubectl exec deployment/darkseek-backend-ws -- nc -zv darkseek-redis 6379 || true
+# Test WS → Redis (no nc needed - use bash built-in /dev/tcp)
+kubectl exec deployment/darkseek-backend-ws -- bash -c 'echo > /dev/tcp/darkseek-redis/6379 && echo "Redis OK" || echo "Redis FAILED"' || true
+# Test WS → DB (Postgres port 5432)
+kubectl exec deployment/darkseek-backend-ws -- bash -c 'echo > /dev/tcp/darkseek-db/5432 && echo "DB OK" || echo "DB FAILED"' || true
 log "✅ Deploy COMPLETE - NO verification traps"
 # =======================================================
 # PHASE 6: FINAL CONFIG + STATUS
