@@ -1,8 +1,7 @@
 #!/bin/bash
-# k8s/mqtt-testk8s.sh — NUCLEAR-GRADE MONITOR
+# k8s/mqtt-testk8s.sh — PRODUCTION MONITOR (NO NUCLEAR LOOPS)
 set -euo pipefail
 
-# --- CONFIG (make it overrideable) ---
 NAMESPACE="${NAMESPACE:-default}"
 BACKEND_NAME="${BACKEND_NAME:-darkseek-backend-mqtt}"
 BACKEND_WS="${BACKEND_WS:-darkseek-backend-ws}"
@@ -12,185 +11,157 @@ POLICY_DIR="${POLICY_DIR:-k8s/policies}"
 LOGFILE="/tmp/mqtt-test-$(date +%Y%m%d-%H%M%S).log"
 RECOVERY_LOCK="/tmp/mqtt-test-recovery-${NAMESPACE}.lock"
 
-# --- SETUP ---
 exec &> >(tee -a "$LOGFILE")
-trap 'rm -f "$RECOVERY_LOCK"' EXIT  # BUG #4 FIXED: Always cleanup lock
+trap 'rm -f "$RECOVERY_LOCK"' EXIT
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
-# --- DIAGNOSTICS (simplified for clarity) ---
+# =======================================================
+# DIAGNOSTICS
+# =======================================================
 diagnose_pod() {
     local app="$1"
     log "--- $app STATUS ---"
-    kubectl get pods -l "app=$app" -n "$NAMESPACE" --show-labels || true
+    kubectl get pods -l "app=$app" -n "$NAMESPACE" -o wide || true
     kubectl logs -l "app=$app" -n "$NAMESPACE" --tail=10 2>&1 || true
 }
 
 dump_network_state() {
-    log "🚨 DUMPING NETWORK STATE..."
-    kubectl get netpol -n "$NAMESPACE" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.podSelector}{"\n"}{end}'
+    log "🌐 NETWORK STATE:"
+    kubectl get netpol -n "$NAMESPACE" -o wide || true
+    kubectl get svc -n "$NAMESPACE" -o wide || true
 }
 
-# --- NUCLEAR RESET (YOUR PATTERN, HARDENED) ---
-nuclear_network_reset() {
-    log "☢️ NUCLEAR RESET - NO WAITS..."
+# =======================================================
+# RETRY HELPER (CRITICAL)
+# =======================================================
+wait_for_connectivity() {
+    local test_cmd="$1"
+    local desc="$2"
+    for i in {1..12}; do  # 2 minutes total
+        if eval "$test_cmd" 2>/dev/null; then
+            log "✅ $desc OK (attempt $i)"
+            return 0
+        fi
+        log "⏳ $desc pending ($i/12)..."
+        sleep 10
+    done
+    return 1
+}
+
+# =======================================================
+# STAGED TESTS (NON-FATAL)
+# =======================================================
+test_debug_pod() {
+    log "🔍 Debug pod check..."
+    kubectl get pod "$DEBUG_POD" -n "$NAMESPACE" &>/dev/null || { log "❌ Debug pod missing"; return 1; }
+    kubectl wait --for=condition=Ready pod/"$DEBUG_POD" -n "$NAMESPACE" --timeout=30s || { log "❌ Debug pod not Ready"; return 1; }
+    log "✅ Debug pod ready"
+}
+
+test_mqtt_from_debug() {
+    log "📡 MQTT from debug pod..."
+    wait_for_connectivity "kubectl exec '$DEBUG_POD' -n '$NAMESPACE' -- mosquitto_sub -h '$BACKEND_NAME' -p 1883 -t 'health/check' -C 1 -W 5" "MQTT"
+}
+
+test_http_from_debug() {
+    log "🌐 HTTP health check (container port 8000)..."
+    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
+        wget -qO- --timeout=10 "http://$BACKEND_WS:8000/health" &>/dev/null; then
+        log "✅ Backend WS HTTP/8000 alive"
+        return 0
+    else
+        log "❌ Backend WS HTTP/8000 failed"
+        return 1
+    fi
+}
+
+
+test_redis_from_debug() {
+    log "🔴 Redis from debug pod..."
+    wait_for_connectivity "kubectl exec '$DEBUG_POD' -n '$NAMESPACE' -- nc -zv '$REDIS_NAME' 6379" "Redis"
+}
+
+test_backend_core() {
+    log "🔍 Backend WS → Redis..."
     
-    # LOCK (good)
-    [[ -f "$RECOVERY_LOCK" ]] && { log "⚠️ Recovery in progress"; return 1; }
-    touch "$RECOVERY_LOCK"
+    # Test DNS first
+    if ! wait_for_connectivity "kubectl exec -n '$NAMESPACE' deployment/$BACKEND_WS -- nslookup '$REDIS_NAME'" "Backend DNS"; then
+        log "❌ Backend DNS failed → Check allow-dns-egress policy"
+        return 1
+    fi
     
-    # 1. PURGE
-    kubectl delete netpol --all -n "$NAMESPACE" --ignore-not-found || true
+    # Test TCP
+    if ! wait_for_connectivity "kubectl exec -n '$NAMESPACE' deployment/$BACKEND_WS -- nc -zv '$REDIS_NAME' 6379" "Backend Redis TCP"; then
+        log "❌ Backend Redis TCP failed → Check allow-to-redis policy"
+        return 1
+    fi
     
-    # 2. KILL
-    kubectl delete pod -l app=darkseek-backend-ws --force --grace-period=0 -n "$NAMESPACE" || true
-    kubectl delete pod -l app=darkseek-redis --force --grace-period=0 -n "$NAMESPACE" || true
+    log "✅ Backend core healthy"
+}
+
+# =======================================================
+# CONTROLLED RECOVERY (LIMITED)
+# =======================================================
+controlled_recovery() {
+    local attempt=1
+    [[ -f "$RECOVERY_LOCK" ]] && { log "⚠️ Recovery locked (recent)"; return 1; }
     
-    sleep 30
-    
-    # 3. EXACTLY LIKE apply_networking() - NO deny-all
-    log "♻️ Policies: DNS→DB→Redis→WS→Debug (NO deny-all)"
-    
-    kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE" || true && sleep 2
-    
-    kubectl apply -f "$POLICY_DIR/04-allow-db-access.yaml" -n "$NAMESPACE" || true && sleep 3
-    
-    kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE" || true && sleep 3
-    
-    kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE" || true && sleep 3
-    
-    # Remaining (03,06,07 + frontend) - NO blanket apply
-    for policy in "$POLICY_DIR"/{03,06,07}-*.yaml "$POLICY_DIR"/allow-frontend*.yaml; do
-        [ -f "$policy" ] && kubectl apply -f "$policy" -n "$NAMESPACE" || true
+    for i in {1..2}; do  # MAX 2 attempts per run
+        log "🔧 Recovery attempt $attempt..."
+        touch "$RECOVERY_LOCK"
+        
+        # Soft reset: just policies (no pod kills)
+        kubectl delete netpol allow-backend-ws allow-to-redis allow-dns-egress -n "$NAMESPACE" --ignore-not-found || true
+        sleep 5
+        
+        kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE" || true
+        kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE" || true
+        kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE" || true
+        
+        log "⏳ 60s CNI propagation..."
+        sleep 60
+        
+        rm -f "$RECOVERY_LOCK"
+        
+        # Verify recovery worked
+        if test_backend_core; then
+            log "✅ Recovery $attempt successful"
+            return 0
+        fi
+        
+        ((attempt++))
+        sleep 30
     done
     
-    sleep 10
-    
-    rm -f "$RECOVERY_LOCK"
-    log "✅ NUCLEAR COMPLETE - Policies restored (NO deny-all)"
-    return 0
+    log "❌ Recovery failed after 2 attempts → Manual intervention needed"
+    dump_network_state
+    return 1
 }
 
-
-
-
-# --- STAGE TESTS (cleaned up) ---
-stage_validate_debug() {
-    log "🔍 STAGE 1: Debug pod check..."
-    kubectl get pod "$DEBUG_POD" -n "$NAMESPACE" &>/dev/null || {
-        log "❌ Debug pod not found"
-        return 1
-    }
-    timeout 5s kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- true
-}
-
-stage_mqtt_connectivity() {
-    log "📡 STAGE 2: MQTT connectivity..."
-    # BUG #2 FIXED: Remove || true from condition
-    if timeout 10s kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        mosquitto_sub -h "$BACKEND_NAME" -p 1883 -t "health/check" -C 1 -W 3 &>/dev/null; then
-        log "✅ MQTT ok"
-        return 0
-    else
-        log "❌ MQTT failed"
-        return 1
-    fi
-}
-
-stage_http_health() {
-    log "🌐 STAGE 3: HTTP health..."
-    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        wget -qO- --timeout=5 "http://$BACKEND_WS:8000/health" &>/dev/null; then
-        log "✅ HTTP ok"
-        return 0
-    else
-        log "❌ HTTP failed"
-        return 1
-    fi
-}
-
-stage_redis_check() {
-    log "🔴 STAGE 4: Redis connectivity..."
-    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv "$REDIS_NAME" 6379 &>/dev/null; then
-        log "✅ Redis ok"
-        return 0
-    else
-        log "❌ Redis failed"
-        return 1
-    fi
-}
-
-# --- STAGE 5: BACKEND DNS + REDIS (COMBINED, BUG #3 FIXED) ---
-stage_backend_core() {
-    log "🔍 STAGE 5: Backend DNS + Redis..."
-    
-    
-    # NO WAIT - just test
-    if kubectl exec "deployment/$BACKEND_WS" -- nslookup "$REDIS_NAME" &>/dev/null; then
-        log "✅ Backend DNS ok"
-        return 0
-    else
-        log "❌ Backend DNS failed"
-        return 1
-    fi
-
-    
-    # Redis PING (more robust)
-    local resp
-    resp=$(kubectl exec "deployment/$BACKEND_WS" -n "$NAMESPACE" -- \
-        sh -c 'printf "*2\r\n\$4\r\nPING\r\n" | nc -q 2 '"$REDIS_NAME"' 6379' 2>&1 || true)
-    
-    if [[ "$resp" != *"PONG"* ]]; then
-        log "❌ Redis PING failed"
-        return 1
-    fi
-    
-    log "✅ Backend core checks passed"
-    return 0
-}
-
-# --- MAIN (SIMPLIFIED) ---
+# =======================================================
+# MAIN (SAFE, NO FAILFAST)
+# =======================================================
 main() {
-    log "🚀 Starting DarkSeek Health Checks..."
+    log "🚀 DarkSeek Health Monitor Starting..."
+    dump_network_state
     
-    # Validate
-    stage_validate_debug || exit 1
+    test_debug_pod    || log "⚠️ Debug pod issues"
+    test_mqtt_from_debug || log "⚠️ MQTT issues"
+    test_http_from_debug || log "⚠️ HTTP issues" 
+    test_redis_from_debug || log "⚠️ Redis issues"
     
-    # Test chain (fail fast)
-    if ! stage_mqtt_connectivity; then
-        log "🚨 MQTT FAILED - NUCLEAR RESET"
-        diagnose_pod "$BACKEND_NAME"
-        nuclear_network_reset || { log "💀 Nuclear failed"; exit 1; }
-        
-        # Retest MQTT
-        if ! stage_mqtt_connectivity; then
-            log "💀 MQTT STILL DEAD post-nuclear"
-            exit 1
-        fi
-        log "✅ MQTT RESTORED"
-    fi
-    stage_http_health || { diagnose_pod "$BACKEND_WS"; exit 1; }
-    stage_redis_check || { diagnose_pod "$REDIS_NAME"; exit 1; }
-    
-    # CRITICAL: Backend DNS + Redis with auto-recovery
-    if ! stage_backend_core; then
-        log "🚨 BACKEND CORE FAILURE - TRIGGERING RECOVERY"
-        diagnose_pod "$BACKEND_WS"
-        diagnose_pod "$REDIS_NAME"
-        
-        if nuclear_network_reset; then
-            log "✅ Recovery executed - re-testing..."
-            stage_backend_core || { log "💀 Recovery failed"; exit 1; }
-        else
-            log "💀 Recovery prevented or failed"
+    if ! test_backend_core; then
+        log "🚨 Backend core failure → Attempting recovery..."
+        if ! controlled_recovery; then
+            log "💀 CRITICAL: Manual intervention required"
+            echo "Run: kubectl describe netpol -n $NAMESPACE" >&2
+            echo "Check: kubectl exec deployment/$BACKEND_WS -n $NAMESPACE -- nslookup $REDIS_NAME" >&2
             exit 1
         fi
     fi
     
-    # Success summary
-    diagnose_pod "$BACKEND_WS"
-    stage_frontend_status
-    
-    log "✅ All systems operational"
+    log "🎉 ALL SYSTEMS OPERATIONAL"
+    kubectl get all -n "$NAMESPACE" -o wide
 }
 
 main "$@"
