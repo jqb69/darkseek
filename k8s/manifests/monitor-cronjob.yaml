@@ -1,0 +1,28 @@
+---
+#k8s/manifests/monitor-cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mqtt-monitor
+  namespace: default
+spec:
+  schedule: "*/15 * * * *" # Every 15 minutes
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: default
+          containers:
+          - name: monitor
+            image: bitnami/kubectl:latest
+            command: ["/bin/bash", "/scripts/mqtt-testk8s.sh"]
+            volumeMounts:
+            - name: script-vol
+              mountPath: /scripts
+          restartPolicy: OnFailure
+          volumes:
+          - name: script-vol
+            configMap:
+              name: mqtt-monitor-script
+              defaultMode: 0755
