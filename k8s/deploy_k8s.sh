@@ -620,6 +620,39 @@ force_delete_pods() {
   sleep 15
   log "Done force-deleting pods for $app_label"
 }
+# Function to wait for application-level health files
+wait_for_mqtt_health() {
+  local app_label="darkseek-backend-mqtt"
+  local health_file="/tmp/mqtt-healthy"
+  local max_attempts=12
+  local sleep_seconds=5
+
+  log "⏳ Starting Stability Watch: Waiting for $health_file..."
+  sleep 10 
+
+  for i in $(seq 1 $max_attempts); do
+    local mqtt_pod=$(kubectl get pod -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    
+    if [ -n "$mqtt_pod" ]; then
+      log "🔍 Checking $mqtt_pod ($i/$max_attempts)..."
+      if kubectl exec "$mqtt_pod" -- test -f "$health_file" 2>/dev/null; then
+        log "✅ MQTT Stability Confirmed: Health file found."
+        return 0
+      fi
+    else
+      log "⚠️ No Running MQTT pod found yet. Waiting..."
+    fi
+    
+    sleep $sleep_seconds
+  done
+
+  # FIXED: Always get deployment logs (never empty variable)
+  log "❌ FATAL: MQTT failed to stabilize (health file not created in 60s)."
+  log "📋 Dumping MQTT deployment logs:"
+  kubectl logs deployment/darkseek-backend-mqtt --tail=20 || true
+  return 1
+}
+
 
 # After ANY policy apply/delete (surgical OR nuclear)
 wait_for_policy_propagation() {
@@ -740,7 +773,8 @@ if [[ "${NUKE_WS_PODS:-false}" == "true" ||  "${NUKE_MQTT_PODS:-false}" == "true
   force_delete_pods "darkseek-frontend"
   sleep 15
 fi
-
+# 2. Reset the Frontend Service (clears the bad NEG annotations)
+kubectl delete service darkseek-frontend --ignore-not-found=true
 # =======================================================
 # PHASE 3: APPLICATIONS (Now DB/Redis ready)
 # =======================================================
@@ -774,7 +808,7 @@ apply_networking  # DNS → DB → Redis → Apps
 
 log "⏳ 293s CRITICAL Calico CNI propagation..."
 sleep 293  # NO TESTS UNTIL CNI FINISHED
-
+wait_for_mqtt_health
 #verify_and_fix_networking
 #wait_for_policy_propagation
 
@@ -809,7 +843,7 @@ echo ""
 
 log "⏳ Waiting for LoadBalancer IPs (60s max)..."
 for i in {1..12}; do
-  FRONTEND_IP=$(kubectl get svc frontend-service -n $NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+  FRONTEND_IP=$(kubectl get svc darkseek-frontend -n $NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
   [ -n "$FRONTEND_IP" ] && [ "$FRONTEND_IP" != "<pending>" ] && break
   log "Frontend LB still provisioning... ($i/12)"
   sleep 5
