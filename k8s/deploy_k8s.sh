@@ -720,6 +720,13 @@ sleep 30
 if [ "${NUKE_MQTT_PODS:-false}" = "true" ]; then
   log "💣 Force deleting existing MQTT pods..."
   force_delete_pods "darkseek-backend-mqtt"
+  sleep 15
+fi
+# APPlY ONE TIME TO BE DELETED!
+if [ "${NUKE_WS_PODS:-false}" = "true" ]; then
+  log "💣 Force deleting existing WS pods..."
+  force_delete_pods "darkseek-backend-ws"
+  sleep 15
 fi
 # =======================================================
 # PHASE 3: APPLICATIONS (Now DB/Redis ready)
@@ -786,7 +793,16 @@ kubectl get deployments -n "$NAMESPACE" -o wide
 echo "Pods:"
 kubectl get pods -n "$NAMESPACE" -o wide
 echo ""
+
+log "⏳ Waiting for LoadBalancer IPs (60s max)..."
+for i in {1..12}; do
+  FRONTEND_IP=$(kubectl get svc frontend-service -n $NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+  [ -n "$FRONTEND_IP" ] && [ "$FRONTEND_IP" != "<pending>" ] && break
+  log "Frontend LB still provisioning... ($i/12)"
+  sleep 5
+done
+
 echo "✅ URLs:"
-echo "  Frontend: http://$(kubectl get svc frontend-service -n '$NAMESPACE' -o jsonpath='{.status.loadBalancer.ingress[0].ip}')/"
+echo "  Frontend: http://${FRONTEND_IP:-LOAD_BALANCER_PENDING}/"
 echo "  WebSocket: wss://darkseek-backend-ws:8443/ws/{session_id}"
 echo "  API: http://darkseek-backend-ws:8000/process_query"
