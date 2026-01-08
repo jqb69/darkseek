@@ -716,6 +716,12 @@ apply_with_retry redis-service.yaml
 
 log "⏳ 30s: Redis startup..."
 sleep 30
+
+# 🔥 PERMANENT SAFETY: Strip ANY ghost command overrides (safe idempotent)
+log "🧹 Ensuring clean Deployment specs..."
+kubectl patch deployment darkseek-backend-ws --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
+kubectl patch deployment darkseek-backend-mqtt --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
+
 # APPlY ONE TIME TO BE DELETED!
 if [ "${NUKE_MQTT_PODS:-false}" = "true" ]; then
   log "💣 Force deleting existing MQTT pods..."
@@ -728,8 +734,8 @@ if [ "${NUKE_WS_PODS:-false}" = "true" ]; then
   force_delete_pods "darkseek-backend-ws"
   sleep 15
 fi
-# APPlY ONE TIME TO BE DELETED!
-if [ "${NUKE_WS_PODS:-false}" = "true" ||  "${NUKE_MQTT_PODS:-false}" = "true"  ]; then
+# APPlLY ONE TIME TO BE DELETED!
+if [[ "${NUKE_WS_PODS:-false}" == "true" ||  "${NUKE_MQTT_PODS:-false}" == "true" ]]; then
   log "💣 Force deleting existing Frontend pods..."
   force_delete_pods "darkseek-frontend"
   sleep 15
