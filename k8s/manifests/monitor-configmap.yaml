@@ -1,0 +1,30 @@
+---
+#k8s/manifests/monitor-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mqtt-monitor-script
+  namespace: default
+座data:
+  mqtt-testk8s.sh: |
+    #!/bin/bash
+    log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
+    
+    check_net() {
+      # Proves CNI is working by hitting the Backend WS port
+      nc -zv darkseek-backend-ws 8000 >/dev/null 2>&1
+    }
+
+    recover() {
+      log "🚨 Connectivity lost. Refreshing NetworkPolicies..."
+      kubectl delete netpol --all --ignore-not-found
+      # Wait 60s for GKE Autopilot/Calico to re-sync state
+      sleep 60 
+    }
+
+    log "🚀 Monitor Cycle Start"
+    if check_net; then
+      log "✅ Network OK"
+    else
+      recover
+    fi
