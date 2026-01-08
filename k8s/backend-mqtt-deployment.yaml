@@ -25,8 +25,16 @@ spec:
         livenessProbe:
           exec:
             command: ["test", "-f", "/tmp/mqtt-healthy"]  # Check if the health file exists
-          initialDelaySeconds: 90                             # Delay before starting liveness checks
-          periodSeconds: 60                                     # Frequency of liveness checks
+          initialDelaySeconds: 120                             # Delay before starting liveness checks
+          periodSeconds: 40                                     # Frequency of liveness checks
+          timeoutSeconds: 5
+          failureThreshold: 3                                  # Number of failures before marking the container as unhealthy
+        readinessProbe:
+          exec:
+            command: ["test", "-f", "/tmp/mqtt-healthy"]  # Check if the health file exists
+          initialDelaySeconds: 60                             # Delay before starting liveness checks
+          periodSeconds: 20                                     # Frequency of liveness checks
+          timeoutSeconds: 5
           failureThreshold: 3                                  # Number of failures before marking the container as unhealthy
         resources:
           requests:
