@@ -728,6 +728,13 @@ if [ "${NUKE_WS_PODS:-false}" = "true" ]; then
   force_delete_pods "darkseek-backend-ws"
   sleep 15
 fi
+# APPlY ONE TIME TO BE DELETED!
+if [ "${NUKE_WS_PODS:-false}" = "true" ||  "${NUKE_MQTT_PODS:-false}" = "true"  ]; then
+  log "💣 Force deleting existing Frontend pods..."
+  force_delete_pods "darkseek-frontend"
+  sleep 15
+fi
+
 # =======================================================
 # PHASE 3: APPLICATIONS (Now DB/Redis ready)
 # =======================================================
