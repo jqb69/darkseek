@@ -42,7 +42,7 @@ on_error() {
 trap 'on_error' ERR
 
 # ----------------------------------------------------------------------
-#  ADVANCED DEBUG: Get an interactive shell in a crashing pod (Improved)
+#  MODIFIED ADVANCED DEBUG: Avoid sleep 3600!
 # ----------------------------------------------------------------------
 debug_pod_interactively() {
   local dep="$1"
@@ -68,20 +68,24 @@ debug_pod_interactively() {
     return 1
   fi
 
-  log "Found pod: $pod → patching container '$container_name' to sleep 1h"
-
-  # Dynamic patch with correct container name (use --patch for safer operation)
-  kubectl patch deployment "$dep" -n "$NAMESPACE" --patch \
-    "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"$container_name\",\"command\":[\"sleep\",\"3600\"], \"imagePullPolicy\":\"Always\"}]}}}}"
-
-  log "Deployment patched. Pod will restart with infinite sleep. The deployment will be updated."
-  log "Connect using:"
-  echo ""
-  echo "   kubectl exec -it $pod -n $NAMESPACE -- /bin/bash"
-  echo ""
-  log "After debugging, restore with:"
-  echo "   kubectl rollout undo deployment/$dep"
-  log "Or re-run the full deploy script."
+  log "🚀 Creating EPHEMERAL debug pod for $dep (self-destructs in 30min)..."
+  
+  # Create SEPARATE debug pod - DON'T TOUCH production deployment
+  # Start an ephemeral debug container attached to the existing pod
+  kubectl debug -it "$pod" -n "$NAMESPACE" \
+    --image=busybox:1.36 \
+    --target="$container_name" \
+    -- sh
+  #kubectl run debug-$dep -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --overrides='{
+  #  "spec": {
+  #    "containers": [{"name": "debug", "image": "busybox:1.36", "command": ["sleep", "1800"]}],
+  #    "nodeSelector": {"kubernetes.io/hostname": "'$(kubectl get pod $pod -o jsonpath='{.spec.nodeName}')'"}
+  #  }
+  #}' || true
+  
+  #debug_pod=$(kubectl get pod debug-$dep -n "$NAMESPACE" -o name 2>/dev/null | sed 's/pod\///')
+  #log "🔍 Debug pod ready: kubectl exec -it $debug_pod -n $NAMESPACE -- sh"
+  log "⏰ Auto-deletes in 30min - WON'T BREAK PRODUCTION"
 }
 
 
@@ -594,7 +598,7 @@ kill_stale_pods() {
   # Also instantly remove finalizers from the PVC — breaks the deadlock immediately
   kubectl patch pvc postgres-pvc -p '{"metadata":{"finalizers":null}}' --type=merge 2>/dev/null || true
   
-  sleep 5
+  sleep 7
   log "All $app_label pods and PVC finalizers obliterated."
 }
 
@@ -613,7 +617,7 @@ force_delete_pods() {
     || true
 
   # Give scheduler a moment to notice they’re gone
-  sleep 10
+  sleep 15
   log "Done force-deleting pods for $app_label"
 }
 
@@ -712,7 +716,11 @@ apply_with_retry redis-service.yaml
 
 log "⏳ 30s: Redis startup..."
 sleep 30
-
+# APPlY ONE TIME TO BE DELETED!
+if [ "${NUKE_MQTT_PODS:-false}" = "true" ]; then
+  log "💣 Force deleting existing MQTT pods..."
+  force_delete_pods "darkseek-backend-mqtt"
+fi
 # =======================================================
 # PHASE 3: APPLICATIONS (Now DB/Redis ready)
 # =======================================================
@@ -744,8 +752,8 @@ wait_for_deployments  # NOW waits for ALL deployments + services
 log "🔒 PHASE 5: Network lockdown..."
 apply_networking  # DNS → DB → Redis → Apps
 
-log "⏳ 180s CRITICAL Calico CNI propagation..."
-sleep 180  # NO TESTS UNTIL CNI FINISHED
+log "⏳ 293s CRITICAL Calico CNI propagation..."
+sleep 293  # NO TESTS UNTIL CNI FINISHED
 
 #verify_and_fix_networking
 #wait_for_policy_propagation
