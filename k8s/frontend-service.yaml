@@ -5,16 +5,7 @@ kind: Service
 metadata:
   name: darkseek-frontend
   namespace: default
-  # This set of annotations is necessary for a robust, high-performance GKE
-  # External LoadBalancer with a long timeout.
-  annotations:
-    # 1. CRITICAL: Sets the GKE Load Balancer's backend service timeout to 1 hour (3600s).
-    cloud.google.com/backend-config: '{"default": {"timeoutSec": 3600}}'
-    # 2. BEST PRACTICE: Enables Network Endpoint Groups (NEGs) for better scaling and health checks.
-    cloud.google.com/neg: "true"
-  labels:
-    app: darkseek-frontend
-spec:
+spec: # NO annotations needed
   type: LoadBalancer
   selector:
     app: darkseek-frontend
