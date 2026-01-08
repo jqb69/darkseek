@@ -264,7 +264,7 @@ jobs:
         run: |
           echo "Deploying to GKE..."
           chmod +x ./k8s/deploy_k8s.sh
-          ./k8s/deploy_k8s.sh || exit 1
+          NUKE_MQTT_PODS=true ./k8s/deploy_k8s.sh || exit 1
         shell: bash
 
       - name: Verify deployment
