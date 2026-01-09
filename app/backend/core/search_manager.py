@@ -21,8 +21,7 @@ class SearchManager:
         self.db_semaphore = Semaphore(10)  # Limit concurrent DB writes
 
     async def get_streaming_response(self, query: str, session_id: str, search_enabled: bool = True,
-                                     llm_name: str = None,
-                                     db: Session = None) -> AsyncGenerator[Dict, None]:
+                                     llm_name: str = None) -> AsyncGenerator[Dict, None]:
         chat_count_key = f"chat_count:{session_id}"
         chat_count = self.cache_manager.redis_client.incr(chat_count_key)
         self.cache_manager.redis_client.expire(chat_count_key, 3600)
@@ -49,15 +48,18 @@ class SearchManager:
 
             full_response = await self.llm_api.query_llm(query, search_results, llm_name)
             self.cache_manager.cache_response(query, full_response, llm_name, search_results)
-            asyncio.create_task(self.save_query_to_db(query, full_response, search_results, llm_name, db))
+            # Fire and forget: No DB session passed here
+            asyncio.create_task(self.save_query_to_db(query, full_response, search_results, llm_name))
 
         except Exception as e:
             logger.error(f"Error querying LLM: {e}", exc_info=True)
             yield {"error": f"Error querying LLM: {e}"}
             return
 
-    async def save_query_to_db(self, query, llm_response, search_results, llm_name, db: Session):
+    async def save_query_to_db(self, query, llm_response, search_results, llm_name):
         async with self.db_semaphore:
+            from .database import SessionLocal # Import here to avoid circular imports
+            db = SessionLocal()
             try:
                 existing_query = db.query(UserQuery).filter(UserQuery.query_text == query).first()
                 if existing_query:
@@ -73,9 +75,11 @@ class SearchManager:
                 )
                 db.add(new_query)      
                 db.commit()
-                db.refresh(new_query)
+                #db.refresh(new_query)
             except Exception as e:
                 logger.error(f"Error saving to DB: {e}", exc_info=True)
                 db.rollback()
+            finally:
+                db.close()
 
 search_manager = SearchManager()
