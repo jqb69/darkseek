@@ -2,7 +2,7 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from app.backend.core.search_manager import search_manager
-from app.backend.core.database import get_db
+#from app.backend.core.database import get_db
 from app.backend.schemas.request_models import QueryRequest
 # Removed all MQTT imports (aiomqtt, ssl, config)
 from sqlalchemy.orm import Session
@@ -18,10 +18,21 @@ logger = logging.getLogger(__name__)
 # --- FastAPI Setup ---
 app = FastAPI(title="DarkSeek WS/HTTP Facade (Local Processing)")
 
+# Replace your current origins list in main.py
 origins = [
-    "http://localhost:8501", # Frontend
-    "http://localhost:8000", # Dev/Testing
-    "*", # Allow all origins for K8s ingress testing
+    # Your actual Streamlit frontend (K8s service/ingress)
+    "http://darkseek-frontend.default.svc.cluster.local:8501",
+    "http://darkseek-frontend:8501",
+    
+    # External IP (from `kubectl get svc darkseek-frontend`)
+    "http://35.188.178.123:8501",  # Replace with your actual IP
+    
+    # Ingress domain (if using)
+    "https://darkseek.yourdomain.com",
+    
+    # Local dev only
+    "http://localhost:8501",
+    "http://localhost:3000"
 ]
 
 app.add_middleware(
@@ -37,7 +48,7 @@ app.add_middleware(
 # --- REST API Endpoint (Synchronous - Local Processing) ---
 
 @app.post("/api/chat", response_model=Dict[str, Any])
-async def synchronous_chat_endpoint(query_request: QueryRequest, db: Session = Depends(get_db)):
+async def synchronous_chat_endpoint(query_request: QueryRequest):
     """
     Handles standard HTTP POST requests. 
     Processes the query locally using search_manager and returns the full response.
@@ -56,8 +67,7 @@ async def synchronous_chat_endpoint(query_request: QueryRequest, db: Session = D
                 query=query_request.query,
                 session_id=session_id,
                 search_enabled=query_request.search_enabled,
-                llm_name=query_request.llm_name,
-                db=db, # Dependency injection for database access remains necessary
+                llm_name=query_request.llm_name
             )
 
             # 2. Accumulate all chunks into a single response string
@@ -78,7 +88,7 @@ async def synchronous_chat_endpoint(query_request: QueryRequest, db: Session = D
 # --- WebSocket Endpoint (Streaming Chat - Local Processing) ---
 
 @app.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str, db: Session = Depends(get_db)):
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """
     Handles streaming chat requests. 
     Processes the query locally and streams chunks directly back over the WebSocket.
@@ -118,8 +128,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, db: Session 
                     query_request.query,
                     query_request.session_id,
                     query_request.search_enabled,
-                    llm_name=query_request.llm_name,
-                    db=db, # Dependency injection for database access remains necessary
+                    llm_name=query_request.llm_name
                 ):
                     # 3. Stream chunk directly back to the client
                     await websocket.send_text(json.dumps(chunk))
