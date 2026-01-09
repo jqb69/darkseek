@@ -107,8 +107,7 @@ class AsyncMQTTServer:
                         query=query_request.query,
                         session_id=session_id,
                         search_enabled=query_request.search_enabled,
-                        llm_name=query_request.llm_name,
-                        db=db,
+                        llm_name=query_request.llm_name
                     ):
                         await client.publish(
                             f"chat/{session_id}/response",
