@@ -624,32 +624,31 @@ force_delete_pods() {
 wait_for_mqtt_health() {
   local app_label="darkseek-backend-mqtt"
   local health_file="/tmp/mqtt-healthy"
-  local max_attempts=12
-  local sleep_seconds=5
-
-  log "⏳ Starting Stability Watch: Waiting for $health_file..."
-  sleep 10 
-
-  for i in $(seq 1 $max_attempts); do
-    local mqtt_pod=$(kubectl get pod -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  
+  log "⏳ Stability Watch: Waiting for MQTT TLS Handshake..."
+  
+  for i in {1..15}; do
+    # 1. Check if the pod is crashing due to Python errors
+    local pod_status=$(kubectl get pod -l app="$app_label" -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' 2>/dev/null)
     
-    if [ -n "$mqtt_pod" ]; then
-      log "🔍 Checking $mqtt_pod ($i/$max_attempts)..."
-      if kubectl exec "$mqtt_pod" -- test -f "$health_file" 2>/dev/null; then
-        log "✅ MQTT Stability Confirmed: Health file found."
+    if [[ "$pod_status" == "CrashLoopBackOff" ]]; then
+      log "❌ FATAL: MQTT Python code is crashing!"
+      kubectl logs deployment/$app_label --tail=30
+      return 1
+    fi
+
+    # 2. Check if the health file exists (means TLS is connected)
+    local pod_name=$(kubectl get pod -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [[ -n "$pod_name" ]]; then
+      if kubectl exec "$pod_name" -- test -f "$health_file" 2>/dev/null; then
+        log "✅ MQTT logic stable and connected to broker."
         return 0
       fi
-    else
-      log "⚠️ No Running MQTT pod found yet. Waiting..."
     fi
     
-    sleep $sleep_seconds
+    log "  ($i/15) Waiting for MQTT initialization..."
+    sleep 5
   done
-
-  # FIXED: Always get deployment logs (never empty variable)
-  log "❌ FATAL: MQTT failed to stabilize (health file not created in 60s)."
-  log "📋 Dumping MQTT deployment logs:"
-  kubectl logs deployment/darkseek-backend-mqtt --tail=20 || true
   return 1
 }
 
