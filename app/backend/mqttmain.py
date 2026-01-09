@@ -50,33 +50,57 @@ from app.backend.core.config import (
 # === Asynchronous MQTT Server ===
 class AsyncMQTTServer:
     def __init__(self):
-        self.client = Client(MQTT_BROKER_URI)   # ← fixed
-        self._connected = False   # ← ADD THIS
-        self.client.on_connect = self.on_connect
-        self.client.on_message = self.on_message
-        self.client.on_disconnect = self.on_disconnect  # ← ADD THIS
+        self._connected = False
+        self.tls_params = aiomqtt.TLSParameters(
+            ca_certs=CA_CERT_PATH,
+            certfile=SERVER_CERT_PATH,
+            keyfile=SERVER_KEY_PATH,
+            tls_version=ssl.PROTOCOL_TLSv1_2,
+            insecure=False
+        )
 
-    async def on_connect(self, client, userdata, flags, rc):
-        if rc == 0:
-            self._connected = True
-            logger.info("Connected to MQTT broker")
-            await client.subscribe("chat/#")  # Subscribe to all chat topics
-            open("/tmp/mqtt-healthy", "w").close()
-        else:
-            logger.error(f"Failed to connect to MQTT broker, return code: {rc}")
+    async def start(self):
+        """Modern aiomqtt 1.0+ context manager - NO connect()/terminate()"""
+        try:
+            logger.info(f"Connecting to {MQTT_BROKER_URI}:{MQTT_PORT}...")
+            
+            async with aiomqtt.Client(
+                hostname=MQTT_BROKER_URI,
+                port=MQTT_PORT,
+                tls_params=self.tls_params
+            ) as client:
+                self._connected = True
+                logger.info("✅ MQTT connected via TLS context manager")
+                
+                # Health file created IMMEDIATELY (readinessProbe passes)
+                open("/tmp/mqtt-healthy", "w").close()
+
+                # Subscribe and process messages FOREVER
+                async with client.messages() as messages:
+                    await client.subscribe("chat/#")
+                    async for message in messages:
+                        await self.on_message(client, message)
+                        
+        except Exception as e:
+            self._connected = False
+            if os.path.exists("/tmp/mqtt-healthy"):
+                os.unlink("/tmp/mqtt-healthy")
+            logger.error(f"MQTT Server Error: {e}", exc_info=True)
+            raise
 
     def is_connected(self) -> bool:
         """Return True if currently connected to MQTT broker."""
         return self._connected
 
-    async def on_message(self, client, userdata, msg):
-        if msg.topic.startswith("chat/") and msg.topic.endswith("/query"):
+    async def on_message(self, client, msg):
+        # NOTE: aiomqtt topic is an object; use str() or .value
+        topic = str(msg.topic)
+        if topic.startswith("chat/") and topic.endswith("/query"):
             try:
-                payload = json.loads(msg.payload)
+                payload = json.loads(msg.payload)  # ✅ msg.payload (bytes) → dict
                 query_request = QueryRequest(**payload)
                 session_id = query_request.session_id
 
-                # DB session created HERE and only here
                 db = SessionLocal()
                 try:
                     async for chunk in search_manager.get_streaming_response(
@@ -117,49 +141,7 @@ class AsyncMQTTServer:
             logger.error(f"Error processing message: {e}", exc_info=True)
             return {"error": "Failed to process the query."}
 
-    async def connect(self):
-        try:
-            await self.client.connect(
-                host=MQTT_BROKER_URI,
-                port=MQTT_PORT,
-                tls_params=aiomqtt.TLSParameters(
-                    ca_certs=CA_CERT_PATH,
-                    certfile=SERVER_CERT_PATH,
-                    keyfile=SERVER_KEY_PATH,
-                    tls_version=ssl.PROTOCOL_TLSv1_2,
-                    insecure=False
-                )
-            )
-            logger.info("MQTT server connected with TLS.")
-        except Exception as e:
-            logger.error(f"Failed to connect to MQTT broker: {e}", exc_info=True)
-            raise
-
-    async def start(self):
-        try:
-            await self.connect()
-            logger.info("Starting MQTT server loop...")
-            await self.client.loop_forever()  # Keep the server running
-        except KeyboardInterrupt:
-            logger.info("Shutting down MQTT server...")
-        except Exception as e:
-            logger.error(f"Failed to start MQTT server: {e}", exc_info=True)
-            raise
     
-    async def on_disconnect(self, client, userdata, rc):
-        self._connected = False
-        logger.info("Disconnected from MQTT broker")
-        # REMOVE HEALTH FILE
-        if os.path.exists("/tmp/mqtt-healthy"):     
-            os.unlink("/tmp/mqtt-healthy")
-    
-    # ← Replace disconnect() with terminate():
-    async def close_connection(self):
-        try:
-            await self.client.terminate()   # ← NOT disconnect()
-            logger.info("MQTT connection terminated.")
-        except Exception as e:
-            logger.error(f"Failed to terminate MQTT: {e}")
 
 # === Main async Function ===
 async def main():
@@ -168,8 +150,8 @@ async def main():
         await mqtt_server.start()
     except KeyboardInterrupt:
         pass
-    finally:
-        await mqtt_server.close_connection()
+    #finally:
+    #    await mqtt_server.close_connection()
 
 if __name__ == "__main__":
     asyncio.run(main())
