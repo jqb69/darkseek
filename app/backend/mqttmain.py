@@ -93,33 +93,32 @@ class AsyncMQTTServer:
         return self._connected
 
     async def on_message(self, client, msg):
-        # NOTE: aiomqtt topic is an object; use str() or .value
         topic = str(msg.topic)
         if topic.startswith("chat/") and topic.endswith("/query"):
             try:
-                payload = json.loads(msg.payload)  # ✅ msg.payload (bytes) → dict
+                payload = json.loads(msg.payload)
                 query_request = QueryRequest(**payload)
                 session_id = query_request.session_id
-
-                db = SessionLocal()
-                try:
-                    async for chunk in search_manager.get_streaming_response(
-                        query=query_request.query,
-                        session_id=session_id,
-                        search_enabled=query_request.search_enabled,
-                        llm_name=query_request.llm_name
-                    ):
-                        await client.publish(
-                            f"chat/{session_id}/response",
-                            json.dumps(chunk)
-                        )
-                finally:
-                    db.close()
+    
+                # ✅ CLEAN - search_manager handles DB internally now
+                async for chunk in search_manager.get_streaming_response(
+                    query=query_request.query,
+                    session_id=session_id,
+                    search_enabled=query_request.search_enabled,
+                    llm_name=query_request.llm_name
+                ):
+                    await client.publish(
+                        f"chat/{session_id}/response",
+                        json.dumps(chunk)
+                    )
             except json.JSONDecodeError:
                 logger.error("Failed to decode JSON message.")
             except Exception as e:
+                # Safe session_id fallback
+                session_id = payload.get('session_id', 'unknown') if 'payload' in locals() else 'unknown'
                 logger.error(f"MQTT processing error: {e}")
                 await client.publish(f"chat/{session_id}/error", json.dumps({"error": str(e)}))
+
 
     async def process_message(self, message):
         """
