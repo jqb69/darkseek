@@ -24,14 +24,18 @@ spec:
             name: darkseek-secrets
         livenessProbe:
           exec:
-            command: ["test", "-f", "/tmp/mqtt-healthy"]  # Check if the health file exists
-          initialDelaySeconds: 120                             # Delay before starting liveness checks
-          periodSeconds: 40                                     # Frequency of liveness checks
+            command:
+            - cat
+            - /tmp/mqtt-healthy
+          initialDelaySeconds: 30                             # Delay before starting liveness checks
+          periodSeconds: 15                                     # Frequency of liveness checks
           timeoutSeconds: 5
           failureThreshold: 3                                  # Number of failures before marking the container as unhealthy
         readinessProbe:
           exec:
-            command: ["test", "-f", "/tmp/mqtt-healthy"]  # Check if the health file exists
+            command:
+            - cat
+            - /tmp/mqtt-healthy
           initialDelaySeconds: 60                             # Delay before starting liveness checks
           periodSeconds: 20                                     # Frequency of liveness checks
           timeoutSeconds: 5
