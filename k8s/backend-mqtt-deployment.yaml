@@ -1,4 +1,5 @@
 ---
+#  ./k8s/backend-mqtt-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,21 +25,17 @@ spec:
             name: darkseek-secrets
         livenessProbe:
           exec:
-            command:
-            - cat
-            - /tmp/mqtt-healthy
-          initialDelaySeconds: 30                             # Delay before starting liveness checks
-          periodSeconds: 15                                     # Frequency of liveness checks
+            command: ["cat", "/tmp/mqtt-healthy"]
+          initialDelaySeconds: 15                             # Delay before starting liveness checks
+          periodSeconds: 10                                     # Frequency of liveness checks
           timeoutSeconds: 5
           failureThreshold: 3                                  # Number of failures before marking the container as unhealthy
         readinessProbe:
           exec:
-            command:
-            - cat
-            - /tmp/mqtt-healthy
-          initialDelaySeconds: 60                             # Delay before starting liveness checks
-          periodSeconds: 20                                     # Frequency of liveness checks
-          timeoutSeconds: 5
+            command: ["cat", "/tmp/mqtt-healthy"]
+          initialDelaySeconds: 5                             # Delay before starting liveness checks
+          periodSeconds: 10                                     # Frequency of liveness checks
+          timeoutSeconds: 3
           failureThreshold: 3                                  # Number of failures before marking the container as unhealthy
         resources:
           requests:
@@ -47,3 +44,11 @@ spec:
           limits:
             cpu: "500m"
             memory: "512Mi"
+        volumeMounts:
+        - name: mqtt-certs-volume
+          mountPath: "/etc/mosquitto/ssl/"  # EXACT match for CERTS_DIR
+          readOnly: true
+    volumes:
+      - name: mqtt-certs-volume
+        secret:
+          secretName: darkseek-mqtt-certs      
