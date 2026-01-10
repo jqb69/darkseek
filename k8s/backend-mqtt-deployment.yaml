@@ -13,8 +13,8 @@ spec:
     metadata:
       labels:
         app: darkseek-backend-mqtt
-    spec:
-      restartPolicy: Always  # Setting the restart policy to Always
+    spec: # This is the Pod Spec
+      restartPolicy: Always
       containers:
       - name: backend-mqtt
         image: us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/darkseek/darkseek-backend-mqtt:latest
@@ -26,17 +26,17 @@ spec:
         livenessProbe:
           exec:
             command: ["cat", "/tmp/mqtt-healthy"]
-          initialDelaySeconds: 15                             # Delay before starting liveness checks
-          periodSeconds: 10                                     # Frequency of liveness checks
+          initialDelaySeconds: 15
+          periodSeconds: 10
           timeoutSeconds: 5
-          failureThreshold: 3                                  # Number of failures before marking the container as unhealthy
+          failureThreshold: 3
         readinessProbe:
           exec:
             command: ["cat", "/tmp/mqtt-healthy"]
-          initialDelaySeconds: 5                             # Delay before starting liveness checks
-          periodSeconds: 10                                     # Frequency of liveness checks
-          timeoutSeconds: 3
-          failureThreshold: 3                                  # Number of failures before marking the container as unhealthy
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
         resources:
           requests:
             cpu: "100m"
@@ -46,9 +46,11 @@ spec:
             memory: "512Mi"
         volumeMounts:
         - name: mqtt-certs-volume
-          mountPath: "/etc/mosquitto/ssl/"  # EXACT match for CERTS_DIR
+          mountPath: "/etc/mosquitto/ssl/"
           readOnly: true
-    volumes:
+
+      # ✅ FIXED: volumes is now a sibling of containers
+      volumes:
       - name: mqtt-certs-volume
         secret:
-          secretName: darkseek-mqtt-certs      
+          secretName: darkseek-mqtt-certs
