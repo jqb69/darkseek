@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import asyncio
-from app.backend.core.database import SessionLocal
+#from app.backend.core.database import SessionLocal
 from app.backend.core.search_manager import search_manager
 from app.backend.schemas.request_models import QueryRequest
 from logging.handlers import RotatingFileHandler
@@ -58,35 +58,52 @@ class AsyncMQTTServer:
             tls_version=ssl.PROTOCOL_TLSv1_2,
             insecure=False
         )
+        self.health_file = "/tmp/mqtt-healthy"
 
     async def start(self):
-        """Modern aiomqtt 1.0+ context manager - NO connect()/terminate()"""
-        try:
-            logger.info(f"Connecting to {MQTT_BROKER_URI}:{MQTT_PORT}...")
-            
-            async with aiomqtt.Client(
-                hostname=MQTT_BROKER_URI,
-                port=MQTT_PORT,
-                tls_params=self.tls_params
-            ) as client:
-                self._connected = True
-                logger.info("✅ MQTT connected via TLS context manager")
-                
-                # Health file created IMMEDIATELY (readinessProbe passes)
-                open("/tmp/mqtt-healthy", "w").close()
-
-                # Subscribe and process messages FOREVER
-                async with client.messages() as messages:
-                    await client.subscribe("chat/#")
-                    async for message in messages:
-                        await self.on_message(client, message)
+        """aiomqtt context manager with exponential backoff retry logic."""
+        reconnect_interval = 2  # Initial delay in seconds
+        max_interval = 60
+        
+        try: # Outer try to catch process-level interruptions
+            while True:
+                try:
+                    logger.info(f"Connecting to {MQTT_BROKER_URI}:{MQTT_PORT}...")
+                    
+                    async with aiomqtt.Client(
+                        hostname=MQTT_BROKER_URI,
+                        port=MQTT_PORT,
+                        tls_params=self.tls_params,
+                    ) as client:
+                        self._connected = True
+                        logger.info("✅ MQTT connected via TLS")
                         
-        except Exception as e:
-            self._connected = False
-            if os.path.exists("/tmp/mqtt-healthy"):
-                os.unlink("/tmp/mqtt-healthy")
-            logger.error(f"MQTT Server Error: {e}", exc_info=True)
-            raise
+                        # Set health signal
+                        with open(self.health_file, "w") as f:
+                            f.write("healthy")
+
+                        reconnect_interval = 2 # Reset backoff on success
+
+                        async with client.messages() as messages:
+                            await client.subscribe("chat/#")
+                            async for message in messages:
+                                await self.on_message(client, message)
+                                
+                except (aiomqtt.MqttError, Exception) as e:
+                    self._connected = False
+                    # Remove health file immediately so K8s stops routing
+                    if os.path.exists(self.health_file):
+                        os.unlink(self.health_file)
+                    
+                    logger.error(f"MQTT Connection Error: {e}. Retrying in {reconnect_interval}s...")
+                    await asyncio.sleep(reconnect_interval)
+                    reconnect_interval = min(reconnect_interval * 2, max_interval)
+                    
+        finally:
+            # This runs only when the while loop is broken (e.g., SIGTERM)
+            if os.path.exists(self.health_file):
+                os.unlink(self.health_file)
+            logger.info("MQTT Server process shutting down.")
 
     def is_connected(self) -> bool:
         """Return True if currently connected to MQTT broker."""
@@ -95,6 +112,7 @@ class AsyncMQTTServer:
     async def on_message(self, client, msg):
         topic = str(msg.topic)
         if topic.startswith("chat/") and topic.endswith("/query"):
+            session_id = "unknown" # Default fallback
             try:
                 payload = json.loads(msg.payload)
                 query_request = QueryRequest(**payload)
@@ -114,10 +132,12 @@ class AsyncMQTTServer:
             except json.JSONDecodeError:
                 logger.error("Failed to decode JSON message.")
             except Exception as e:
-                # Safe session_id fallback
-                session_id = payload.get('session_id', 'unknown') if 'payload' in locals() else 'unknown'
                 logger.error(f"MQTT processing error: {e}")
-                await client.publish(f"chat/{session_id}/error", json.dumps({"error": str(e)}))
+                # Attempt to notify frontend of the error
+                try:
+                    await client.publish(f"chat/{session_id}/error", json.dumps({"error": str(e)}))
+                except:
+                    pass
 
 
     async def process_message(self, message):
