@@ -43,14 +43,4 @@ spec:
             memory: "256Mi"
           limits:
             cpu: "500m"
-            memory: "512Mi"
-        volumeMounts:
-        - name: mqtt-certs-volume
-          mountPath: "/etc/mosquitto/ssl/"
-          readOnly: true
-
-      # ✅ FIXED: volumes is now a sibling of containers
-      volumes:
-      - name: mqtt-certs-volume
-        secret:
-          secretName: darkseek-mqtt-certs
+            memory: "512Mi"       
