@@ -20,7 +20,7 @@ CERTS_DIR = "/etc/mosquitto/ssl/"  # Directory for certificates
 #os.makedirs(CERTS_DIR, exist_ok=True)  # Ensure the certs directory exists
 
 # === File Paths for Certificates ===
-CA_CERT_PATH = os.path.join(CERTS_DIR, "mosquitto.org.crt")  # Path to CA certificate
+CA_CERT_PATH = os.path.join(CERTS_DIR, "ca.crt")  # Path to CA certificate
 # Public broker doesn't need these
 SERVER_CERT_PATH = None
 SERVER_KEY_PATH = None
