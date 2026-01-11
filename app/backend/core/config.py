@@ -34,7 +34,7 @@ LOG_FILE_PATH = os.path.join(LOGS_DIR, "backend.log")  # Path to backend log fil
 
 # === MQTT Broker Configuration ===
 MQTT_BROKER_URI = os.getenv("MQTT_BROKER_HOST", "test.mosquitto.org")
-MQTT_PORT = int(os.getenv("MQTT_BROKER_PORT", "8885"))
+MQTT_PORT = int(os.getenv("MQTT_BROKER_PORT", "8883"))
 
 # === Application Settings ===
 LLM_CONFIGS = {
