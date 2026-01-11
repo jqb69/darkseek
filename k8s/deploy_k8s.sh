@@ -315,8 +315,8 @@ debug_python_startup() {
 # -----------------------------------------------------------------------
 wait_for_deployments() {
   local deployments=(
+    "darkseek-backend-mqtt"  
     "darkseek-backend-ws"
-    "darkseek-backend-mqtt"
     "darkseek-frontend"
     "darkseek-db"
     "darkseek-redis"
@@ -664,8 +664,8 @@ wait_for_policy_propagation() {
 
 deploy_main_apps() {
   local apps=(
+    "darkseek-backend-mqtt:backend-mqtt-deployment.yaml"  
     "darkseek-backend-ws:backend-ws-deployment.yaml"
-    "darkseek-backend-mqtt:backend-mqtt-deployment.yaml"
     "darkseek-frontend:frontend-deployment.yaml"
   )
 # Ensure frontend is last
@@ -689,6 +689,9 @@ cd "$K8S_DIR"
 
 export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
 
+# Change ca.cert to ca.crt
+kubectl create secret generic darkseek-mqtt-certs \
+  --from-file=ca.crt=ca.crt
 # SECRETS + CONFIGMAP (always first)
 log "🔑 Updating secrets + configmap..."
 kubectl create secret generic darkseek-secrets \
@@ -709,6 +712,8 @@ kubectl create secret generic darkseek-secrets \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl apply -f configmap.yaml
+
+
 dryrun_server
 
 # =======================================================
@@ -831,14 +836,7 @@ kubectl patch configmap darkseek-config -n "$NAMESPACE" -p '{
   }
 }' || true
 
-log "🎉 DEPLOYMENT COMPLETE!"
-echo "Services:"
-kubectl get svc -n "$NAMESPACE" -o wide
-echo "Deployments:"
-kubectl get deployments -n "$NAMESPACE" -o wide
-echo "Pods:"
-kubectl get pods -n "$NAMESPACE" -o wide
-echo ""
+
 
 log "⏳ Waiting for LoadBalancer IPs (60s max)..."
 for i in {1..12}; do
@@ -847,8 +845,20 @@ for i in {1..12}; do
   log "Frontend LB still provisioning... ($i/12)"
   sleep 5
 done
+log "🎉 DEPLOYMENT COMPLETE!"
+echo "Services:"
+kubectl get svc -n "$NAMESPACE" -o wide
+echo "Deployments:"
+kubectl get deployments -n "$NAMESPACE" -o wide
 
-echo "✅ URLs:"
-echo "  Frontend: http://${FRONTEND_IP:-LOAD_BALANCER_PENDING}/"
-echo "  WebSocket: wss://darkseek-backend-ws:8443/ws/{session_id}"
-echo "  API: http://darkseek-backend-ws:8000/process_query"
+
+# Final Summary for Developer
+log "========================================================="
+log "DARKSEEK DEPLOYMENT SUMMARY"
+log "========================================================="
+log "MQTT Worker:   $(kubectl get pods -l app=darkseek-backend-mqtt -n $NAMESPACE --no-headers | wc -l) Pods"
+log "WebSocket API: $(kubectl get pods -l app=darkseek-backend-ws -n $NAMESPACE --no-headers | wc -l) Pods"
+log "Database:      $(kubectl get pvc postgres-pvc -n $NAMESPACE -o jsonpath='{.status.phase}')"
+log "Network:       $(kubectl get netpol -n $NAMESPACE --no-headers | wc -l) Policies Applied"
+log "========================================================="
+log "🎉 Done! Use 'kubectl logs -f deployment/darkseek-backend-mqtt' to watch TLS traffic."
