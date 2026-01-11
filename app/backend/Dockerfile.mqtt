@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc \
 RUN pip install --no-cache-dir --upgrade pip virtualenv
 RUN python -m virtualenv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
-
+COPY certs/ca.crt /etc/mosquitto/ssl/ca.crt  # Works with expired browser cert
 COPY app/ /app/darkseek/app/
 
 # 3. Correct the path for requirements.txt (it is now at /app/darkseek/app/backend/requirements.txt)
