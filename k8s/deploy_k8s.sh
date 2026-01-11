@@ -122,6 +122,33 @@ check_env_vars() {
   log "All required environment variables are set."
 }
 
+check_ca_cert_exists() {
+  local cert_path="certs/ca.crt"
+  
+  log "🔍 Verifying ca.crt at $cert_path..."
+  
+  if [ ! -f "$cert_path" ]; then
+    fatal "❌ ca.crt NOT FOUND at $cert_path!
+           Download: curl -o certs/ca.crt https://test.mosquitto.org/ssl/mosquitto.org.crt
+           Then: mkdir -p certs && mv ~/Downloads/mosquitto.org.crt certs/ca.crt"
+  fi
+  
+  # Verify real certificate
+  if ! grep -q "-----BEGIN CERTIFICATE-----" "$cert_path"; then
+    fatal "❌ $cert_path invalid (missing BEGIN CERTIFICATE)"
+  fi
+  
+  # Verify file size (should be ~1.4KB)
+  local cert_size=$(stat -f%z "$cert_path" 2>/dev/null || stat -c%s "$cert_path")
+  if [ "$cert_size" -lt 1000 ]; then
+    fatal "❌ $cert_path too small ($cert_size bytes) - corrupted download?"
+  fi
+  
+  export CERT_FILE="$cert_path"
+  log "✅ certs/ca.crt VALID ($cert_size bytes) → Using: $CERT_FILE"
+}
+
+
 check_manifest_files() {
   log "Validating manifest files in '$K8S_DIR'..."
   required_files=("configmap.yaml" "backend-ws-deployment.yaml" "backend-mqtt-deployment.yaml" "frontend-deployment.yaml" "db-deployment.yaml" "redis-deployment.yaml" "backend-ws-service.yaml" "backend-mqtt-service.yaml" "frontend-service.yaml" "db-service.yaml" "redis-service.yaml" "db-pvc.yaml")
@@ -690,8 +717,10 @@ cd "$K8S_DIR"
 export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
 
 # Change ca.cert to ca.crt
+check_ca_cert_exists
 kubectl create secret generic darkseek-mqtt-certs \
-  --from-file=ca.crt=ca.crt
+  --from-file=ca.crt="$CERT_FILE" \
+  --dry-run=client -o yaml | kubectl apply -f -
 # SECRETS + CONFIGMAP (always first)
 log "🔑 Updating secrets + configmap..."
 kubectl create secret generic darkseek-secrets \
