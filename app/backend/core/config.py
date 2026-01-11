@@ -21,8 +21,9 @@ CERTS_DIR = "/etc/mosquitto/ssl/"  # Directory for certificates
 
 # === File Paths for Certificates ===
 CA_CERT_PATH = os.path.join(CERTS_DIR, "mosquitto.org.crt")  # Path to CA certificate
-SERVER_CERT_PATH = os.path.join(CERTS_DIR, "test.mosquitto.org.crt")  # Path to server certificate
-SERVER_KEY_PATH = os.path.join(CERTS_DIR, "test.mosquitto.org.key")  # Path to server private key
+# Public broker doesn't need these
+SERVER_CERT_PATH = None
+SERVER_KEY_PATH = None
 
 # === Logs Directory ===
 LOGS_DIR = os.path.join(BASE_DIR, "logs")  # Directory for logs
