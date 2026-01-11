@@ -53,8 +53,6 @@ class AsyncMQTTServer:
         self._connected = False
         self.tls_params = aiomqtt.TLSParameters(
             ca_certs=CA_CERT_PATH,
-            certfile=SERVER_CERT_PATH,
-            keyfile=SERVER_KEY_PATH,
             tls_version=ssl.PROTOCOL_TLSv1_2,
             insecure=False
         )
