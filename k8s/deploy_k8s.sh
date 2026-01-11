@@ -853,6 +853,25 @@ kubectl get pods -n "$NAMESPACE" || true
 # CHECK ACTUAL CONTAINERS ALIVE (ignores readiness probes)
 kubectl get pods -n "$NAMESPACE" -o jsonpath='{.items[*].status.phase}' | grep -v "Pending\|Failed" && echo "✅ Pods Running"
 
+# =======================================================
+# GOLDEN COMMANDS - PRODUCTION VERIFICATION
+# =======================================================
+log "🟢 GOLDEN COMMAND 1: MQTT TLS Handshake Verification..."
+kubectl logs -l app=darkseek-backend-mqtt -n "$NAMESPACE" --tail=100 | grep -i "connected\|ssl\|tls" || log "⚠️ No TLS logs found - check MQTT connection"
+
+log "🟢 GOLDEN COMMAND 2: Zero-Trust Networking Test (WS → Redis)..."
+if kubectl exec deployment/darkseek-backend-ws -n "$NAMESPACE" -- nc -zv darkseek-redis 6379 &>/dev/null; then
+  log "✅ Zero-Trust: WS → Redis:6379 OPEN ✓"
+else
+  log "❌ Zero-Trust: WS → Redis BLOCKED - Check allow-redis-access.yaml"
+fi
+
+log "🟢 GOLDEN COMMAND 3: ConfigMap Phase 6 Patch Verification..."
+kubectl get configmap darkseek-config -n "$NAMESPACE" -o jsonpath='{.data.WEBSOCKET_URI}' && echo "" || log "⚠️ ConfigMap WEBSOCKET_URI missing"
+kubectl get configmap darkseek-config -n "$NAMESPACE" -o jsonpath='{.data.MQTT_URI}' && echo "" || log "⚠️ ConfigMap MQTT_URI missing"
+
+log "✅ GOLDEN VERIFICATION COMPLETE"
+
 log "✅ Deploy COMPLETE - Calico policies applied successfully"
 # =======================================================
 # PHASE 6: FINAL CONFIG + STATUS
