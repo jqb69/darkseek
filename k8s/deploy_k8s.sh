@@ -771,18 +771,14 @@ if [ "$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}
     fatal "PVC $pvc_name not Bound"
 fi
 
+
+
+
+
 ensure_db_exists
 check_db_initialization  # Your retry version
 
-# =======================================================
-# PHASE 2: REDIS + SERVICES
-# =======================================================
-log "🔴 PHASE 2: Redis + Core Services..."
-apply_with_retry redis-deployment.yaml
-apply_with_retry redis-service.yaml
 
-log "⏳ 30s: Redis startup..."
-sleep 30
 
 # 🔥 PERMANENT SAFETY: Strip ANY ghost command overrides (safe idempotent)
 log "🧹 Ensuring clean Deployment specs..."
@@ -807,8 +803,24 @@ if [[ "${NUKE_WS_PODS:-false}" == "true" ||  "${NUKE_MQTT_PODS:-false}" == "true
   force_delete_pods "darkseek-frontend"
   sleep 15
 fi
+# 🔥 ALL NETWORK POLICIES FIRST - PODS BORN SECURE
+log "🔒 Applying COMPLETE Zero-Trust framework (DNS+DB+Redis+WS)..."
+apply_networking  # ALL policies - 00-dns + 04-db + 05-redis + 02-ws + ALL
+
+log "⏳ 60s: CNI sync (all iptables rules ready)..."
+sleep 60
 # 2. Reset the Frontend Service (clears the bad NEG annotations)
 kubectl delete service darkseek-frontend --ignore-not-found=true
+
+# =======================================================
+# PHASE 2: REDIS + SERVICES
+# =======================================================
+log "🔴 PHASE 2: Redis + Core Services..."
+apply_with_retry redis-deployment.yaml
+apply_with_retry redis-service.yaml
+
+log "⏳ 30s: Redis startup..."
+sleep 30
 # =======================================================
 # PHASE 3: APPLICATIONS (Now DB/Redis ready)
 # =======================================================
@@ -837,11 +849,11 @@ wait_for_deployments  # NOW waits for ALL deployments + services
 # =======================================================
 # PHASE 5: NETWORK LOCKDOWN (Everything else ready)
 # =======================================================
-log "🔒 PHASE 5: Network lockdown..."
-apply_networking  # DNS → DB → Redis → Apps
+#log "🔒 PHASE 5: Network lockdown..."
+#apply_networking  # DNS → DB → Redis → Apps
 
-log "⏳ 293s CRITICAL Calico CNI propagation..."
-sleep 293  # NO TESTS UNTIL CNI FINISHED
+#log "⏳ 293s CRITICAL Calico CNI propagation..."
+sleep 29  # NO TESTS UNTIL CNI FINISHED
 wait_for_mqtt_health
 #verify_and_fix_networking
 #wait_for_policy_propagation
