@@ -134,7 +134,7 @@ check_ca_cert_exists() {
   fi
   
   # Verify real certificate
-  if ! grep -q "-----BEGIN CERTIFICATE-----" "$cert_path"; then
+  if [ ! "$(grep -e "-----BEGIN CERTIFICATE-----" "$cert_path")" ]; then
     fatal "❌ $cert_path invalid (missing BEGIN CERTIFICATE)"
   fi
   
@@ -910,4 +910,6 @@ log "WebSocket API: $(kubectl get pods -l app=darkseek-backend-ws -n $NAMESPACE 
 log "Database:      $(kubectl get pvc postgres-pvc -n $NAMESPACE -o jsonpath='{.status.phase}')"
 log "Network:       $(kubectl get netpol -n $NAMESPACE --no-headers | wc -l) Policies Applied"
 log "========================================================="
-log "🎉 Done! Use 'kubectl logs -f deployment/darkseek-backend-mqtt' to watch TLS traffic."
+log "🎉 Done! Use 'kubectl logs -f deployment/darkseek-backend-mqtt' to watch TLS traffic."#!/bin/bash
+
+echo "welcome to JDoodle"
