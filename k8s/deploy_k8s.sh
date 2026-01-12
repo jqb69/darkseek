@@ -712,7 +712,7 @@ check_envsubst
 [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
 check_env_vars
 check_manifest_files
-cd "$K8S_DIR"
+
 
 export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
 
@@ -721,6 +721,7 @@ check_ca_cert_exists
 kubectl create secret generic darkseek-mqtt-certs \
   --from-file=ca.crt="$CERT_FILE" \
   --dry-run=client -o yaml | kubectl apply -f -
+cd "$K8S_DIR"
 # SECRETS + CONFIGMAP (always first)
 log "🔑 Updating secrets + configmap..."
 kubectl create secret generic darkseek-secrets \
