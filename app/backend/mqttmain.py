@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import asyncio
+import socket
+import time
 #from app.backend.core.database import SessionLocal
 from app.backend.core.search_manager import search_manager
 from app.backend.schemas.request_models import QueryRequest
@@ -12,29 +14,23 @@ from logging.handlers import RotatingFileHandler
 from aiomqtt import Client
 
 # === Logging Configuration ===
+
 def setup_logger():
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
-
-    # Create a rotating file handler (max 5 MB per file, 5 backup files)
     log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-    os.makedirs(log_dir, exist_ok=True)  # Ensure logs directory exists
-    log_file_path = os.path.join(log_dir, "backend.log")
-
-    file_handler = RotatingFileHandler(log_file_path, maxBytes=5 * 1024 * 1024, backupCount=5)
-    file_formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    file_handler.setFormatter(file_formatter)
-
-    # Add a console handler for real-time logs
+    os.makedirs(log_dir, exist_ok=True)
+    
+    file_handler = RotatingFileHandler(os.path.join(log_dir, "backend.log"), maxBytes=5*1024*1024, backupCount=5)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+    
     console_handler = logging.StreamHandler()
-    console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    console_handler.setFormatter(console_formatter)
-
-    # Attach handlers to the logger
+    console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
-
     return logger
+
 
 logger = setup_logger()
 
@@ -47,13 +43,25 @@ from app.backend.core.config import (
     SERVER_KEY_PATH,
 )
 
+async def wait_for_network():
+    loop = asyncio.get_running_loop()
+    for i in range(30):
+        try:
+            await loop.getaddrinfo(MQTT_BROKER_URI, MQTT_PORT)
+            logger.info(f"✅ DNS Resolved: {MQTT_BROKER_URI}")
+            return True
+        except socket.gaierror:
+            print(f"⏳ Waiting for DNS... ({i}/30)")
+            await asyncio.sleep(2)
+    return False
+
 # === Asynchronous MQTT Server ===
 class AsyncMQTTServer:
     def __init__(self):
         self._connected = False
         self.tls_params = aiomqtt.TLSParameters(
             ca_certs=CA_CERT_PATH,
-            tls_version=ssl.PROTOCOL_TLSv1_2,
+            tls_version=ssl.PROTOCOL_TLS_CLIENT,
             cert_reqs=ssl.CERT_REQUIRED  # Enforce the certificate check
         )
         self.health_file = "/tmp/mqtt-healthy"
@@ -161,15 +169,19 @@ class AsyncMQTTServer:
 
 # === Main async Function ===
 async def main():
+    if not await wait_for_network():
+        logger.critical("❌ DNS resolution failed. Infrastructure not ready.")
+        return
     mqtt_server = AsyncMQTTServer()
     try:
         await mqtt_server.start()
-    except KeyboardInterrupt:
-        pass
+    except asyncio.CancelledError:
+        logger.info("Shutting down due to signal...")
+    finally:
+        if os.path.exists("/tmp/mqtt-healthy"):
+            os.unlink("/tmp/mqtt-healthy")
     #finally:
     #    await mqtt_server.close_connection()
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-    
