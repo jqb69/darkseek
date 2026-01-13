@@ -150,40 +150,66 @@ check_ca_cert_exists() {
 
 # ADD THIS IMMEDIATELY AFTER check_manifest_files() - BEFORE ANY DEPLOYMENTS
 
+enable_gke_network_policy() {
+  local cluster_name project zone
+  
+  # AUTO-DETECT CLUSTER INFO
+  cluster_name=$(kubectl config current-context | cut -d'/' -f3)
+  project=$(gcloud config get-value project 2>/dev/null || echo "$GCP_PROJECT_ID")
+  zone=$(gcloud container clusters list --filter="name:$cluster_name" --format="value(location)" --limit=1 --project="$project")
+  
+  # EXPORT GLOBAL CLUSTER_NAME for entire script
+  export CLUSTER_NAME="$cluster_name"
+  export GCP_PROJECT="$project" 
+  export CLUSTER_ZONE="$zone"
+  
+  log "🔍 Auto-detected → CLUSTER_NAME=$CLUSTER_NAME GCP_PROJECT=$GCP_PROJECT CLUSTER_ZONE=$CLUSTER_ZONE"
+  
+  # CHECK CURRENT STATUS
+  if gcloud container clusters describe "$CLUSTER_NAME" --zone="$CLUSTER_ZONE" --project="$GCP_PROJECT" | grep -q "networkPolicy:.*enabled: true"; then
+    log "✅ NetworkPolicy already ENABLED"
+    return 0
+  fi
+  
+  log "🔓 ENABLING GKE NetworkPolicy..."
+  gcloud container clusters update "$CLUSTER_NAME" \
+    --update-addons=NetworkPolicy=ENABLED \
+    --zone="$CLUSTER_ZONE" --project="$GCP_PROJECT"
+    
+  gcloud container clusters update "$CLUSTER_NAME" \
+    --enable-network-policy \
+    --zone="$CLUSTER_ZONE" --project="$GCP_PROJECT"
+  
+  log "⏳ Waiting for Calico CNI..."
+  for i in {1..30}; do
+    if kubectl get pods -n kube-system -l k8s-app=calico-node &>/dev/null; then
+      log "✅ Calico ACTIVE - NetworkPolicy READY!"
+      return 0
+    fi
+    sleep 10
+  done
+}
+
+
 check_network_policy_support() {
   log "🔍 Checking GKE NetworkPolicy support..."
   
-  # 1. LOOK FOR CALICO (GKE NetworkPolicy enabled)
   if kubectl get pods -n kube-system -l k8s-app=calico-node &>/dev/null; then
     log "✅ Calico CNI found - NetworkPolicy FULLY SUPPORTED"
     return 0
   fi
   
-  # 2. LOOK FOR GKE DATAPLANE V2 AGENT
   if kubectl get daemonset -n kube-system gke-connectivity-agent &>/dev/null; then
-    log "✅ GKE NetworkPolicy agent found - NetworkPolicy SUPPORTED"
+    log "✅ GKE NetworkPolicy agent found - SUPPORTED"
     return 0
   fi
   
-  # 3. NO NETWORKPOLICY SUPPORT → FATAL OR BYPASS
-  log "🚨 NO NETWORKPOLICY CNI DETECTED!"
-  log "   • No Calico daemonset"
-  log "   • No GKE connectivity-agent"
-  log "   • Policies will APPLY but NEVER ATTACH → DNS BLOCKED → MQTT CRASHLOOP"
-  
-  # OPTION A: FAIL HARD (recommended for production)
-  # fatal "ENABLE NetworkPolicy: gcloud container clusters update $CLUSTER --enable-network-policy"
-  
-  # OPTION B: AUTO-BYPASS (development)
-  log "🔓 AUTO-BYPASS: Skipping policies - MQTT DNS will work"
-  export SKIP_POLICIES=true
-  return 0
+  log "🚨 NO NETWORKPOLICY CNI DETECTED - AUTO-ENABLING..."
+  enable_gke_network_policy || {
+    log "⚠️ NetworkPolicy enable failed - BYPASSING policies"
+    export SKIP_POLICIES=true
+  }
 }
-
-
-x
-
-
 
 check_manifest_files() {
   log "Validating manifest files in '$K8S_DIR'..."
@@ -736,32 +762,27 @@ wait_for_mqtt_health() {
   
   log "⏳ Stability Watch: Waiting for MQTT TLS Handshake..."
   
-  for i in {1..15}; do
-    # 1. Check if the pod is crashing due to Python errors
-    local pod_status=$(kubectl get pod -l app="$app_label" -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' 2>/dev/null)
-    
-    if [[ "$pod_status" == "CrashLoopBackOff" ]]; then
-      log "❌ FATAL: MQTT Python code is crashing!"
-      kubectl logs deployment/$app_label --tail=30
+  for i in {1..20}; do
+    # NEW: Check if the container has already restarted (indicates TLS/Config failure)
+    local restarts=$(kubectl get pod -l app="$app_label" -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}' 2>/dev/null)
+    if [[ "$restarts" -gt 0 ]]; then
+      log "🚨 FATAL: MQTT container is crashing (Restarts: $restarts). Check logs for TLS/Auth errors."
+      kubectl logs -l app="$app_label" --tail=50
       return 1
     fi
 
-    # 2. Check if the health file exists (means TLS is connected)
-    local pod_name=$(kubectl get pod -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    # Check for your Python-generated health file
+    local pod_name=$(kubectl get pod -l app="$app_label" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     if [[ -n "$pod_name" ]]; then
       if kubectl exec "$pod_name" -- test -f "$health_file" 2>/dev/null; then
-        log "✅ MQTT logic stable and connected to broker."
+        log "✅ MQTT Logic Verified: TLS Connected & Healthy."
         return 0
       fi
     fi
-    
-    log "  ($i/15) Waiting for MQTT initialization..."
     sleep 5
   done
   return 1
 }
-
-
 # After ANY policy apply/delete (surgical OR nuclear)
 wait_for_policy_propagation() {
   log "⏳ Waiting 45 for Calico CNI propagation..."
@@ -956,7 +977,6 @@ kubectl get pods -n "$NAMESPACE" -o jsonpath='{.items[*].status.phase}' | grep -
 
 
 
-
 # =======================================================
 # GOLDEN COMMANDS - PRODUCTION VERIFICATION
 # =======================================================
@@ -1014,4 +1034,3 @@ log "Database:      $(kubectl get pvc postgres-pvc -n $NAMESPACE -o jsonpath='{.
 log "Network:       $(kubectl get netpol -n $NAMESPACE --no-headers | wc -l) Policies Applied"
 log "========================================================="
 log "🎉 Done! Use 'kubectl logs -f deployment/darkseek-backend-mqtt' to watch TLS traffic."#!/bin/bash
-
