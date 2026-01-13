@@ -755,6 +755,17 @@ force_delete_pods() {
   sleep 15
   log "Done force-deleting pods for $app_label"
 }
+
+verify_dns_connectivity() {
+  log "🧪 Testing cluster DNS resolution via ephemeral pod..."
+  if kubectl run dns-canary --image=busybox:1.36 --restart=Never --rm -it -- nslookup kubernetes.default >/dev/null 2>&1; then
+    log "✅ DNS Resolution Working"
+    return 0
+  else
+    log "🚨 DNS BLOCKED. Calico has not propagated rules yet."
+    return 1
+  fi
+}
 # Function to wait for application-level health files
 wait_for_mqtt_health() {
   local app_label="darkseek-backend-mqtt"
@@ -861,33 +872,6 @@ if kubectl get pvc postgres-pvc -o jsonpath='{.metadata.deletionTimestamp}' 2>/d
     kubectl patch pvc postgres-pvc -p '{"metadata":{"finalizers":null}}' --type=merge
 fi
 
-apply_with_retry db-pvc.yaml
-apply_with_retry db-deployment.yaml
-apply_with_retry db-service.yaml
-
-log "⏳ 90s: DB initialization + PVC bind..."
-sleep 90  # Postgres init container + PVC provisioning
-
-pvc_name="postgres-pvc"
-if [ "$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}')" != "Bound" ]; then
-    troubleshoot_pvc_and_nodes "$pvc_name"
-    fatal "PVC $pvc_name not Bound"
-fi
-
-
-
-
-
-ensure_db_exists
-check_db_initialization  # Your retry version
-
-
-
-# 🔥 PERMANENT SAFETY: Strip ANY ghost command overrides (safe idempotent)
-log "🧹 Ensuring clean Deployment specs..."
-kubectl patch deployment darkseek-backend-ws --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
-kubectl patch deployment darkseek-backend-mqtt --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
-
 # APPlY ONE TIME TO BE DELETED!
 if [ "${NUKE_MQTT_PODS:-false}" = "true" ]; then
   log "💣 Force deleting existing MQTT pods..."
@@ -906,6 +890,32 @@ if [[ "${NUKE_WS_PODS:-false}" == "true" ||  "${NUKE_MQTT_PODS:-false}" == "true
   force_delete_pods "darkseek-frontend"
   sleep 15
 fi
+
+apply_with_retry db-pvc.yaml
+apply_with_retry db-deployment.yaml
+apply_with_retry db-service.yaml
+
+log "⏳ 90s: DB initialization + PVC bind..."
+sleep 90  # Postgres init container + PVC provisioning
+
+pvc_name="postgres-pvc"
+if [ "$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}')" != "Bound" ]; then
+    troubleshoot_pvc_and_nodes "$pvc_name"
+    fatal "PVC $pvc_name not Bound"
+fi
+
+
+
+ensure_db_exists
+check_db_initialization  # Your retry version
+
+
+
+# 🔥 PERMANENT SAFETY: Strip ANY ghost command overrides (safe idempotent)
+log "🧹 Ensuring clean Deployment specs..."
+kubectl patch deployment darkseek-backend-ws --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
+kubectl patch deployment darkseek-backend-mqtt --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
+
 # =======================================================
 # PHASE 2: NETWORK LOCKDOWN (Everything else ready)
 # =======================================================
@@ -916,8 +926,12 @@ apply_networking  # ALL policies - 00-dns + 04-db + 05-redis + 02-ws + ALL
 
 log "⏳ 60s: CNI sync (all iptables rules ready)..."
 sleep 60
+# ... after apply_networking ...
+log "⏳ 60s: CNI sync..."
+sleep 60
+verify_dns_connectivity || fatal "NetworkPolicy is blocking DNS. Deployment halted."
 # 2. Reset the Frontend Service (clears the bad NEG annotations)
-kubectl delete service darkseek-frontend --ignore-not-found=true
+#kubectl delete service darkseek-frontend --ignore-not-found=true
 
 # =======================================================
 # PHASE 3: REDIS + SERVICES
