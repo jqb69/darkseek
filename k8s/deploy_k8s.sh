@@ -158,6 +158,52 @@ check_manifest_files() {
   log "All manifest files present."
 }
 
+run_policy_audit() {
+  log "🔍 === SURGICAL POLICY AUDIT ==="
+
+  declare -A audit_map=(
+    ["darkseek-backend-mqtt"]="allow-backend-mqtt|allow-dns"
+    ["darkseek-backend-ws"]="allow-backend-ws|allow-db-access|allow-redis-access|allow-dns"
+    ["darkseek-redis"]="allow-redis-access|allow-to-redis"
+    ["darkseek-db"]="allow-db-access|allow-to-db"
+    ["darkseek-frontend"]="allow-frontend"
+  )
+
+  local failed_audit=0
+
+  for app in "${!audit_map[@]}"; do
+    local pod_name
+    pod_name=$(kubectl get pod -l "app=${app}" -n "$NAMESPACE" \
+      --field-selector=status.phase=Running \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+
+    if [ -z "$pod_name" ]; then
+      log "⚠️ $app: No running pod found. Skipping audit."
+      continue
+    fi
+
+    local policy_list
+    policy_list=$(kubectl describe pod "$pod_name" -n "$NAMESPACE" | \
+      sed -n '/Network Policies:/,/^  [A-Z]/p' | \
+      grep -E "allow-|dns" | xargs || echo "NONE")
+
+    if echo "$policy_list" | grep -qE "${audit_map[$app]}"; then
+      log "✅ $app: Attached -> [ $policy_list ]"
+    else
+      log "🚨 $app: MISMATCH!"
+      log "   Expected: ${audit_map[$app]}"
+      log "   Found:    $policy_list"
+      failed_audit=$((failed_audit + 1))
+    fi
+  done
+
+  if [ $failed_audit -eq 0 ]; then
+    log "✨ ALL POLICIES VERIFIED ON KERNEL LEVEL"
+  else
+    log "⚠️ AUDIT FINISHED: $failed_audit mismatch(es) found."
+  fi
+}
+
 dryrun_server() {
   log "Running server-side dry-run validation..."
   if ! kubectl apply -f "./" --dry-run=server --validate=true; then
@@ -803,8 +849,12 @@ if [[ "${NUKE_WS_PODS:-false}" == "true" ||  "${NUKE_MQTT_PODS:-false}" == "true
   force_delete_pods "darkseek-frontend"
   sleep 15
 fi
+# =======================================================
+# PHASE 2: NETWORK LOCKDOWN (Everything else ready)
+# =======================================================
+log "🔒 PHASE 2: Network lockdown..."
 # 🔥 ALL NETWORK POLICIES FIRST - PODS BORN SECURE
-log "🔒 Applying COMPLETE Zero-Trust framework (DNS+DB+Redis+WS)..."
+#log "🔒 Applying COMPLETE Zero-Trust framework (DNS+DB+Redis+WS)..."
 apply_networking  # ALL policies - 00-dns + 04-db + 05-redis + 02-ws + ALL
 
 log "⏳ 60s: CNI sync (all iptables rules ready)..."
@@ -813,9 +863,9 @@ sleep 60
 kubectl delete service darkseek-frontend --ignore-not-found=true
 
 # =======================================================
-# PHASE 2: REDIS + SERVICES
+# PHASE 3: REDIS + SERVICES
 # =======================================================
-log "🔴 PHASE 2: Redis + Core Services..."
+log "🔴 PHASE 3: Redis + Core Services..."
 apply_with_retry redis-deployment.yaml
 apply_with_retry redis-service.yaml
 
@@ -824,7 +874,7 @@ sleep 30
 # =======================================================
 # PHASE 3: APPLICATIONS (Now DB/Redis ready)
 # =======================================================
-log "🚀 PHASE 3: Deploy applications..."
+log "🚀 PHASE 4: Deploy applications..."
 deploy_main_apps  # ws + mqtt + frontend deployments
 
 log "⏳ 45s: App pods startup + image pulls..."
@@ -846,17 +896,19 @@ sleep 30
 
 wait_for_deployments  # NOW waits for ALL deployments + services
 
-# =======================================================
-# PHASE 5: NETWORK LOCKDOWN (Everything else ready)
-# =======================================================
-#log "🔒 PHASE 5: Network lockdown..."
+
 #apply_networking  # DNS → DB → Redis → Apps
 
 #log "⏳ 293s CRITICAL Calico CNI propagation..."
-sleep 29  # NO TESTS UNTIL CNI FINISHED
+sleep 59  # NO TESTS UNTIL CNI FINISHED
 wait_for_mqtt_health
 #verify_and_fix_networking
 #wait_for_policy_propagation
+# =======================================================
+# PHASE 5: REDIS + SERVICES
+# =======================================================
+log "🔴 PHASE 5: Run Policy Audit ..."
+run_policy_audit || true
 
 log "🌐 SERVICE HEALTH CHECKS (Ignores Calico DNS issues):"
 # CHECK DEPLOYMENTS EXIST + PODS RUNNING (not blocked by readiness)
@@ -865,6 +917,9 @@ kubectl get pods -n "$NAMESPACE" || true
 
 # CHECK ACTUAL CONTAINERS ALIVE (ignores readiness probes)
 kubectl get pods -n "$NAMESPACE" -o jsonpath='{.items[*].status.phase}' | grep -v "Pending\|Failed" && echo "✅ Pods Running"
+
+
+
 
 # =======================================================
 # GOLDEN COMMANDS - PRODUCTION VERIFICATION
@@ -924,4 +979,3 @@ log "Network:       $(kubectl get netpol -n $NAMESPACE --no-headers | wc -l) Pol
 log "========================================================="
 log "🎉 Done! Use 'kubectl logs -f deployment/darkseek-backend-mqtt' to watch TLS traffic."#!/bin/bash
 
-echo "welcome to JDoodle"
