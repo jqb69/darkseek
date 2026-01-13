@@ -148,6 +148,42 @@ check_ca_cert_exists() {
   log "✅ certs/ca.crt VALID ($cert_size bytes) → Using: $CERT_FILE"
 }
 
+# ADD THIS IMMEDIATELY AFTER check_manifest_files() - BEFORE ANY DEPLOYMENTS
+
+check_network_policy_support() {
+  log "🔍 Checking GKE NetworkPolicy support..."
+  
+  # 1. LOOK FOR CALICO (GKE NetworkPolicy enabled)
+  if kubectl get pods -n kube-system -l k8s-app=calico-node &>/dev/null; then
+    log "✅ Calico CNI found - NetworkPolicy FULLY SUPPORTED"
+    return 0
+  fi
+  
+  # 2. LOOK FOR GKE DATAPLANE V2 AGENT
+  if kubectl get daemonset -n kube-system gke-connectivity-agent &>/dev/null; then
+    log "✅ GKE NetworkPolicy agent found - NetworkPolicy SUPPORTED"
+    return 0
+  fi
+  
+  # 3. NO NETWORKPOLICY SUPPORT → FATAL OR BYPASS
+  log "🚨 NO NETWORKPOLICY CNI DETECTED!"
+  log "   • No Calico daemonset"
+  log "   • No GKE connectivity-agent"
+  log "   • Policies will APPLY but NEVER ATTACH → DNS BLOCKED → MQTT CRASHLOOP"
+  
+  # OPTION A: FAIL HARD (recommended for production)
+  # fatal "ENABLE NetworkPolicy: gcloud container clusters update $CLUSTER --enable-network-policy"
+  
+  # OPTION B: AUTO-BYPASS (development)
+  log "🔓 AUTO-BYPASS: Skipping policies - MQTT DNS will work"
+  export SKIP_POLICIES=true
+  return 0
+}
+
+
+x
+
+
 
 check_manifest_files() {
   log "Validating manifest files in '$K8S_DIR'..."
@@ -758,7 +794,7 @@ check_envsubst
 [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
 check_env_vars
 check_manifest_files
-
+check_network_policy_support
 
 export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
 
