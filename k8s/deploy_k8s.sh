@@ -757,12 +757,18 @@ force_delete_pods() {
 }
 
 verify_dns_connectivity() {
-  log "🧪 Testing cluster DNS resolution via ephemeral pod..."
-  if kubectl run dns-canary --image=busybox:1.36 --restart=Never --rm -it -- nslookup kubernetes.default >/dev/null 2>&1; then
-    log "✅ DNS Resolution Working"
+  log "🧪 Testing cluster DNS resolution via ephemeral canary..."
+  
+  # We use a 15s timeout to avoid hanging the script if Calico is slow
+  if kubectl run dns-canary -n "$NAMESPACE" \
+    --image=busybox:1.36 \
+    --restart=Never \
+    --rm -i -- \
+    sh -c "nslookup kubernetes.default || exit 1" >/dev/null 2>&1; then
+    log "✅ DNS Resolution Working - CNI ready."
     return 0
   else
-    log "🚨 DNS BLOCKED. Calico has not propagated rules yet."
+    log "🚨 DNS BLOCKED - NetworkPolicies or CNI sync failure."
     return 1
   fi
 }
@@ -989,8 +995,22 @@ kubectl get pods -n "$NAMESPACE" || true
 # CHECK ACTUAL CONTAINERS ALIVE (ignores readiness probes)
 kubectl get pods -n "$NAMESPACE" -o jsonpath='{.items[*].status.phase}' | grep -v "Pending\|Failed" && echo "✅ Pods Running"
 
+log "✅ PHASE 6: Finalize..."
+kubectl patch configmap darkseek-config -n "$NAMESPACE" -p '{
+  "data": {
+    "WEBSOCKET_URI": "wss://darkseek-backend-ws:8443/ws/",
+    "MQTT_URI": "http://darkseek-backend-ws:8000"
+  }
+}' || true
 
-
+# Trigger a rolling update so apps pick up the NEW URIs
+log "🔄 Refreshing apps to pick up new ConfigMap values..."
+kubectl rollout restart deployment/darkseek-backend-ws -n "$NAMESPACE"
+kubectl rollout restart deployment/darkseek-backend-mqtt -n "$NAMESPACE"
+sleep 39
+log "⏳ Waiting for rolling update to stabilize..."
+kubectl rollout status deployment/darkseek-backend-ws -n "$NAMESPACE" --timeout=120s
+kubectl rollout status deployment/darkseek-backend-mqtt -n "$NAMESPACE" --timeout=120s
 # =======================================================
 # GOLDEN COMMANDS - PRODUCTION VERIFICATION
 # =======================================================
@@ -1014,15 +1034,6 @@ log "✅ Deploy COMPLETE - Calico policies applied successfully"
 # =======================================================
 # PHASE 6: FINAL CONFIG + STATUS
 # =======================================================
-log "✅ PHASE 6: Finalize..."
-kubectl patch configmap darkseek-config -n "$NAMESPACE" -p '{
-  "data": {
-    "WEBSOCKET_URI": "wss://darkseek-backend-ws:8443/ws/",
-    "MQTT_URI": "http://darkseek-backend-ws:8000"
-  }
-}' || true
-
-
 
 log "⏳ Waiting for LoadBalancer IPs (60s max)..."
 for i in {1..12}; do
