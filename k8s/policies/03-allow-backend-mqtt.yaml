@@ -9,12 +9,40 @@ spec:
   podSelector:
     matchLabels:
       app: darkseek-backend-mqtt
-  policyTypes: [Ingress]
+  policyTypes: 
+  - Ingress
+  - Egress  # <--- CRITICAL: Must be here to enable the egress section below
   ingress:
   - from:
     - podSelector:
         matchLabels:
-          app: darkseek-backend-ws  # if WS talks to MQTT internally
+          app: darkseek-backend-ws
     ports:
     - protocol: TCP
       port: 8885
+  egress:
+  # 1. External APIs (HuggingFace/Google)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 192.168.0.0/16
+    ports:
+    - protocol: TCP
+      port: 443
+  # 2. Internal Services (Redis & Postgres)
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darkseek-redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darkseek-db
+    ports:
+    - protocol: TCP
+      port: 5432
