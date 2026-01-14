@@ -757,18 +757,47 @@ force_delete_pods() {
 }
 
 verify_dns_connectivity() {
-  log "🧪 Testing cluster DNS resolution via ephemeral canary..."
+  log "🧪 Verifying Cluster DNS Configuration..."
   
-  # We use a 15s timeout to avoid hanging the script if Calico is slow
+  # 1. Dynamically fetch the REAL Cluster DNS IP
+  local CLUSTER_DNS_IP
+  CLUSTER_DNS_IP=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+  
+  if [ -z "$CLUSTER_DNS_IP" ]; then
+    log "❌ ERROR: Could not find kube-dns Service IP."
+    return 1
+  fi
+  log "🔍 Detected Cluster DNS IP: $CLUSTER_DNS_IP"
+
+  # 2. Cross-check against your manifest inside brackets
+  # This checks if the specific IP is missing from the file
+  if [ -z "$(grep "$CLUSTER_DNS_IP" "./policies/00-allow-dns.yaml")" ]; then
+    log "⚠️ WARNING: 00-allow-dns.yaml is missing the correct IP ($CLUSTER_DNS_IP)."
+    log "⚠️ Auto-patching policy with detected IP..."
+    
+    # Use sed to replace the placeholder IP specifically in the DNS rule
+    # This assumes you have '10.0.0.10/32' as your placeholder
+    sed -i "s/[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\/32/$CLUSTER_DNS_IP\/32/g" "./policies/00-allow-dns.yaml"
+    
+    kubectl apply -f "./policies/00-allow-dns.yaml"
+    log "⏳ Waiting 10s for CNI propagation..."
+    sleep 10
+  else
+    log "✅ Policy already contains correct IP: $CLUSTER_DNS_IP"
+  fi
+
+  # 3. Final Resolution Test
+  log "📡 Running resolution test via ephemeral canary..."
   if kubectl run dns-canary -n "$NAMESPACE" \
     --image=busybox:1.36 \
     --restart=Never \
     --rm -i -- \
     sh -c "nslookup kubernetes.default || exit 1" >/dev/null 2>&1; then
-    log "✅ DNS Resolution Working - CNI ready."
+    log "✅ DNS Resolution Working."
     return 0
   else
-    log "🚨 DNS BLOCKED - NetworkPolicies or CNI sync failure."
+    log "❌ DNS STILL BLOCKED. Attempting emergency namespace labeling..."
+    kubectl label namespace kube-system kubernetes.io/metadata.name=kube-system --overwrite >/dev/null 2>&1
     return 1
   fi
 }
