@@ -37,39 +37,39 @@ spec:
   
   # --- SECURE EGRESS RULES ---
   egress:
-    # RULE 1: GKE 2025 DNS RESOLUTION (Verified for Autopilot)
+    # 1. DNS (The GKE 2025 Tank version)
     - to:
       - namespaceSelector:
           matchLabels:
             kubernetes.io/metadata.name: kube-system
-        podSelector:
-          matchLabels:
-            k8s-app: coredns  # Verified GKE 2025 Label
       ports:
       - protocol: UDP
         port: 53
       - protocol: TCP
         port: 53
+    # ADDED: GKE Metadata Server (Required for Workload Identity)
+    - to:
+      - ipBlock:
+          cidr: 169.254.169.254/32
+      ports:
+      - protocol: TCP
+        port: 80
 
-    # Rule 2: Allow connection to the internal MQTT Broker
+    # 2. Internal App Communication (MQTT + Debug)
     - to:
       - podSelector:
           matchLabels:
             app: darkseek-backend-mqtt
-      ports:
-      - protocol: TCP
-        port: 8885
-
-    # Rule 3: Allow connection back to the debug-mqtt pod
-    - to:
       - podSelector:
           matchLabels:
             app: debug-mqtt
       ports:
       - protocol: TCP
-        port: 8000      
+        port: 8885  # Standard MQTT internal
+      - protocol: TCP
+        port: 8000  # API Callback port
 
-    # Rule 4: Allow egress to the Redis cache
+    # 3. Infrastructure (Redis + DB)
     - to:
       - podSelector:
           matchLabels:
@@ -77,8 +77,6 @@ spec:
       ports:
       - protocol: TCP
         port: 6379
-
-    # Rule 5: Allow egress to the PostgreSQL Database
     - to:
       - podSelector:
           matchLabels:
@@ -87,7 +85,7 @@ spec:
       - protocol: TCP
         port: 5432
 
-    # Rule 6: Allow general Internet access for LLM/Search APIs
+    # 4. External APIs (Zero-Trust Internet)
     - to:
       - ipBlock:
           cidr: 0.0.0.0/0
