@@ -1,44 +1,41 @@
----
-#k8s/policies/00-allow-dns.yaml
+# k8s/policies/00-allow-dns.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-dns-egress
   namespace: default
 spec:
-  podSelector: {} # All pods
+  podSelector: {} 
   policyTypes:
   - Egress
   egress:
   - to:
-    # 1. By Namespace Label
+    # 1. Standard GKE kube-system access
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
-    # 2. By Pod Label (Targeting the DNS pods directly)
-    - namespaceSelector: {} #
-      podSelector:
-        matchLabels:
-          k8s-app: kube-dns
-    # 3. By Exact Service IP (REPLACE 10.0.0.10 with the result from Step 1)
+    # 2. Triple-Play IP Fallback
     - ipBlock:
-        cidr: 10.0.0.10/32 
+        cidr: 34.118.224.10/32  # Your Cluster DNS IP
+    - ipBlock:
+        cidr: 169.254.20.10/32   # <--- CRITICAL: GKE NodeLocal DNSCache
     ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
-  # Metadata Server for GKE internals
+  # 3. GKE Metadata Server (Auth & Identity)
   - to:
     - ipBlock:
         cidr: 169.254.169.254/32
     ports:
     - protocol: TCP
       port: 80
-  # External HTTPS for your API Keys (HuggingFace/Google)
+  # 4. External HTTPS (LLMs & APIs)
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
     ports:
     - protocol: TCP
       port: 443
