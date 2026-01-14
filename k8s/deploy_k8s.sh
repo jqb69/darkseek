@@ -801,6 +801,26 @@ verify_dns_connectivity() {
     return 1
   fi
 }
+
+verify_internal_connectivity() {
+  log "🧪 Testing internal path: MQTT -> Postgres..."
+  
+  # We use 'kubectl run' to spin up a temporary "tester" pod 
+  # with the SAME labels as the MQTT backend.
+  # This triggers the 'from: podSelector' in your DB policy.
+  if kubectl run net-tester -n "$NAMESPACE" \
+    --image=busybox:1.36 \
+    --labels="app=darkseek-backend-mqtt" \
+    --restart=Never \
+    --rm -i -- \
+    sh -c "nc -zv darkseek-db 5432" >/dev/null 2>&1; then
+    log "✅ Internal path (MQTT -> DB) is OPEN."
+    return 0
+  else
+    log "❌ Internal path (MQTT -> DB) is BLOCKED."
+    return 1
+  fi
+}
 # Function to wait for application-level health files
 wait_for_mqtt_health() {
   local app_label="darkseek-backend-mqtt"
@@ -940,10 +960,8 @@ if [ "$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}
 fi
 
 
-
 ensure_db_exists
 check_db_initialization  # Your retry version
-
 
 
 # 🔥 PERMANENT SAFETY: Strip ANY ghost command overrides (safe idempotent)
@@ -962,8 +980,7 @@ apply_networking  # ALL policies - 00-dns + 04-db + 05-redis + 02-ws + ALL
 log "⏳ 60s: CNI sync (all iptables rules ready)..."
 sleep 60
 # ... after apply_networking ...
-log "⏳ 60s: CNI sync..."
-sleep 60
+
 verify_dns_connectivity || fatal "NetworkPolicy is blocking DNS. Deployment halted."
 # 2. Reset the Frontend Service (clears the bad NEG annotations)
 #kubectl delete service darkseek-frontend --ignore-not-found=true
@@ -1002,9 +1019,22 @@ sleep 30
 
 wait_for_deployments  # NOW waits for ALL deployments + services
 
-
 #apply_networking  # DNS → DB → Redis → Apps
 
+# =======================================================
+# PHASE 4b: Connectivity & Health (The Validation Gate)
+# =======================================================
+log "🧪 PHASE 4b: Internal Network Validation..."
+
+# 1. Check if the "Pipes" are open first
+if ! verify_internal_connectivity; then
+    log "🚨 CRITICAL: NetworkPolicy is blocking MQTT -> DB."
+    log "Dumping NetworkPolicies for immediate audit:"
+    kubectl get netpol -n "$NAMESPACE"
+    # Exit early so you don't wait for a timeout that will never succeed
+    fatal "Internal connectivity test failed."
+fi
+echo "🎉 PHASE 4.5 COMPLETE: Network paths verified."
 #log "⏳ 293s CRITICAL Calico CNI propagation..."
 sleep 59  # NO TESTS UNTIL CNI FINISHED
 wait_for_mqtt_health
@@ -1034,12 +1064,18 @@ kubectl patch configmap darkseek-config -n "$NAMESPACE" -p '{
 
 # Trigger a rolling update so apps pick up the NEW URIs
 log "🔄 Refreshing apps to pick up new ConfigMap values..."
-kubectl rollout restart deployment/darkseek-backend-ws -n "$NAMESPACE"
-kubectl rollout restart deployment/darkseek-backend-mqtt -n "$NAMESPACE"
-sleep 39
+
+# Only restart if the previous command (patch) was successful
+if kubectl get configmap darkseek-config -n "$NAMESPACE" ; then
+    kubectl rollout restart deployment/darkseek-backend-ws -n "$NAMESPACE"
+    kubectl rollout restart deployment/darkseek-backend-mqtt -n "$NAMESPACE"
+fi
+sleep 33
 log "⏳ Waiting for rolling update to stabilize..."
 kubectl rollout status deployment/darkseek-backend-ws -n "$NAMESPACE" --timeout=120s
 kubectl rollout status deployment/darkseek-backend-mqtt -n "$NAMESPACE" --timeout=120s
+
+
 # =======================================================
 # GOLDEN COMMANDS - PRODUCTION VERIFICATION
 # =======================================================
@@ -1087,4 +1123,4 @@ log "WebSocket API: $(kubectl get pods -l app=darkseek-backend-ws -n $NAMESPACE 
 log "Database:      $(kubectl get pvc postgres-pvc -n $NAMESPACE -o jsonpath='{.status.phase}')"
 log "Network:       $(kubectl get netpol -n $NAMESPACE --no-headers | wc -l) Policies Applied"
 log "========================================================="
-log "🎉 Done! Use 'kubectl logs -f deployment/darkseek-backend-mqtt' to watch TLS traffic."#!/bin/bash
+log "🎉 Done! Use 'kubectl logs -f deployment/darkseek-backend-mqtt' to watch TLS traffic."
