@@ -10,20 +10,35 @@ spec:
   policyTypes:
   - Egress
   egress:
-  # 1. Internal K8s DNS
   - to:
+    # 1. By Namespace Label
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
+    # 2. By Pod Label (Targeting the DNS pods directly)
+    - namespaceSelector: {} #
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    # 3. By Exact Service IP (REPLACE 10.0.0.10 with the result from Step 1)
+    - ipBlock:
+        cidr: 10.0.0.10/32 
     ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
-  # 2. GKE Metadata Server (Workload Identity / Google APIs)
+  # Metadata Server for GKE internals
   - to:
     - ipBlock:
         cidr: 169.254.169.254/32
     ports:
     - protocol: TCP
       port: 80
+  # External HTTPS for your API Keys (HuggingFace/Google)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443
