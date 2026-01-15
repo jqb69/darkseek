@@ -776,11 +776,11 @@ verify_dns_connectivity() {
 
   # 3. Patch the policy file
   # Note: Ensure path is correct relative to where you run the script
-  if [ -f "./k8s/policies/00-allow-dns.yaml" ]; then
-    sed -i "s/cidr: 34\.118\.224\.10\/32/cidr: $CLUSTER_DNS_IP\/32/g" "./k8s/policies/00-allow-dns.yaml"
+  if [ -f "$POLICY_DIR/00-allow-dns.yaml" ]; then
+    sed -i "s/cidr: 34\.118\.224\.10\/32/cidr: $CLUSTER_DNS_IP\/32/g" "$POLICY_DIR//00-allow-dns.yaml"
     kubectl apply -f "./k8s/policies/00-allow-dns.yaml"
   else
-    log "⚠️  Warning: ./k8s/policies/00-allow-dns.yaml not found, skipping patch."
+    log "⚠️  Warning: $POLICY_DIR/00-allow-dns.yaml not found, skipping patch."
   fi
   
   log "⏳ Waiting 20s for CNI (iptables) sync..."
