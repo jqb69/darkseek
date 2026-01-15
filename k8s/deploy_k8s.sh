@@ -778,7 +778,7 @@ verify_dns_connectivity() {
   # Note: Ensure path is correct relative to where you run the script
   if [ -f "$POLICY_DIR/00-allow-dns.yaml" ]; then
     sed -i "s/cidr: 34\.118\.224\.10\/32/cidr: $CLUSTER_DNS_IP\/32/g" "$POLICY_DIR//00-allow-dns.yaml"
-    kubectl apply -f "./k8s/policies/00-allow-dns.yaml"
+    kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml"
   else
     log "⚠️  Warning: $POLICY_DIR/00-allow-dns.yaml not found, skipping patch."
   fi
@@ -800,6 +800,7 @@ verify_dns_connectivity() {
       sh -c "nslookup kubernetes.default 169.254.20.10" >/dev/null 2>&1 && log "💡 Hint: NodeLocal DNS is active. Add 169.254.20.10 to your Egress rules."
     return 1
   fi
+  sleep 15
 }
 
 verify_internal_connectivity() {
