@@ -497,46 +497,6 @@ wait_for_deployments() {
   done
 }
 
-apply_networking() {
-  log "🛡️ Applying DNS-Aware Zero-Trust Policies..."
-  
-  local policy_dir="${POLICY_DIR:-./policies}"
-  
-  if [ ! -d "$policy_dir" ]; then
-    log "⚠️ Policy directory $policy_dir not found. Skipping networking layer."
-    return 0
-  fi
-
-  log "📂 Using policy source: $policy_dir"
-  # ONE tiE ONLY!!!!!
-  #kubectl delete netpol deny-all-ingress -n "$NAMESPACE" && sleep 2 || true
-  # CRITICAL DEPENDENCY ORDER: DB → Redis → WS
-  kubectl apply -f "$policy_dir"/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
-  
-  
-  # 1. DB FIRST (backend-ws needs postgres:5432)
-  kubectl apply -f "$policy_dir"/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 3
-  
-  # 2. REDIS SECOND (backend-ws needs redis:6379)  
-  kubectl apply -f "$policy_dir"/05-allow-redis-access.yaml -n "$NAMESPACE" && sleep 3
-  
-  # 3. WS LAST (now has DB + Redis ingress)
-  kubectl apply -f "$policy_dir"/02-allow-backend-ws.yaml -n "$NAMESPACE" && sleep 3
-
-  # Remaining policies (safe order)
-  log "Applying remaining application rules..."
-  for policy in "$policy_dir"/{03,06,07}-*.yaml; do
-    [ -f "$policy" ] && kubectl apply -f "$policy" -n "$NAMESPACE"
-  done
-
-  log "Applying frontend ingress rules..."
-  for policy in "$policy_dir"/allow-frontend*.yaml; do
-    [ -f "$policy" ] && kubectl apply -f "$policy" -n "$NAMESPACE"
-  done
-  #kubectl apply -f "$policy_dir"/01-deny-all.yaml -n "$NAMESPACE" && sleep 2
-  log "✅ Policies: DNS→Deny→DB→Redis→WS→All ✅"
-}
-
 
 
 
@@ -776,11 +736,18 @@ verify_dns_connectivity() {
 
   # 3. Patch the policy file
   # Note: Ensure path is correct relative to where you run the script
+  # 3. Patch the policy file using Wildcard IP matching (Prevents 'unchanged' status)
   if [ -f "$POLICY_DIR/00-allow-dns.yaml" ]; then
-    sed -i "s/cidr: 34\.118\.224\.10\/32/cidr: $CLUSTER_DNS_IP\/32/g" "$POLICY_DIR//00-allow-dns.yaml"
+    log "📝 Patching 00-allow-dns.yaml with live IP..."
+    sed -i "s/cidr: [0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\/32/cidr: $CLUSTER_DNS_IP\/32/g" "$POLICY_DIR/00-allow-dns.yaml"
     kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml"
+    
+    # --- LIVE VERIFICATION CHECK ---
+    log "📋 Verifying Live Policy State in Cluster:"
+    kubectl get netpol allow-dns-egress -n "$NAMESPACE" -o yaml | grep cidr || log "⚠️ Warning: Could not find CIDR in live policy."
   else
-    log "⚠️  Warning: $POLICY_DIR/00-allow-dns.yaml not found, skipping patch."
+    log "❌ FATAL: $POLICY_DIR/00-allow-dns.yaml not found."
+    return 1
   fi
   
   log "⏳ Waiting 20s for CNI (iptables) sync..."
@@ -788,16 +755,19 @@ verify_dns_connectivity() {
 
   # 4. Resilient Canary Test
   log "📡 Running resolution test..."
+
   if kubectl run dns-canary -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i -- \
     sh -c "nslookup kubernetes.default || (sleep 3 && nslookup kubernetes.default)" >/dev/null 2>&1; then
     log "✅ DNS Resolution Working."
     return 0
   else
     log "❌ DNS STILL BLOCKED."
-    log "📋 Debugging: Checking if NodeLocal DNSCache is active..."
-    # If this IP answers but the cluster IP doesn't, your policy needs 169.254.20.10
+    log "📋 Current Policy Egress Rules:"
+    kubectl describe netpol allow-dns-egress -n "$NAMESPACE" | grep -A 10 "Egress"
+    
+    # Final check for the 169.254.20.10 Trap
     kubectl run dns-debug -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i -- \
-      sh -c "nslookup kubernetes.default 169.254.20.10" >/dev/null 2>&1 && log "💡 Hint: NodeLocal DNS is active. Add 169.254.20.10 to your Egress rules."
+      sh -c "nslookup kubernetes.default 169.254.20.10" >/dev/null 2>&1 && log "💡 Hint: NodeLocal DNS is active. Ensure 169.254.20.10/32 is in your file."
     return 1
   fi
   sleep 15
@@ -822,6 +792,57 @@ verify_internal_connectivity() {
     return 1
   fi
 }
+
+apply_networking() {
+  log "🛡️ Applying DNS-Aware Policies..."
+  
+  local policy_dir="${POLICY_DIR:-./policies}"
+  
+  if [ ! -d "$policy_dir" ]; then
+    log "⚠️ Policy directory $policy_dir not found. Skipping networking layer."
+    return 0
+  fi
+
+  log "📂 Using policy source: $policy_dir"
+  # 1. UNLOCK DNS FIRST (Using your fixed function)
+  # This MUST happen before any app deployment
+  verify_dns_connectivity || fatal "NetworkPolicy is blocking DNS. Deployment halted."
+  # ONE tiE ONLY!!!!!
+  #kubectl delete netpol deny-all-ingress -n "$NAMESPACE" && sleep 2 || true
+  # CRITICAL DEPENDENCY ORDER: DB → Redis → WS
+  kubectl apply -f "$policy_dir"/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
+  
+  log "🔑 Opening paths to Database and Redis..."
+  # 1. DB FIRST (backend-ws needs postgres:5432)
+  kubectl apply -f "$policy_dir"/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 3
+  
+  # 2. REDIS SECOND (backend-ws needs redis:6379)  
+  kubectl apply -f "$policy_dir"/05-allow-redis-access.yaml -n "$NAMESPACE" && sleep 3
+  
+  # 3. OPEN THE APP PIPES (Producer then Consumer)
+  log "📡 Opening MQTT Worker paths..."
+  kubectl apply -f "$policy_dir"/03-allow-backend-mqtt.yaml -n "$NAMESPACE" && sleep 5
+  
+  log "🔌 Opening WebSocket API paths..."
+  # 3. WS LAST (now has DB + Redis ingress)
+  kubectl apply -f "$policy_dir"/02-allow-backend-ws.yaml -n "$NAMESPACE" && sleep 3
+  
+  # Remaining policies (safe order)
+  log "Applying remaining application rules..."
+  for policy in "$policy_dir"/{06,07}-*.yaml; do
+    [ -f "$policy" ] && kubectl apply -f "$policy" -n "$NAMESPACE"
+  done
+
+  log "Applying frontend ingress rules..."
+  for policy in "$policy_dir"/allow-frontend*.yaml; do
+    [ -f "$policy" ] && kubectl apply -f "$policy" -n "$NAMESPACE"
+  done
+  #kubectl apply -f "$policy_dir"/01-deny-all.yaml -n "$NAMESPACE" && sleep 2
+  log "✅ Policies: DNS→Deny→DB→Redis→WS→All ✅"
+}
+
+
+
 # Function to wait for application-level health files
 wait_for_mqtt_health() {
   local app_label="darkseek-backend-mqtt"
@@ -875,6 +896,29 @@ deploy_main_apps() {
   done
 }
 
+# =======================================================
+# MONITORING: Frontend -> Backend Handshake
+# =======================================================
+monitor_handshake() {
+  log "🔍 Monitoring Handshake: Frontend ⇄ Backend WS..."
+  
+  # Give the pods a few seconds to initialize their internal listeners
+  sleep 10
+
+  # 1. Check Backend WS logs for active connections
+  log "📡 Backend WS Connection Logs:"
+  kubectl logs -l app=darkseek-backend-ws -n "$NAMESPACE" --tail=50 | grep -E "connected|connection|GET /ws" || echo "⚠️ No active WS connections detected yet."
+
+  # 2. Check Frontend logs for Backend reachability
+  log "🌐 Frontend -> Backend Connectivity Check:"
+  if kubectl logs -l app=darkseek-frontend -n "$NAMESPACE" --tail=50 | grep -iq "error\|failed\|timeout"; then
+    log "❌ ERROR: Frontend is reporting connection failures!"
+    return 1
+  else
+    log "✅ SUCCESS: Frontend seems to be reaching the Backend."
+  fi
+}
+
 # --- MAIN (FINAL CLEAN VERSION) ---
 log "Starting deployment..."
 check_kubectl
@@ -913,6 +957,12 @@ kubectl create secret generic darkseek-secrets \
 
 kubectl apply -f configmap.yaml
 
+kubectl patch configmap darkseek-config -n "$NAMESPACE" -p '{
+  "data": {
+    "WEBSOCKET_URI": "wss://darkseek-backend-ws:8443/ws/",
+    "MQTT_URI": "http://darkseek-backend-ws:8000"
+  }
+}' || true
 
 dryrun_server
 
@@ -970,10 +1020,16 @@ log "🧹 Ensuring clean Deployment specs..."
 kubectl patch deployment darkseek-backend-ws --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
 kubectl patch deployment darkseek-backend-mqtt --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
 
+log "🔴 PHASE 2: Redis + Core Services..."
+apply_with_retry redis-deployment.yaml
+apply_with_retry redis-service.yaml
+
+log "⏳ 30s: Redis startup..."
+sleep 30
 # =======================================================
 # PHASE 2: NETWORK LOCKDOWN (Everything else ready)
 # =======================================================
-log "🔒 PHASE 2: Network lockdown..."
+log "🔒 PHASE 3: Network lockdown..."
 # 🔥 ALL NETWORK POLICIES FIRST - PODS BORN SECURE
 #log "🔒 Applying COMPLETE Zero-Trust framework (DNS+DB+Redis+WS)..."
 apply_networking  # ALL policies - 00-dns + 04-db + 05-redis + 02-ws + ALL
@@ -982,19 +1038,14 @@ log "⏳ 60s: CNI sync (all iptables rules ready)..."
 sleep 60
 # ... after apply_networking ...
 
-verify_dns_connectivity || fatal "NetworkPolicy is blocking DNS. Deployment halted."
+#verify_dns_connectivity || fatal "NetworkPolicy is blocking DNS. Deployment halted."
 # 2. Reset the Frontend Service (clears the bad NEG annotations)
 #kubectl delete service darkseek-frontend --ignore-not-found=true
 
 # =======================================================
 # PHASE 3: REDIS + SERVICES
 # =======================================================
-log "🔴 PHASE 3: Redis + Core Services..."
-apply_with_retry redis-deployment.yaml
-apply_with_retry redis-service.yaml
 
-log "⏳ 30s: Redis startup..."
-sleep 30
 # =======================================================
 # PHASE 3: APPLICATIONS (Now DB/Redis ready)
 # =======================================================
@@ -1055,26 +1106,20 @@ kubectl get pods -n "$NAMESPACE" || true
 # CHECK ACTUAL CONTAINERS ALIVE (ignores readiness probes)
 kubectl get pods -n "$NAMESPACE" -o jsonpath='{.items[*].status.phase}' | grep -v "Pending\|Failed" && echo "✅ Pods Running"
 
-log "✅ PHASE 6: Finalize..."
-kubectl patch configmap darkseek-config -n "$NAMESPACE" -p '{
-  "data": {
-    "WEBSOCKET_URI": "wss://darkseek-backend-ws:8443/ws/",
-    "MQTT_URI": "http://darkseek-backend-ws:8000"
-  }
-}' || true
+#log "✅ PHASE 6: Finalize..."
 
 # Trigger a rolling update so apps pick up the NEW URIs
 log "🔄 Refreshing apps to pick up new ConfigMap values..."
 
 # Only restart if the previous command (patch) was successful
-if kubectl get configmap darkseek-config -n "$NAMESPACE" ; then
-    kubectl rollout restart deployment/darkseek-backend-ws -n "$NAMESPACE"
-    kubectl rollout restart deployment/darkseek-backend-mqtt -n "$NAMESPACE"
-fi
-sleep 33
-log "⏳ Waiting for rolling update to stabilize..."
-kubectl rollout status deployment/darkseek-backend-ws -n "$NAMESPACE" --timeout=120s
-kubectl rollout status deployment/darkseek-backend-mqtt -n "$NAMESPACE" --timeout=120s
+#if kubectl get configmap darkseek-config -n "$NAMESPACE" ; then
+#    kubectl rollout restart deployment/darkseek-backend-ws -n "$NAMESPACE"
+#    kubectl rollout restart deployment/darkseek-backend-mqtt -n "$NAMESPACE"
+#fi
+#sleep 33
+#log "⏳ Waiting for rolling update to stabilize..."
+#kubectl rollout status deployment/darkseek-backend-ws -n "$NAMESPACE" --timeout=120s
+#kubectl rollout status deployment/darkseek-backend-mqtt -n "$NAMESPACE" --timeout=120s
 
 
 # =======================================================
@@ -1089,7 +1134,7 @@ if kubectl exec deployment/darkseek-backend-ws -n "$NAMESPACE" -- nc -zv darksee
 else
   log "❌ Zero-Trust: WS → Redis BLOCKED - Check allow-redis-access.yaml"
 fi
-
+monitor_handshake
 log "🟢 GOLDEN COMMAND 3: ConfigMap Phase 6 Patch Verification..."
 kubectl get configmap darkseek-config -n "$NAMESPACE" -o jsonpath='{.data.WEBSOCKET_URI}' && echo "" || log "⚠️ ConfigMap WEBSOCKET_URI missing"
 kubectl get configmap darkseek-config -n "$NAMESPACE" -o jsonpath='{.data.MQTT_URI}' && echo "" || log "⚠️ ConfigMap MQTT_URI missing"
