@@ -899,23 +899,38 @@ deploy_main_apps() {
 # =======================================================
 # MONITORING: Frontend -> Backend Handshake
 # =======================================================
+# =======================================================
+# MONITORING: Frontend -> Backend Handshake
+# =======================================================
 monitor_handshake() {
-  log "🔍 Monitoring Handshake: Frontend ⇄ Backend WS..."
+  log "🧪 GOLDEN COMMAND 2.5: Monitoring WS Handshake..."
   
-  # Give the pods a few seconds to initialize their internal listeners
-  sleep 10
-
-  # 1. Check Backend WS logs for active connections
-  log "📡 Backend WS Connection Logs:"
-  kubectl logs -l app=darkseek-backend-ws -n "$NAMESPACE" --tail=50 | grep -E "connected|connection|GET /ws" || echo "⚠️ No active WS connections detected yet."
-
-  # 2. Check Frontend logs for Backend reachability
-  log "🌐 Frontend -> Backend Connectivity Check:"
-  if kubectl logs -l app=darkseek-frontend -n "$NAMESPACE" --tail=50 | grep -iq "error\|failed\|timeout"; then
-    log "❌ ERROR: Frontend is reporting connection failures!"
+  local ws_pod=$(kubectl get pods -l app=darkseek-backend-ws -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  
+  if [ -z "$ws_pod" ]; then
+    log "⚠️ No Backend WS pods found to monitor."
     return 1
+  fi
+
+  log "📡 Checking $ws_pod for active WebSocket upgrades..."
+  
+  # 1. Look for '101 Switching Protocols' (Standard WebSocket Handshake)
+  # 2. Look for 'GET /ws' which is your typical endpoint
+  if kubectl logs "$ws_pod" -n "$NAMESPACE" --tail=200 | grep -Ei "101|GET /ws|connection upgraded" > /dev/null; then
+    log "✅ Handshake Verified: Backend is receiving WebSocket traffic!"
   else
-    log "✅ SUCCESS: Frontend seems to be reaching the Backend."
+    log "⚠️ No active handshake detected yet. The pod is up, but no clients have connected via WS."
+  fi
+
+  # 3. Simulate a ping from the Frontend pod to the WS Service
+  local fe_pod=$(kubectl get pods -l app=darkseek-frontend -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -n "$fe_pod" ]; then
+    log "🌐 Testing path: Frontend -> Backend Service..."
+    if kubectl exec "$fe_pod" -n "$NAMESPACE" -- curl -i -H "Upgrade: websocket" -H "Connection: Upgrade" http://darkseek-backend-ws:8000/ws/ 2>&1 | grep -q "101"; then
+      log "✅ Network Path Open: Frontend can reach Backend WS."
+    else
+      log "❌ Path Blocked: Frontend cannot complete handshake to Backend. Check allow-backend-ws.yaml ingress rules."
+    fi
   fi
 }
 
