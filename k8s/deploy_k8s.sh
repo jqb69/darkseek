@@ -719,58 +719,56 @@ force_delete_pods() {
 verify_dns_connectivity() {
   log "🧪 Verifying Cluster DNS Configuration..."
   
-  # 1. FORCE LABEL (Critical for Calico namespaceSelector)
-  # GKE sometimes strips labels or uses different defaults; this ensures consistency.
-  log "🏷️  Ensuring kube-system is labeled for NetworkPolicy access..."
+  # 1. FORCE LABEL (Ensures Zero-Trust namespaceSelector works)
   kubectl label namespace kube-system kubernetes.io/metadata.name=kube-system --overwrite >/dev/null 2>&1
 
-  # 2. Dynamically fetch the REAL Cluster DNS IP
-  local CLUSTER_DNS_IP
-  CLUSTER_DNS_IP=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-  
-  if [ -z "$CLUSTER_DNS_IP" ]; then
-    log "❌ ERROR: Could not find kube-dns Service IP."
-    return 1
-  fi
-  log "🔍 Detected Cluster DNS IP: $CLUSTER_DNS_IP"
+  # 2. DETECT REAL IP
+  local dns_ip
+  dns_ip=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+  [ -z "$dns_ip" ] && { log "❌ ERROR: kube-dns IP not found."; return 1; }
+  log "🔍 Detected Cluster DNS IP: $dns_ip"
 
-  # 3. Patch the policy file
-  # Note: Ensure path is correct relative to where you run the script
-  # 3. Patch the policy file using Wildcard IP matching (Prevents 'unchanged' status)
+  # 3. PATCH & APPLY (Using Placeholder logic for 100% accuracy)
   if [ -f "$POLICY_DIR/00-allow-dns.yaml" ]; then
-    log "📝 Patching 00-allow-dns.yaml with live IP..."
-    sed -i "s/cidr: [0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\/32/cidr: $CLUSTER_DNS_IP\/32/g" "$POLICY_DIR/00-allow-dns.yaml"
-    kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml"
-    
-    # --- LIVE VERIFICATION CHECK ---
-    log "📋 Verifying Live Policy State in Cluster:"
-    kubectl get netpol allow-dns-egress -n "$NAMESPACE" -o yaml | grep cidr || log "⚠️ Warning: Could not find CIDR in live policy."
+    log "📝 Patching DNS Policy..."
+    # Create a temp file replacing the placeholder with the real IP
+    sed "s/DNS_IP_PLACEHOLDER/$dns_ip/g" "$POLICY_DIR/00-allow-dns.yaml" > "$POLICY_DIR/00-allow-dns.tmp.yaml"
+    kubectl apply -f "$POLICY_DIR/00-allow-dns.tmp.yaml" -n "$NAMESPACE" && sleep 3
+    rm -f "$POLICY_DIR/00-allow-dns.tmp.yaml"
   else
-    log "❌ FATAL: $POLICY_DIR/00-allow-dns.yaml not found."
-    return 1
+    log "❌ FATAL: 00-allow-dns.yaml missing."; return 1
   fi
-  
-  log "⏳ Waiting 20s for CNI (iptables) sync..."
-  sleep 20
 
-  # 4. Resilient Canary Test
-  log "📡 Running resolution test..."
+  # 4. THE RETRY LOOP (The "Kimi2" Validation Gate)
+  local max_attempts=5
+  local attempt=1
+  log "📡 Running resolution test (Waiting for CNI sync)..."
 
-  if kubectl run dns-canary -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i -- \
-    sh -c "nslookup kubernetes.default || (sleep 3 && nslookup kubernetes.default)" >/dev/null 2>&1; then
-    log "✅ DNS Resolution Working."
-    return 0
-  else
-    log "❌ DNS STILL BLOCKED."
-    log "📋 Current Policy Egress Rules:"
-    kubectl describe netpol allow-dns-egress -n "$NAMESPACE" | grep -A 10 "Egress"
+  while [ $attempt -le $max_attempts ]; do
+    log "   Attempt $attempt/$max_attempts..."
     
-    # Final check for the 169.254.20.10 Trap
-    kubectl run dns-debug -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i -- \
-      sh -c "nslookup kubernetes.default 169.254.20.10" >/dev/null 2>&1 && log "💡 Hint: NodeLocal DNS is active. Ensure 169.254.20.10/32 is in your file."
-    return 1
-  fi
-  sleep 15
+    # Canary test: Try to resolve kubernetes.default
+    if kubectl run "dns-canary-$attempt" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=10s -- \
+       nslookup kubernetes.default >/dev/null 2>&1; then
+      log "✅ DNS Resolution Working."
+      return 0
+    fi
+
+    # Optional: Check for NodeLocal DNS Cache if primary fails
+    if [ $attempt -eq 2 ]; then
+       log "💡 Checking if NodeLocal DNS (169.254.20.10) is the culprit..."
+       if kubectl run dns-debug -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=10s -- \
+          nslookup kubernetes.default 169.254.20.10 >/dev/null 2>&1; then
+         log "⚠️ NodeLocal DNS is active but not in your 00-allow-dns.yaml!"
+       fi
+    fi
+
+    [ $attempt -lt $max_attempts ] && sleep 20
+    ((attempt++))
+  done
+
+  log "❌ DNS STILL BLOCKED after $max_attempts attempts."
+  return 1
 }
 
 verify_internal_connectivity() {
@@ -804,13 +802,13 @@ apply_networking() {
   fi
 
   log "📂 Using policy source: $policy_dir"
-  # 1. UNLOCK DNS FIRST (Using your fixed function)
-  # This MUST happen before any app deployment
-  verify_dns_connectivity || fatal "NetworkPolicy is blocking DNS. Deployment halted."
-  # ONE tiE ONLY!!!!!
-  #kubectl delete netpol deny-all-ingress -n "$NAMESPACE" && sleep 2 || true
-  # CRITICAL DEPENDENCY ORDER: DB → Redis → WS
-  kubectl apply -f "$policy_dir"/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
+  # 1. PREPARE & VALIDATE DNS (The Gatekeeper)
+  # This function now handles the IP detection, the Patching, and the Retry Loop.
+  if ! verify_dns_connectivity; then
+    log "❌ FATAL: DNS is blocked. Refusing to apply further policies to avoid isolation."
+    return 1
+  fi
+  #kubectl apply -f "$policy_dir"/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
   
   log "🔑 Opening paths to Database and Redis..."
   # 1. DB FIRST (backend-ws needs postgres:5432)
