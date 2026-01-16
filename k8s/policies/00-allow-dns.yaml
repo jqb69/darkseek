@@ -10,8 +10,13 @@ spec:
   policyTypes:
   - Egress
   egress:
-  # 1. Internal DNS (Fixed with Placeholder)
-  - to:
+  # 1-3: DNS RULES (Port 53)
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+    to:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
@@ -20,25 +25,22 @@ spec:
           k8s-app: kube-dns
     - ipBlock:
         cidr: DNS_IP_PLACEHOLDER/32
-    ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
-
-  # 2. GKE Metadata (Crucial)
-  - to:
     - ipBlock:
-        cidr: 169.254.169.254/32
-    ports:
+        cidr: 169.254.20.10/32
+
+  # 4: GKE METADATA (Port 80)
+  - ports:
     - protocol: TCP
       port: 80
+    to:
+    - ipBlock:
+        cidr: 169.254.169.254/32
 
-  # 3. External HTTPS (LLMs & APIs)
-  - to:
+  # 5: EXTERNAL HTTPS (Port 443)
+  - ports:
+    - protocol: TCP
+      port: 443
+    to:
     - ipBlock:
         cidr: 0.0.0.0/0
         except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
-    ports:
-    - protocol: TCP
-      port: 443
