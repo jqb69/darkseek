@@ -740,7 +740,7 @@ verify_dns_connectivity() {
   fi
 
   # 4. THE RETRY LOOP (The "Kimi2" Validation Gate)
-  local max_attempts=5
+  local max_attempts=10
   local attempt=1
   log "📡 Running resolution test (Waiting for CNI sync)..."
 
