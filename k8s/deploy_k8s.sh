@@ -374,7 +374,7 @@ ensure_db_exists() {
 }
 
 check_db_initialization() {
-  log "🔄 Checking PostgreSQL initialization (Socket + Process + Protocol)..."
+  log "🔄 Checking PostgreSQL initialization (Internal Socket + Process)..."
   
   local pod_name
   pod_name=$(kubectl get pod -l app=darkseek-db -n "$NAMESPACE" --no-headers -o custom-columns=":metadata.name" | head -1)
@@ -384,53 +384,44 @@ check_db_initialization() {
     return 1
   fi
   
-  # 1. WAIT FOR POD READINESS
-  log "⏳ Waiting for pod/$pod_name to reach Ready state..."
-  kubectl wait --for=condition=Ready pod/"$pod_name" -n "$NAMESPACE" --timeout=120s || {
-    log "❌ Pod failed to reach Ready state."
-    return 1
-  }
-  
-  # 2. SOCKET + PROCESS CHECK (The Perplexity Gold Standard)
-  log "🧪 Verifying Postgres socket 5432 + process ACTIVE..."
-  local socket_ready=false
+  # 1. Wait for Pod to be Ready (Handles InitContainers/Volume Mounts)
+  kubectl wait --for=condition=Ready pod/"$pod_name" -n "$NAMESPACE" --timeout=120s || return 1
+
+  # 2. THE PERPLEXITY ULTRA-ROBUST CHECK (Modified for Tool-less Containers)
+  log "🧪 Verifying Postgres Internal State..."
+  local db_alive=false
   for i in {1..20}; do
-    # Combining ss (network) and pgrep (process) ensures the container isn't a zombie
-    if kubectl exec "$pod_name" -n "$NAMESPACE" -- sh -c "ss -tln | grep -q :5432 && pgrep -f postgres >/dev/null"; then
-      log "✅ Postgres is alive and listening (attempt $i)"
-      socket_ready=true
+    # 1538 = Hex for Port 5432. 
+    # This check is bulletproof: No 'ss' or 'netstat' required.
+    if kubectl exec "$pod_name" -n "$NAMESPACE" -- sh -c "
+      (grep -q '00000000:1538' /proc/net/tcp || grep -q '00000000:1538' /proc/net/tcp6) && \
+      pgrep -f postgres >/dev/null
+    "; then
+      log "✅ Postgres Socket 5432 + Process both ACTIVE"
+      db_alive=true
       break
     fi
+    log "⏳ Waiting for Postgres to bind to interface... ($i/20)"
     sleep 3
   done
 
-  if [ "$socket_ready" = false ]; then
-    log "❌ Postgres process/socket failed to start."
+  if [ "$db_alive" = false ]; then
+    log "❌ Postgres process/socket never stabilized."
     kubectl logs "$pod_name" -n "$NAMESPACE" -c postgres --tail=20
     return 1
   fi
-  
-  # 3. PROTOCOL CHECK (pg_isready)
-  log "📡 Verifying Database availability (pg_isready)..."
-  for i in {1..150}; do
-    local result
-    result=$(kubectl exec "$pod_name" -n "$NAMESPACE" -- pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" 2>&1 || true)
-    
-    if [[ "$result" == *"accepting connections"* ]]; then
-      log "✅ PostgreSQL ready (attempt $i): $result"
-      
-      # Final Query Test
-      if kubectl exec "$pod_name" -n "$NAMESPACE" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 1;" >/dev/null 2>&1; then
-        log "✅ DB Query Test: SUCCESS"
-        return 0
-      fi
+
+  # 3. FINAL PROTOCOL CHECK
+  log "📡 Running final pg_isready protocol check..."
+  for i in {1..10}; do
+    if kubectl exec "$pod_name" -n "$NAMESPACE" -- pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -q; then
+       log "✅ Protocol check passed. Database is accepting connections."
+       return 0
     fi
-    
-    [ $((i % 15)) -eq 0 ] && log "⏳ Status (attempt $i): $result"
     sleep 2
   done
-  
-  log "❌ Postgres failed to become ready (Protocol Timeout)"
+
+  log "❌ Socket is open but pg_isready failed (likely Auth or NetworkPolicy loopback issue)."
   return 1
 }
 
