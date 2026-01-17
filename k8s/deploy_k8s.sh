@@ -719,62 +719,56 @@ force_delete_pods() {
 verify_dns_connectivity() {
   log "🧪 Verifying Cluster DNS Configuration..."
   
-  # 1. FORCE LABEL (Ensures namespaceSelector works for GKE)
+  # 1. Force Label for Namespace Selector
   kubectl label namespace kube-system kubernetes.io/metadata.name=kube-system --overwrite >/dev/null 2>&1
 
-  # 2. DETECT REAL IP
+  # 2. Get Live ClusterIP
   local dns_ip
   dns_ip=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
   [ -z "$dns_ip" ] && { log "❌ ERROR: kube-dns IP not found."; return 1; }
   log "🔍 Detected Cluster DNS IP: $dns_ip"
 
-  # 3. PATCH & APPLY
+  # 3. THE "ONE-TIME" DELETE + SANITIZE
   if [ -f "$POLICY_DIR/00-allow-dns.yaml" ]; then
-    log "📝 Patching DNS Policy with live IP..."
-    sed "s/DNS_IP_PLACEHOLDER/$dns_ip/g" "$POLICY_DIR/00-allow-dns.yaml" > "$POLICY_DIR/00-allow-dns.tmp.yaml"
-    kubectl apply -f "$POLICY_DIR/00-allow-dns.tmp.yaml" -n "$NAMESPACE" && sleep 3
+    log "🧹 Force-deleting old policy to clear 10-day-old state..."
+    
+
+    log "📝 Sanitizing source and patching DNS_IP_PLACEHOLDER..."
+    # tr -d '\302\240' removes invisible non-breaking spaces (the metaheader bug)
+    # tr -d '\r' removes Windows carriage returns
+    sed "s/DNS_IP_PLACEHOLDER/$dns_ip/g" "$POLICY_DIR/00-allow-dns.yaml" | \
+    tr -d '\302\240' | tr -d '\r' > "$POLICY_DIR/00-allow-dns.tmp.yaml"
+    
+    log "🚀 Applying fresh, sanitized policy..."
+    kubectl apply -f "$POLICY_DIR/00-allow-dns.tmp.yaml" -n "$NAMESPACE" && sleep 5
     rm -f "$POLICY_DIR/00-allow-dns.tmp.yaml"
     
-    # Tiny pause for the API to register the policy
-    sleep 3
+    # Wait for CNI/Calico to realize the old policy is gone and the new one is here
+    sleep 8
   else
-    log "❌ FATAL: $POLICY_DIR/00-allow-dns.yaml missing."; return 1
+    log "❌ FATAL: $POLICY_DIR/00-allow-dns.yaml not found."; return 1
   fi
 
-  # 4. THE LONG VALIDATION GATE (15 Attempts = ~5 Minutes)
+  # 4. THE 15-ATTEMPT VALIDATION GATE
   local max_attempts=15
   local attempt=1
-  log "📡 Running resolution test (Waiting up to 5 mins for CNI sync)..."
+  log "📡 Running resolution test..."
 
   while [ $attempt -le $max_attempts ]; do
     log "   Attempt $attempt/$max_attempts..."
     
-    # Canary pod: Standard Resolution
-    if kubectl run "dns-canary-$attempt" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=12s -- \
+    # Run canary pod and check resolution
+    if kubectl run "dns-canary-$attempt" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=15s -- \
        nslookup kubernetes.default >/dev/null 2>&1; then
       log "✅ DNS Resolution Working. Network Gate OPEN."
       return 0
     fi
 
-    # --- NODE LOCAL DEBUG (Attempt 2) ---
-    if [ $attempt -eq 2 ]; then
-      log "💡 Attempt 2 Failed. Testing NodeLocal DNS (169.254.20.10) directly..."
-      if kubectl run "nodelocal-test" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=10s \
-         -- nslookup kubernetes.default 169.254.20.10 >/dev/null 2>&1; then
-        log "✅ NodeLocal reachable! (The network path to the cache is open)."
-      else
-        log "⚠️ NodeLocal unreachable. This usually means the 169.254.20.10/32 ipBlock is missing from your YAML."
-      fi
-    fi
-
-    if [ $attempt -lt $max_attempts ]; then
-      log "⏳ DNS blocked. (CNI sync in progress). Retrying in 20s..."
-      sleep 20
-    fi
+    [ $attempt -lt $max_attempts ] && sleep 20
     ((attempt++))
   done
 
-  log "❌ DNS STILL BLOCKED after $max_attempts attempts."
+  log "❌ DNS STILL BLOCKED. Check if a GlobalNetworkPolicy is overriding this."
   return 1
 }
 
@@ -979,7 +973,7 @@ kubectl create secret generic darkseek-secrets \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl apply -f configmap.yaml
-
+kubectl delete netpol allow-dns-egress -n "$NAMESPACE" --ignore-not-found
 kubectl patch configmap darkseek-config -n "$NAMESPACE" -p '{
   "data": {
     "WEBSOCKET_URI": "wss://darkseek-backend-ws:8443/ws/",
