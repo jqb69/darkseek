@@ -6,11 +6,11 @@ metadata:
   name: allow-dns-egress
   namespace: default
 spec:
-  podSelector: {} 
+  podSelector: {}
   policyTypes:
   - Egress
   egress:
-  # 1-3: DNS RULES (Port 53)
+  # 1. DNS Resolution (Port 53) - The "Four-Headed Hydra"
   - ports:
     - protocol: UDP
       port: 53
@@ -26,9 +26,11 @@ spec:
     - ipBlock:
         cidr: DNS_IP_PLACEHOLDER/32
     - ipBlock:
-        cidr: 169.254.20.10/32
+        cidr: 169.254.20.10/32      # NodeLocal DNS
+    - ipBlock:
+        cidr: 169.254.169.254/32   # GKE Metadata DNS (The Perplexity Fix)
 
-  # 4: GKE METADATA (Port 80)
+  # 2. GKE Metadata Access (Port 80)
   - ports:
     - protocol: TCP
       port: 80
@@ -36,7 +38,7 @@ spec:
     - ipBlock:
         cidr: 169.254.169.254/32
 
-  # 5: EXTERNAL HTTPS (Port 443)
+  # 3. External API Access (Port 443)
   - ports:
     - protocol: TCP
       port: 443
