@@ -374,52 +374,65 @@ ensure_db_exists() {
 }
 
 check_db_initialization() {
-  log "🔄 Checking PostgreSQL initialization (with retries)..."
+  log "🔄 Checking PostgreSQL initialization (Socket + Process + Protocol)..."
   
   local pod_name
   pod_name=$(kubectl get pod -l app=darkseek-db -n "$NAMESPACE" --no-headers -o custom-columns=":metadata.name" | head -1)
+  
   if [ -z "$pod_name" ]; then
     log "❌ No darkseek-db pod found"
     return 1
   fi
   
-  # Wait for pod to be Running (ignore init container phase)
-  for i in {1..30}; do
-    if kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Running; then
-      log "✅ Postgres pod Running"
+  # 1. WAIT FOR POD READINESS
+  log "⏳ Waiting for pod/$pod_name to reach Ready state..."
+  kubectl wait --for=condition=Ready pod/"$pod_name" -n "$NAMESPACE" --timeout=120s || {
+    log "❌ Pod failed to reach Ready state."
+    return 1
+  }
+  
+  # 2. SOCKET + PROCESS CHECK (The Perplexity Gold Standard)
+  log "🧪 Verifying Postgres socket 5432 + process ACTIVE..."
+  local socket_ready=false
+  for i in {1..20}; do
+    # Combining ss (network) and pgrep (process) ensures the container isn't a zombie
+    if kubectl exec "$pod_name" -n "$NAMESPACE" -- sh -c "ss -tln | grep -q :5432 && pgrep -f postgres >/dev/null"; then
+      log "✅ Postgres is alive and listening (attempt $i)"
+      socket_ready=true
       break
     fi
-    log "⏳ Waiting for pod Running... ($i/30)"
-    sleep 2
+    sleep 3
   done
+
+  if [ "$socket_ready" = false ]; then
+    log "❌ Postgres process/socket failed to start."
+    kubectl logs "$pod_name" -n "$NAMESPACE" -c postgres --tail=20
+    return 1
+  fi
   
-  # RETRY pg_isready up to 3 minutes
-  for i in {1..90}; do
-    if kubectl exec "$pod_name" -n "$NAMESPACE" -- pg_isready -U "$POSTGRES_USER" -q 2>/dev/null; then
-      log "✅ PostgreSQL ready (attempt $i)"
+  # 3. PROTOCOL CHECK (pg_isready)
+  log "📡 Verifying Database availability (pg_isready)..."
+  for i in {1..150}; do
+    local result
+    result=$(kubectl exec "$pod_name" -n "$NAMESPACE" -- pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" 2>&1 || true)
+    
+    if [[ "$result" == *"accepting connections"* ]]; then
+      log "✅ PostgreSQL ready (attempt $i): $result"
       
-      # Bonus: verify we can actually query
+      # Final Query Test
       if kubectl exec "$pod_name" -n "$NAMESPACE" -- psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT 1;" >/dev/null 2>&1; then
-        log "✅ Database $POSTGRES_DB fully operational"
+        log "✅ DB Query Test: SUCCESS"
         return 0
       fi
     fi
     
-    # Show pod logs every 10 attempts for debugging
-    if [ $((i % 10)) -eq 0 ]; then
-      log "⏳ Postgres still starting... (attempt $i/90)"
-      kubectl logs "$pod_name" -n "$NAMESPACE" --tail=5 || true
-    fi
-    
+    [ $((i % 15)) -eq 0 ] && log "⏳ Status (attempt $i): $result"
     sleep 2
   done
   
-  log "❌ Postgres failed to become ready after 3 minutes"
-  kubectl logs "$pod_name" -n "$NAMESPACE" || true
-  kubectl describe pod "$pod_name" -n "$NAMESPACE" || true
+  log "❌ Postgres failed to become ready (Protocol Timeout)"
   return 1
 }
-
 
 verify_backend_image() {
   local deployment_name="$1"
@@ -973,7 +986,7 @@ kubectl create secret generic darkseek-secrets \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl apply -f configmap.yaml
-kubectl delete netpol allow-dns-egress -n "$NAMESPACE" --ignore-not-found
+
 kubectl patch configmap darkseek-config -n "$NAMESPACE" -p '{
   "data": {
     "WEBSOCKET_URI": "wss://darkseek-backend-ws:8443/ws/",
@@ -1013,6 +1026,14 @@ if [[ "${NUKE_WS_PODS:-false}" == "true" ||  "${NUKE_MQTT_PODS:-false}" == "true
   force_delete_pods "darkseek-frontend"
   sleep 15
 fi
+log "🔒 PHASE 1.5: Network lockdown..."
+#kubectl delete netpol allow-dns-egress -n "$NAMESPACE" --ignore-not-found
+# 🔥 ALL NETWORK POLICIES FIRST - PODS BORN SECURE
+#log "🔒 Applying COMPLETE Zero-Trust framework (DNS+DB+Redis+WS)..."
+apply_networking  # ALL policies - 00-dns + 04-db + 05-redis + 02-ws + ALL
+
+log "⏳ 60s: CNI sync (all iptables rules ready)..."
+sleep 60
 
 apply_with_retry db-pvc.yaml
 apply_with_retry db-deployment.yaml
@@ -1046,13 +1067,7 @@ sleep 30
 # =======================================================
 # PHASE 2: NETWORK LOCKDOWN (Everything else ready)
 # =======================================================
-log "🔒 PHASE 3: Network lockdown..."
-# 🔥 ALL NETWORK POLICIES FIRST - PODS BORN SECURE
-#log "🔒 Applying COMPLETE Zero-Trust framework (DNS+DB+Redis+WS)..."
-apply_networking  # ALL policies - 00-dns + 04-db + 05-redis + 02-ws + ALL
 
-log "⏳ 60s: CNI sync (all iptables rules ready)..."
-sleep 60
 # ... after apply_networking ...
 
 #verify_dns_connectivity || fatal "NetworkPolicy is blocking DNS. Deployment halted."
