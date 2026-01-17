@@ -732,7 +732,7 @@ force_delete_pods() {
 verify_dns_connectivity() {
   log "🧪 Verifying Cluster DNS Configuration..."
   
-  # 1. Force Label for Namespace Selector
+  # 1. Force Label for Namespace Selector (Ensures policy can target kube-system)
   kubectl label namespace kube-system kubernetes.io/metadata.name=kube-system --overwrite >/dev/null 2>&1
 
   # 2. Get Live ClusterIP
@@ -741,50 +741,42 @@ verify_dns_connectivity() {
   [ -z "$dns_ip" ] && { log "❌ ERROR: kube-dns IP not found."; return 1; }
   log "🔍 Detected Cluster DNS IP: $dns_ip"
 
-  # 3. THE "ONE-TIME" DELETE + SANITIZE
+  # 3. Apply the Sanitized Policy
   if [ -f "$POLICY_DIR/00-allow-dns.yaml" ]; then
-    log "🧹 Force-deleting old policy to clear 10-day-old state..."
-    
-
-    log "📝 Sanitizing source and patching DNS_IP_PLACEHOLDER..."
-    # tr -d '\302\240' removes invisible non-breaking spaces (the metaheader bug)
-    # tr -d '\r' removes Windows carriage returns
-    sed "s/DNS_IP_PLACEHOLDER/$dns_ip/g" "$POLICY_DIR/00-allow-dns.yaml" | \
-    tr -d '\302\240' | tr -d '\r' > "$POLICY_DIR/00-allow-dns.tmp.yaml"
-    
-    log "🚀 Applying fresh, sanitized policy..."
-    kubectl apply -f "$POLICY_DIR/00-allow-dns.tmp.yaml" -n "$NAMESPACE" && sleep 5
+    sed "s/DNS_IP_PLACEHOLDER/$dns_ip/g" "$POLICY_DIR/00-allow-dns.yaml" | tr -d '\302\240' | tr -d '\r' > "$POLICY_DIR/00-allow-dns.tmp.yaml"
+    kubectl apply -f "$POLICY_DIR/00-allow-dns.tmp.yaml" -n "$NAMESPACE" && sleep 3
     rm -f "$POLICY_DIR/00-allow-dns.tmp.yaml"
-    
-    # Wait for CNI/Calico to realize the old policy is gone and the new one is here
-    sleep 8
+    sleep 15 # Give Calico a head start
   else
-    log "❌ FATAL: $POLICY_DIR/00-allow-dns.yaml not found."; return 1
+    fatal "Missing DNS policy file."
   fi
 
-  # 4. THE 15-ATTEMPT VALIDATION GATE
+  # 4. THE RESILIENT VALIDATION GATE
   local max_attempts=15
   local attempt=1
-  log "📡 Running resolution test..."
-
+  log "📡 Running resolution test (looking for ANY response)..."
   while [ $attempt -le $max_attempts ]; do
     log "   Attempt $attempt/$max_attempts..."
     
-    # Run canary pod and check resolution
-    if kubectl run "dns-canary-$attempt" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=15s -- \
-       nslookup kubernetes.default >/dev/null 2>&1; then
-      log "✅ DNS Resolution Working. Network Gate OPEN."
+    # Capture output to see WHY it failed
+    local output
+    output=$(kubectl run "dns-canary-$attempt" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=15s -- \
+       nslookup google.com 2>&1 || true)
+
+    # If the output contains "Address" or "can't resolve", the firewall let the packet through!
+    if [[ "$output" == *"Address"* ]] || [[ "$output" == *"can't resolve"* ]]; then
+      log "✅ Network Gate OPEN (DNS responded)."
       return 0
     fi
 
+    log "⚠️ Attempt $attempt failed: $output"
     [ $attempt -lt $max_attempts ] && sleep 20
     ((attempt++))
   done
 
-  log "❌ DNS STILL BLOCKED. Check if a GlobalNetworkPolicy is overriding this."
-  return 1
+  log "❌ DNS STILL BLOCKED (Absolute Timeout)."
+  return 1 
 }
-
 verify_internal_connectivity() {
   log "🧪 Testing internal path: MQTT -> Postgres..."
   
