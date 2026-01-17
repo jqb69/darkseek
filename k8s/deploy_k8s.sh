@@ -719,7 +719,7 @@ force_delete_pods() {
 verify_dns_connectivity() {
   log "🧪 Verifying Cluster DNS Configuration..."
   
-  # 1. FORCE LABEL (Ensures Zero-Trust namespaceSelector works)
+  # 1. FORCE LABEL (Ensures namespaceSelector works for GKE)
   kubectl label namespace kube-system kubernetes.io/metadata.name=kube-system --overwrite >/dev/null 2>&1
 
   # 2. DETECT REAL IP
@@ -728,42 +728,49 @@ verify_dns_connectivity() {
   [ -z "$dns_ip" ] && { log "❌ ERROR: kube-dns IP not found."; return 1; }
   log "🔍 Detected Cluster DNS IP: $dns_ip"
 
-  # 3. PATCH & APPLY (Using Placeholder logic for 100% accuracy)
+  # 3. PATCH & APPLY
   if [ -f "$POLICY_DIR/00-allow-dns.yaml" ]; then
-    log "📝 Patching DNS Policy..."
-    # Create a temp file replacing the placeholder with the real IP
+    log "📝 Patching DNS Policy with live IP..."
     sed "s/DNS_IP_PLACEHOLDER/$dns_ip/g" "$POLICY_DIR/00-allow-dns.yaml" > "$POLICY_DIR/00-allow-dns.tmp.yaml"
     kubectl apply -f "$POLICY_DIR/00-allow-dns.tmp.yaml" -n "$NAMESPACE" && sleep 3
     rm -f "$POLICY_DIR/00-allow-dns.tmp.yaml"
+    
+    # Tiny pause for the API to register the policy
+    sleep 3
   else
-    log "❌ FATAL: 00-allow-dns.yaml missing."; return 1
+    log "❌ FATAL: $POLICY_DIR/00-allow-dns.yaml missing."; return 1
   fi
 
-  # 4. THE RETRY LOOP (The "Kimi2" Validation Gate)
-  local max_attempts=10
+  # 4. THE LONG VALIDATION GATE (15 Attempts = ~5 Minutes)
+  local max_attempts=15
   local attempt=1
-  log "📡 Running resolution test (Waiting for CNI sync)..."
+  log "📡 Running resolution test (Waiting up to 5 mins for CNI sync)..."
 
   while [ $attempt -le $max_attempts ]; do
     log "   Attempt $attempt/$max_attempts..."
     
-    # Canary test: Try to resolve kubernetes.default
-    if kubectl run "dns-canary-$attempt" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=10s -- \
+    # Canary pod: Standard Resolution
+    if kubectl run "dns-canary-$attempt" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=12s -- \
        nslookup kubernetes.default >/dev/null 2>&1; then
-      log "✅ DNS Resolution Working."
+      log "✅ DNS Resolution Working. Network Gate OPEN."
       return 0
     fi
 
-    # Optional: Check for NodeLocal DNS Cache if primary fails
+    # --- NODE LOCAL DEBUG (Attempt 2) ---
     if [ $attempt -eq 2 ]; then
-       log "💡 Checking if NodeLocal DNS (169.254.20.10) is the culprit..."
-       if kubectl run dns-debug -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=10s -- \
-          nslookup kubernetes.default 169.254.20.10 >/dev/null 2>&1; then
-         log "⚠️ NodeLocal DNS is active but not in your 00-allow-dns.yaml!"
-       fi
+      log "💡 Attempt 2 Failed. Testing NodeLocal DNS (169.254.20.10) directly..."
+      if kubectl run "nodelocal-test" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --rm -i --timeout=10s \
+         -- nslookup kubernetes.default 169.254.20.10 >/dev/null 2>&1; then
+        log "✅ NodeLocal reachable! (The network path to the cache is open)."
+      else
+        log "⚠️ NodeLocal unreachable. This usually means the 169.254.20.10/32 ipBlock is missing from your YAML."
+      fi
     fi
 
-    [ $attempt -lt $max_attempts ] && sleep 20
+    if [ $attempt -lt $max_attempts ]; then
+      log "⏳ DNS blocked. (CNI sync in progress). Retrying in 20s..."
+      sleep 20
+    fi
     ((attempt++))
   done
 
@@ -804,9 +811,12 @@ apply_networking() {
   log "📂 Using policy source: $policy_dir"
   # 1. PREPARE & VALIDATE DNS (The Gatekeeper)
   # This function now handles the IP detection, the Patching, and the Retry Loop.
+  # 2. RUN THE DNS GATE
   if ! verify_dns_connectivity; then
-    log "❌ FATAL: DNS is blocked. Refusing to apply further policies to avoid isolation."
-    return 1
+    log "🚨 NETWORK ERROR: DNS is blocked."
+    log "Current Policy State:"
+    kubectl describe netpol allow-dns-egress -n "$NAMESPACE"
+    fatal "Deployment halted to avoid application isolation."
   fi
   #kubectl apply -f "$policy_dir"/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
   
