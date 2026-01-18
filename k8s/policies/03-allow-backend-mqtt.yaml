@@ -1,4 +1,3 @@
----
 # k8s/policies/03-allow-backend-mqtt.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -11,7 +10,7 @@ spec:
       app: darkseek-backend-mqtt
   policyTypes: 
   - Ingress
-  - Egress  # <--- CRITICAL: Must be here to enable the egress section below
+  - Egress
   ingress:
   - from:
     - podSelector:
@@ -21,17 +20,27 @@ spec:
     - protocol: TCP
       port: 8885
   egress:
-  # 1. External APIs (HuggingFace/Google)
+  # 1. THE MISSING PIECE: MQTT Broker (External)
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
-        except:
-        - 10.0.0.0/8
-        - 192.168.0.0/16
+        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+    ports:
+    - protocol: TCP
+      port: 1883  # <--- Standard MQTT
+    - protocol: TCP
+      port: 8883  # <--- Secure MQTT (MQTTS)
+
+  # 2. External APIs (HuggingFace/Google)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
     ports:
     - protocol: TCP
       port: 443
-  # 2. Internal Services (Redis & Postgres)
+
+  # 3. Internal Services (Redis & Postgres)
   - to:
     - podSelector:
         matchLabels:
