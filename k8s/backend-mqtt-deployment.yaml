@@ -23,17 +23,23 @@ spec:
             name: darkseek-config
         - secretRef:
             name: darkseek-secrets
+        startupProbe:
+          exec:
+            command: ["cat", "/tmp/mqtt-healthy"]
+          initialDelaySeconds: 10
+          failureThreshold: 30 # 30 * 10s = 5 minutes to connect
+          periodSeconds: 10
         livenessProbe:
           exec:
             command: ["cat", "/tmp/mqtt-healthy"]
-          initialDelaySeconds: 15
-          periodSeconds: 10
+          initialDelaySeconds: 3
+          periodSeconds: 20
           timeoutSeconds: 5
           failureThreshold: 3
         readinessProbe:
           exec:
             command: ["cat", "/tmp/mqtt-healthy"]
-          initialDelaySeconds: 5
+          initialDelaySeconds: 3
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
