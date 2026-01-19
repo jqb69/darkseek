@@ -1,8 +1,33 @@
-   startupProbe:
+---
+# ./k8s/backend-mqtt-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: darkseek-backend-mqtt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: darkseek-backend-mqtt
+  template:
+    metadata:
+      labels:
+        app: darkseek-backend-mqtt
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: backend-mqtt
+        image: us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/darkseek/darkseek-backend-mqtt:latest
+        envFrom:
+        - configMapRef:
+            name: darkseek-config
+        - secretRef:
+            name: darkseek-secrets
+        startupProbe:
           exec:
             command: ["cat", "/tmp/mqtt-healthy"]
           initialDelaySeconds: 15
-          failureThreshold: 60 
+          failureThreshold: 60
           periodSeconds: 10
         livenessProbe:
           exec:
@@ -24,4 +49,4 @@
             memory: "256Mi"
           limits:
             cpu: "500m"
-            memory: "512Mi"       
+            memory: "512Mi"
