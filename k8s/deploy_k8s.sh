@@ -994,6 +994,24 @@ monitor_handshake() {
   fi
 }
 
+check_mqtt_egress() {
+    # Ensure variables exist
+    [ -z "$MQTT_BROKER_HOST" ] && { log "⚠️ Skipping egress check: MQTT_BROKER_HOST not set."; return 0; }
+    
+    log "🔍 DIAGNOSTIC: Testing MQTT Egress to $MQTT_BROKER_HOST:8883..."
+    
+    local canary="network-gate-canary"
+    
+    # We use 'timeout 5' so the script doesn't hang if the packet is dropped
+    if kubectl exec "$canary" -n "$NAMESPACE" -- timeout 5 nc -zv "$MQTT_BROKER_HOST" 8883 2>&1; then
+        log "✅ NETWORK GATE OPEN: $MQTT_BROKER_HOST:8883 is reachable."
+        return 0
+    else
+        log "❌ NETWORK GATE BLOCKED: Port 8883 is unreachable from this cluster."
+        return 1
+    fi
+}
+
 check_pod_stability() {
   log "🔍 Auditing Pod Stability..."
   
@@ -1198,7 +1216,12 @@ apply_with_retry frontend-service.yaml
 
 log "⏳ 30s: Service endpoints ready..."
 sleep 30
+log "⏳ Waiting for pods to pass probes (This may take minutes)..."
 
+# --- SMART TROUBLESHOOTING START ---
+# Run the check once in the background so it doesn't block the script
+check_mqtt_egress || log "⚠️ Warning: Connectivity check failed. Probes will likely time out."
+# --- SMART TROUBLESHOOTING END ---
 wait_for_deployments  # NOW waits for ALL deployments + services
 
 #apply_networking  # DNS → DB → Redis → Apps
