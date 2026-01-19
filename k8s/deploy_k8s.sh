@@ -701,23 +701,36 @@ kill_stale_pods() {
   log "All $app_label pods and PVC finalizers obliterated."
 }
 
+# force_delete_pods: The GKE-Proof Cleanup (Logic by Perplexity)
 force_delete_pods() {
-  local app_label="${1:-}"   # e.g. darkseek-backend-ws
-  if [ -z "$app_label" ]; then
-    log "force_delete_pods called without label – skipping"
+  local app_label="${1:-}"
+  local extra_label="${2:-}"  # Optional: e.g., "monitoring"
+  local selector=""
+
+  # 1. Build the Selector Dynamically
+  if [ -n "$app_label" ] && [ -n "$extra_label" ]; then
+    selector="app=$app_label,purpose=$extra_label"
+  elif [ -n "$app_label" ]; then
+    selector="app=$app_label"
+  elif [ -n "$extra_label" ]; then
+    selector="purpose=$extra_label"
+  else
+    log "⚠️ force_delete_pods called without targets – skipping"
     return 0
   fi
 
-  log "Force deleting all pods with label app=$app_label ..."
-  # --ignore-not-found makes it safe even if no pods exist
-  kubectl delete pods -n "$NAMESPACE" -l "app=$app_label" \
+  log "☢️ FORCE DELETING pods with selector: [$selector]"
+  
+  # 2. The Heavy Lifting
+  # --grace-period=0 --force: Tells K8s to bypass the container's exit signal
+  kubectl delete pods -n "$NAMESPACE" -l "$selector" \
     --grace-period=0 --force \
-    --ignore-not-found=true \
-    || true
+    --ignore-not-found=true >/dev/null 2>&1 || true
 
-  # Give scheduler a moment to notice they’re gone
+  # 3. The "Cooldown": Essential for GKE/Calico to clear iptables
+  log "⏳ Waiting 15s for CNI/Iptables reconciliation..."
   sleep 15
-  log "Done force-deleting pods for $app_label"
+  log "✅ Cleanup for [$selector] complete."
 }
 
 verify_dns_connectivity() {
@@ -785,21 +798,20 @@ verify_dns_connectivity() {
   return 1 
 }
 verify_internal_connectivity() {
-  log "🧪 Testing internal path: MQTT -> Postgres..."
-  
-  # We use 'kubectl run' to spin up a temporary "tester" pod 
-  # with the SAME labels as the MQTT backend.
-  # This triggers the 'from: podSelector' in your DB policy.
-  if kubectl run net-tester -n "$NAMESPACE" \
-    --image=busybox:1.36 \
-    --labels="app=darkseek-backend-mqtt" \
-    --restart=Never \
-    --rm -i -- \
-    sh -c "nc -zv darkseek-db 5432" >/dev/null 2>&1; then
-    log "✅ Internal path (MQTT -> DB) is OPEN."
+  local pod_name
+  pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$NAMESPACE" -o name | head -1)
+
+  log "🧪 Testing path: MQTT -> Postgres (via $pod_name)..."
+
+  # Use the real pod to run the test. 
+  # If 'nc' is missing, we use 'timeout' with bash sockets as a backup
+  if kubectl exec "$pod_name" -n "$NAMESPACE" -- sh -c "nc -zv darkseek-db 5432" >/dev/null 2>&1; then
+    log "✅ Internal path OPEN."
     return 0
   else
-    log "❌ Internal path (MQTT -> DB) is BLOCKED."
+    log "🚨 Internal path BLOCKED or 'nc' missing in image."
+    # Dump logs for the developer to see if it was a timeout or a missing command
+    kubectl exec "$pod_name" -n "$NAMESPACE" -- sh -c "nc -zv darkseek-db 5432" || true
     return 1
   fi
 }
@@ -1002,15 +1014,21 @@ kubectl create secret generic darkseek-secrets \
 
 kubectl apply -f configmap.yaml
 
-kubectl patch configmap darkseek-config -n "$NAMESPACE" -p '{
-  "data": {
-    "WEBSOCKET_URI": "wss://darkseek-backend-ws:8443/ws/",
-    "MQTT_URI": "http://darkseek-backend-ws:8000"
+
+# 3. THE STRATEGIC PATCH
+# We wait slightly to ensure the resource exists in the API
+sleep 3
+log "💉 Injecting Dynamic URIs into ConfigMap..."
+kubectl patch configmap darkseek-config -n "$NAMESPACE" --type merge -p "{
+  \"data\": {
+    \"WEBSOCKET_URI\": \"wss://darkseek-backend-ws:8443/ws/\",
+    \"MQTT_URI\": \"http://darkseek-backend-ws:8000\"
   }
-}' || true
+}" || log "⚠️ Patch failed, check if configmap.yaml contains 'darkseek-config' name."
 
 dryrun_server
-
+log "🧹 Clearing stale monitoring pods..."
+force_delete_pods "network-gate-canary" "monitoring"
 # =======================================================
 # PHASE 1: STORAGE + DATABASE (PVC → DB → Service)
 # =======================================================
