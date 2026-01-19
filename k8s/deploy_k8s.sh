@@ -41,6 +41,20 @@ on_error() {
 }
 trap 'on_error' ERR
 
+nuke_namespace() {
+  read -p "🚨 WARNING: This will delete ALL resources in $NAMESPACE. Continue? (y/N): " confirm
+  if [[ "$confirm" == [yY] ]]; then
+    log "💣 Nuking namespace $NAMESPACE..."
+    kubectl delete all --all -n "$NAMESPACE"
+    kubectl delete networkpolicy --all -n "$NAMESPACE"
+    kubectl delete configmap --all -n "$NAMESPACE"
+    kubectl delete secret --all -n "$NAMESPACE"
+    log "✅ Namespace cleared."
+  else
+    log "Operation cancelled."
+  fi
+}
+
 # ----------------------------------------------------------------------
 #  MODIFIED ADVANCED DEBUG: Avoid sleep 3600!
 # ----------------------------------------------------------------------
@@ -760,17 +774,21 @@ verify_dns_connectivity() {
   local attempt=1
 
   # --- STEP 1: PRE-FLIGHT (Outside the loop) ---
-  if kubectl get pod "$canary_name" -n "$NAMESPACE" >/dev/null 2>&1; then
-    log "🛰️ Re-using existing Network Canary..."
-  else
+  local canary_status
+  canary_status=$(kubectl get pod "$canary_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+
+  if [[ "$canary_status" == "Running" ]]; then
+    log "🛰️ Re-using existing ACTIVE Network Canary..."
+  elif [[ "$canary_status" == "Succeeded" ]] || [[ "$canary_status" == "Failed" ]] || [[ "$canary_status" == "Completed" ]]; then
+    log "♻️ Found STALE Canary (Status: $canary_status). Replacing..."
+    kubectl delete pod "$canary_name" -n "$NAMESPACE" --grace-period=0 --force >/dev/null 2>&1
+    sleep 3 
+    # Now create a fresh one
+    kubectl run "$canary_name" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --labels="purpose=monitoring" --command -- sh -c "sleep 3600" >/dev/null 2>&1
+    kubectl wait --for=condition=Ready "pod/$canary_name" -n "$NAMESPACE" --timeout=120s
+  elif [[ "$canary_status" == "NotFound" ]]; then
     log "📡 Launching Stable Network Canary (60m TTL)..."
-    kubectl run "$canary_name" -n "$NAMESPACE" \
-      --image=busybox:1.36 \
-      --restart=Never \
-      --labels="purpose=monitoring" \
-      --command -- sh -c "sleep 3600" >/dev/null 2>&1
-    
-    # Wait for GKE to pull image and start (Only happens once!)
+    kubectl run "$canary_name" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --labels="purpose=monitoring" --command -- sh -c "sleep 3600" >/dev/null 2>&1
     kubectl wait --for=condition=Ready "pod/$canary_name" -n "$NAMESPACE" --timeout=120s
   fi
 
@@ -976,6 +994,37 @@ monitor_handshake() {
   fi
 }
 
+show_deployment_dashboard() {
+  echo -e "\n========================================================="
+  log "📊 DARKSEEK PRODUCTION DASHBOARD"
+  echo -e "========================================================="
+  
+  # 1. Pod Health & Restart Audit
+  log "🚀 Pod Status & Stability:"
+  kubectl get pods -n "$NAMESPACE" -o custom-columns=\
+"NAME:.metadata.name,\
+STATUS:.status.phase,\
+READY:.status.containerStatuses[*].ready,\
+RESTARTS:.status.containerStatuses[*].restartCount"
+  
+  # 2. Network Policy Audit
+  local netpol_count
+  netpol_count=$(kubectl get netpol -n "$NAMESPACE" --no-headers | wc -l)
+  log "🛡️  Security: $netpol_count Zero-Trust Policies Active"
+  
+  # 3. External Entry Points
+  log "🌐 Service Access (LoadBalancer IPs):"
+  kubectl get svc -n "$NAMESPACE" -o wide | grep -E "LoadBalancer|NAME"
+  
+  # 4. Storage Health
+  local pvc_status
+  pvc_status=$(kubectl get pvc postgres-pvc -n "$NAMESPACE" -o jsonpath='{.status.phase}')
+  log "💾 Storage: Database PVC is [$pvc_status]"
+  
+  echo -e "=========================================================\n"
+}
+
+
 # --- MAIN (FINAL CLEAN VERSION) ---
 log "Starting deployment..."
 check_kubectl
@@ -1028,7 +1077,7 @@ kubectl patch configmap darkseek-config -n "$NAMESPACE" --type merge -p "{
 
 dryrun_server
 log "🧹 Clearing stale monitoring pods..."
-force_delete_pods "network-gate-canary" "monitoring"
+force_delete_pods "" "monitoring"
 # =======================================================
 # PHASE 1: STORAGE + DATABASE (PVC → DB → Service)
 # =======================================================
@@ -1224,14 +1273,13 @@ kubectl get svc -n "$NAMESPACE" -o wide
 echo "Deployments:"
 kubectl get deployments -n "$NAMESPACE" -o wide
 
+log "🎉 DEPLOYMENT COMPLETE!"
 
-# Final Summary for Developer
-log "========================================================="
-log "DARKSEEK DEPLOYMENT SUMMARY"
-log "========================================================="
-log "MQTT Worker:   $(kubectl get pods -l app=darkseek-backend-mqtt -n $NAMESPACE --no-headers | wc -l) Pods"
-log "WebSocket API: $(kubectl get pods -l app=darkseek-backend-ws -n $NAMESPACE --no-headers | wc -l) Pods"
-log "Database:      $(kubectl get pvc postgres-pvc -n $NAMESPACE -o jsonpath='{.status.phase}')"
-log "Network:       $(kubectl get netpol -n $NAMESPACE --no-headers | wc -l) Policies Applied"
-log "========================================================="
+# Call the new Dashboard
+show_deployment_dashboard
+
+log "💡 To monitor all application logs in real-time, run:"
+echo "kubectl logs -f -n $NAMESPACE -l 'app in (darkseek-backend-ws, darkseek-backend-mqtt, darkseek-frontend)' --tail=20 --prefix"
+
+log "✅ Done."
 log "🎉 Done! Use 'kubectl logs -f deployment/darkseek-backend-mqtt' to watch TLS traffic."
