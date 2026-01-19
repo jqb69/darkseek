@@ -1,48 +1,23 @@
----
-#  ./k8s/backend-mqtt-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: darkseek-backend-mqtt
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: darkseek-backend-mqtt
-  template:
-    metadata:
-      labels:
-        app: darkseek-backend-mqtt
-    spec: # This is the Pod Spec
-      restartPolicy: Always
-      containers:
-      - name: backend-mqtt
-        image: us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/darkseek/darkseek-backend-mqtt:latest
-        envFrom:
-        - configMapRef:
-            name: darkseek-config
-        - secretRef:
-            name: darkseek-secrets
-        startupProbe:
+   startupProbe:
           exec:
             command: ["cat", "/tmp/mqtt-healthy"]
-          initialDelaySeconds: 10
-          failureThreshold: 30 # 30 * 10s = 5 minutes to connect
+          initialDelaySeconds: 15
+          failureThreshold: 60 
           periodSeconds: 10
         livenessProbe:
           exec:
             command: ["cat", "/tmp/mqtt-healthy"]
-          initialDelaySeconds: 3
-          periodSeconds: 20
+          initialDelaySeconds: 30
+          periodSeconds: 60
           timeoutSeconds: 5
-          failureThreshold: 3
+          failureThreshold: 5
         readinessProbe:
           exec:
             command: ["cat", "/tmp/mqtt-healthy"]
-          initialDelaySeconds: 3
-          periodSeconds: 10
+          initialDelaySeconds: 23
+          periodSeconds: 30
           timeoutSeconds: 5
-          failureThreshold: 3
+          failureThreshold: 5
         resources:
           requests:
             cpu: "100m"
