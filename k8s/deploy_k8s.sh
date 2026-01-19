@@ -994,34 +994,50 @@ monitor_handshake() {
   fi
 }
 
-show_deployment_dashboard() {
-  echo -e "\n========================================================="
-  log "📊 DARKSEEK PRODUCTION DASHBOARD"
-  echo -e "========================================================="
+check_pod_stability() {
+  log "🔍 Auditing Pod Stability..."
   
-  # 1. Pod Health & Restart Audit
-  log "🚀 Pod Status & Stability:"
+  # Fetch pods with restarts > 0
+  local unstable_pods
+  unstable_pods=$(kubectl get pods -n "$NAMESPACE" -o jsonpath='{range .items[?(@.status.containerStatuses[0].restartCount>0)]}{.metadata.name}{" (Restarts: "}{.status.containerStatuses[0].restartCount}{")\n"}{end}')
+
+  if [ -n "$unstable_pods" ]; then
+    echo -e "🚨 \033[0;31mSTABILITY ALERT: The following pods are crash-looping:\033[0m"
+    echo -e "$unstable_pods"
+    log "💡 Advice: Run 'kubectl describe pod <name>' to see the 'Last State: Terminated' reason."
+    return 1
+  else
+    log "✅ All pods are stable (0 restarts)."
+    return 0
+  fi
+}
+
+show_deployment_dashboard() {
+  echo -e "\n"
+  log "========================================================="
+  log "📊 DARKSEEK PRODUCTION DASHBOARD"
+  log "========================================================="
+  
+  # 1. High-Level Summary
+  log "🚀 Current Stack Status:"
   kubectl get pods -n "$NAMESPACE" -o custom-columns=\
 "NAME:.metadata.name,\
-STATUS:.status.phase,\
+PHASE:.status.phase,\
 READY:.status.containerStatuses[*].ready,\
 RESTARTS:.status.containerStatuses[*].restartCount"
+
+  echo ""
+  # 2. Trigger the Instability Post-Check
+  check_pod_stability || true
+
+  echo ""
+  # 3. Traffic Entry Points
+  log "🌐 External Access Points (GCLB/NEG):"
+  kubectl get svc -n "$NAMESPACE" -l "app in (darkseek-frontend, darkseek-backend-ws)" \
+    -o custom-columns="NAME:.metadata.name,EXTERNAL-IP:.status.loadBalancer.ingress[*].ip,PORT:.spec.ports[*].port"
   
-  # 2. Network Policy Audit
-  local netpol_count
-  netpol_count=$(kubectl get netpol -n "$NAMESPACE" --no-headers | wc -l)
-  log "🛡️  Security: $netpol_count Zero-Trust Policies Active"
-  
-  # 3. External Entry Points
-  log "🌐 Service Access (LoadBalancer IPs):"
-  kubectl get svc -n "$NAMESPACE" -o wide | grep -E "LoadBalancer|NAME"
-  
-  # 4. Storage Health
-  local pvc_status
-  pvc_status=$(kubectl get pvc postgres-pvc -n "$NAMESPACE" -o jsonpath='{.status.phase}')
-  log "💾 Storage: Database PVC is [$pvc_status]"
-  
-  echo -e "=========================================================\n"
+  log "========================================================="
+  echo -e "\n"
 }
 
 
