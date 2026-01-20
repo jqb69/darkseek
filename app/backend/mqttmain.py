@@ -44,15 +44,27 @@ from app.backend.core.config import (
 )
 
 async def wait_for_network():
-    loop = asyncio.get_running_loop()
+    """Non-blocking check to ensure DNS and TCP path are actually open."""
     for i in range(30):
         try:
-            await loop.getaddrinfo(MQTT_BROKER_URI, MQTT_PORT)
-            logger.info(f"✅ DNS Resolved: {MQTT_BROKER_URI}")
+            # This does DNS + TCP Handshake in one non-blocking call
+            # It prevents the 'Silent Hang' if the NetworkPolicy is dropping packets
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(MQTT_BROKER_URI, MQTT_PORT),
+                timeout=5.0
+            )
+            writer.close()
+            await writer.wait_closed()
+            
+            logger.info(f"✅ Network Ready & DNS Resolved: {MQTT_BROKER_URI}")
             return True
-        except socket.gaierror:
-            print(f"⏳ Waiting for DNS... ({i}/30)")
+        except (asyncio.TimeoutError, socket.gaierror, ConnectionRefusedError) as e:
+            logger.warning(f"⏳ Waiting for network/DNS... ({i}/30) - Error: {e}")
             await asyncio.sleep(2)
+        except Exception as e:
+            logger.error(f"❌ Unexpected network error: {e}")
+            await asyncio.sleep(2)
+            
     return False
 
 # === Asynchronous MQTT Server ===
