@@ -995,19 +995,30 @@ monitor_handshake() {
 }
 
 check_mqtt_egress() {
-    # Ensure variables exist
-    [ -z "$MQTT_BROKER_HOST" ] && { log "⚠️ Skipping egress check: MQTT_BROKER_HOST not set."; return 0; }
+    # 1. Validate variables
+    if [ -z "$MQTT_BROKER_HOST" ]; then
+        log "⚠️ Skipping egress check: MQTT_BROKER_HOST not set."
+        return 0
+    fi
     
-    log "🔍 DIAGNOSTIC: Testing MQTT Egress to $MQTT_BROKER_HOST:8883..."
-    
+    local port="8883"
     local canary="network-gate-canary"
     
-    # We use 'timeout 5' so the script doesn't hang if the packet is dropped
-    if kubectl exec "$canary" -n "$NAMESPACE" -- timeout 5 nc -zv "$MQTT_BROKER_HOST" 8883 2>&1; then
-        log "✅ NETWORK GATE OPEN: $MQTT_BROKER_HOST:8883 is reachable."
+    log "🔍 DIAGNOSTIC: Testing MQTT Egress to $MQTT_BROKER_HOST:$port..."
+    
+    # 2. IDENTIFY: Give canary the 'app' label so NetPol allows it
+    kubectl label pod "$canary" app=darkseek-backend-mqtt --overwrite >/dev/null 2>&1
+    
+    # 3. PROPAGATE: Wait for Calico CNI to notice the label change
+    sleep 3
+
+    # 4. TEST: Use the actual variable, not a hardcoded string
+    if kubectl exec "$canary" -n "$NAMESPACE" -- timeout 5 nc -zv "$MQTT_BROKER_HOST" "$port" 2>&1; then
+        log "✅ GATE OPEN: $MQTT_BROKER_HOST:$port is reachable."
         return 0
     else
-        log "❌ NETWORK GATE BLOCKED: Port 8883 is unreachable from this cluster."
+        log "❌ GATE BLOCKED: Identity $canary (as darkseek-backend-mqtt) cannot reach $MQTT_BROKER_HOST."
+        log "👉 Check GKE VPC-level Egress Firewalls or Cloud NAT settings."
         return 1
     fi
 }
