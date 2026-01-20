@@ -79,8 +79,10 @@ class AsyncMQTTServer:
                     async with aiomqtt.Client(
                         hostname=MQTT_BROKER_URI,
                         port=MQTT_PORT,
+                        timeout=60,
                         tls_params=self.tls_params,
                     ) as client:
+                        self.client = client
                         self._connected = True
                         logger.info("✅ MQTT connected via TLS")
                         
