@@ -20,38 +20,36 @@ spec:
     - protocol: TCP
       port: 8885
   egress:
-  # 1. THE MISSING PIECE: MQTT Broker (External)
+  # 1. INTERNAL SERVICES (DNS, Redis, Postgres)
+  # Allows traffic to your private network for these specific ports
+  - to:
+    - ipBlock:
+        cidr: 10.0.0.0/8 
+    - ipBlock:
+        cidr: 172.16.0.0/12
+    - ipBlock:
+        cidr: 192.168.0.0/16    
+    ports:
+    - protocol: UDP
+      port: 53    # DNS
+    - protocol: TCP
+      port: 53    # DNS
+    - protocol: TCP
+      port: 6379  # Redis
+    - protocol: TCP
+      port: 5432  # Postgres
+
+  # 2. EXTERNAL MQTT (Public Internet)
+  # Allows traffic to the world EXCEPT your private network
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
-        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+        except: 
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
     ports:
     - protocol: TCP
-      port: 1883  # <--- Standard MQTT
+      port: 1883
     - protocol: TCP
-      port: 8883  # <--- Secure MQTT (MQTTS)
-
-  # 2. External APIs (HuggingFace/Google)
-  - to:
-    - ipBlock:
-        cidr: 0.0.0.0/0
-        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
-    ports:
-    - protocol: TCP
-      port: 443
-
-  # 3. Internal Services (Redis & Postgres)
-  - to:
-    - podSelector:
-        matchLabels:
-          app: darkseek-redis
-    ports:
-    - protocol: TCP
-      port: 6379
-  - to:
-    - podSelector:
-        matchLabels:
-          app: darkseek-db
-    ports:
-    - protocol: TCP
-      port: 5432
+      port: 8883
