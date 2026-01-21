@@ -944,6 +944,43 @@ wait_for_mqtt_health() {
   log "❌ MQTT TIMEOUT: Handshake never completed."
   return 1
 }
+
+verify_policy_active() {
+  local pod_name=$(kubectl get pods -l app=darkseek-backend-mqtt -n "$NAMESPACE" -o jsonpath='{..metadata.name}' | awk '{print $1}')
+  
+  echo "-------------------------------------------------------"
+  echo "🛡️  SECURITY AUDIT: allow-to-backend-mqtt"
+  
+  if [ -z "$pod_name" ]; then
+    echo "❌ ERROR: No MQTT Pod found to audit."
+    return 1
+  fi
+
+  # 1. Verify Egress Rule 1 (The 0.0.0.0/0 Port 53 fix)
+  echo "🔎 Checking DNS Hole-Punch..."
+  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 8.8.8.8 53 2>&1 | grep -q "open"; then
+    echo "✅ DNS Egress: OPEN (0.0.0.0/0 rule is working)"
+  else
+    echo "⚠️  DNS Egress: Restricted (Normal if only GKE DNS is reachable)"
+  fi
+
+  # 2. Verify External MQTT (Port 8883)
+  echo "🔎 Checking External MQTT Path..."
+  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 test.mosquitto.org 8883 2>&1 | grep -q "open"; then
+    echo "✅ MQTT Egress: OPEN (Port 8883 is reachable)"
+  else
+    echo "❌ MQTT Egress: BLOCKED (Check Rule #3 in your YAML)"
+  fi
+
+  # 3. Verify Internal Database (Port 5432)
+  echo "🔎 Checking Internal DB Path..."
+  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 darkseek-db 5432 2>&1 | grep -q "open"; then
+    echo "✅ DB Egress: OPEN (Internal Rule #2 is working)"
+  else
+    echo "❌ DB Egress: BLOCKED (Check Rule #2 in your YAML)"
+  fi
+  echo "-------------------------------------------------------"
+}
 # After ANY policy apply/delete (surgical OR nuclear)
 wait_for_policy_propagation() {
   log "⏳ Waiting 45 for Calico CNI propagation..."
@@ -1274,6 +1311,7 @@ wait_for_mqtt_health
 # =======================================================
 log "🔴 PHASE 5: Run Policy Audit ..."
 run_policy_audit || true
+verify_policy_active  # <--- CALL IT HERE
 
 log "🌐 SERVICE HEALTH CHECKS (Ignores Calico DNS issues):"
 # CHECK DEPLOYMENTS EXIST + PODS RUNNING (not blocked by readiness)
