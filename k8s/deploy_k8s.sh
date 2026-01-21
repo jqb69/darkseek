@@ -886,49 +886,62 @@ apply_networking() {
 }
 
 
-
-# Function to wait for application-level health files
+# Function to wait for application-level health files and verify GKE Cloud DNS
 wait_for_mqtt_health() {
   local app_label="darkseek-backend-mqtt"
   local health_file="/tmp/mqtt-healthy"
+  local dns_verified=false
   
   log "⏳ Stability Watch: Waiting for MQTT TLS Handshake..."
   
-  for i in {1..30}; do # Increased to 30 to allow for slow GKE volume/secret mounts
-    # 1. CHECK FOR CRASHES (The Early Warning System)
+  for i in {1..30}; do
+    # 1. IDENTIFY POD
     local pod_info
     pod_info=$(kubectl get pod -l app="$app_label" -n "$NAMESPACE" -o jsonpath='{.items[0].status.containerStatuses[0].restartCount} {.items[0].metadata.name}' 2>/dev/null)
-    
     local restarts=$(echo "$pod_info" | awk '{print $1}')
     local pod_name=$(echo "$pod_info" | awk '{print $2}')
 
+    if [[ -z "$pod_name" ]]; then
+      log "⏳ Attempt $i/30: Pod not scheduled yet..."
+      sleep 5; continue
+    fi
+
+    # 2. NETWORK VALIDATION (The "34.118.x.x" Gate)
+    if [ "$dns_verified" = false ]; then
+      # Check if the policy applied in Phase 1.5 actually allows DNS resolution
+      if ! kubectl exec "$pod_name" -n "$NAMESPACE" -c backend-mqtt -- nslookup test.mosquitto.org >/dev/null 2>&1; then
+        local dns_ip=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+        log "🚨 NETWORK POLICY FAILURE: DNS is BLOCKED."
+        log "👉 Your policy from Phase 1.5 is blocking the GKE DNS IP: $dns_ip"
+        # We don't return 1 here yet, we let it retry in case CNI is still syncing
+      else
+        log "✅ Network Path Verified: DNS resolution active."
+        dns_verified=true
+      fi
+    fi
+
+    # 3. CRASH DETECTION
     if [[ "$restarts" -gt 0 ]]; then
-      log "🚨 FATAL: MQTT container is crashing (Restarts: $restarts)."
-      log "🔍 Pulling TLS/Auth Error Logs..."
+      log "🚨 FATAL: MQTT container crashed (Restarts: $restarts)."
       kubectl logs "$pod_name" -n "$NAMESPACE" -c backend-mqtt --tail=50
       return 1
     fi
 
-    # 2. CHECK FOR HEALTH FILE (The Logic Verification)
-    if [[ -n "$pod_name" ]]; then
-      # Using 'test -f' is the silent/clean way to check for file existence
-      if kubectl exec "$pod_name" -n "$NAMESPACE" -c backend-mqtt -- test -f "$health_file" 2>/dev/null; then
-        log "✅ MQTT Logic Verified: TLS Connected & Heartbeat Active."
-        return 0
-      fi
+    # 4. LOGIC VERIFICATION (The /tmp/mqtt-healthy file)
+    if kubectl exec "$pod_name" -n "$NAMESPACE" -c backend-mqtt -- test -f "$health_file" 2>/dev/null; then
+      log "✅ MQTT Logic Verified: Connection Stable."
+      return 0
     fi
 
-    # 3. INTERIM FEEDBACK
+    # 5. HEARTBEAT FEEDBACK
     if [[ $((i % 5)) -eq 0 ]]; then
-       log "⏳ Attempt $i/30: No heartbeat yet. Checking network state..."
-       # Check if the app is at least resolving DNS
-       kubectl logs "$pod_name" -n "$NAMESPACE" -c backend-mqtt --tail=3 | grep -i "Connect" || true
+       log "⏳ Attempt $i/30: No heartbeat. Last Log: $(kubectl logs "$pod_name" -n "$NAMESPACE" -c backend-mqtt --tail=1)"
     fi
 
     sleep 5
   done
 
-  log "❌ MQTT TIMEOUT: Connection never established."
+  log "❌ MQTT TIMEOUT: Handshake never completed."
   return 1
 }
 # After ANY policy apply/delete (surgical OR nuclear)
