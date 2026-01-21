@@ -20,27 +20,33 @@ spec:
     - protocol: TCP
       port: 8885
   egress:
-  # 1. INTERNAL SERVICES (DNS, Redis, Postgres)
-  # Allows traffic to your private network for these specific ports
+  # 1. FOOLPROOF DNS (Allows traffic to the kube-dns pod specifically)
   - to:
-    - ipBlock:
-        cidr: 10.0.0.0/8 
-    - ipBlock:
-        cidr: 172.16.0.0/12
-    - ipBlock:
-        cidr: 192.168.0.0/16    
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
     ports:
     - protocol: UDP
-      port: 53    # DNS
+      port: 53
     - protocol: TCP
-      port: 53    # DNS
+      port: 53
+
+  # 2. ALLOW INTERNAL DBs (Redis/Postgres) 
+  # Covers ALL possible private ranges so you don't have to guess IPs
+  - to:
+    - ipBlock: { cidr: 10.0.0.0/8 }
+    - ipBlock: { cidr: 172.16.0.0/12 }
+    - ipBlock: { cidr: 192.168.0.0/16 }
+    ports:
     - protocol: TCP
       port: 6379  # Redis
     - protocol: TCP
       port: 5432  # Postgres
 
-  # 2. EXTERNAL MQTT (Public Internet)
-  # Allows traffic to the world EXCEPT your private network
+  # 3. EXTERNAL MQTT (Public Internet)
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
