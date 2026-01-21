@@ -28,6 +28,9 @@ spec:
       podSelector:
         matchLabels:
           k8s-app: kube-dns
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0 # Allows port 53 to any IP, including 34.118.224.10          
     ports:
     - protocol: UDP
       port: 53
