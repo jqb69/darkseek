@@ -884,66 +884,44 @@ apply_networking() {
   #kubectl apply -f "$policy_dir"/01-deny-all.yaml -n "$NAMESPACE" && sleep 2
   log "✅ Policies: DNS→Deny→DB→Redis→WS→All ✅"
 }
-
-
-# Function to wait for application-level health files and verify GKE Cloud DNS
 wait_for_mqtt_health() {
   local app_label="darkseek-backend-mqtt"
   local health_file="/tmp/mqtt-healthy"
-  local dns_verified=false
   
-  log "⏳ Stability Watch: Waiting for MQTT TLS Handshake..."
-  
-  for i in {1..30}; do
-    # 1. IDENTIFY POD
-    local pod_info
-    pod_info=$(kubectl get pod -l app="$app_label" -n "$NAMESPACE" -o jsonpath='{.items[0].status.containerStatuses[0].restartCount} {.items[0].metadata.name}' 2>/dev/null)
-    local restarts=$(echo "$pod_info" | awk '{print $1}')
-    local pod_name=$(echo "$pod_info" | awk '{print $2}')
+  log "⏳ Stability Watch: Waiting for External Broker Handshake..."
 
+  for i in {1..30}; do
+    local pod_name=$(kubectl get pod -l app="$app_label" -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    
     if [[ -z "$pod_name" ]]; then
-      log "⏳ Attempt $i/30: Pod not scheduled yet..."
+      log "⏳ Attempt $i/30: Pod not scheduled..."
       sleep 5; continue
     fi
 
-    # 2. NETWORK VALIDATION (The "34.118.x.x" Gate)
-    if [ "$dns_verified" = false ]; then
-      # Check if the policy applied in Phase 1.5 actually allows DNS resolution
-      if ! kubectl exec "$pod_name" -n "$NAMESPACE" -c backend-mqtt -- nslookup test.mosquitto.org >/dev/null 2>&1; then
-        local dns_ip=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-        log "🚨 NETWORK POLICY FAILURE: DNS is BLOCKED."
-        log "👉 Your policy from Phase 1.5 is blocking the GKE DNS IP: $dns_ip"
-        # We don't return 1 here yet, we let it retry in case CNI is still syncing
-      else
-        log "✅ Network Path Verified: DNS resolution active."
-        dns_verified=true
-      fi
+    # LOGICAL PROOF: Check DNS first
+    if ! kubectl exec "$pod_name" -n "$NAMESPACE" -c backend-mqtt -- nslookup test.mosquitto.org > /dev/null 2>&1; then
+        log "❌ DNS BLOCKED: Even with Ingress rules, DNS resolution is failing."
     fi
 
-    # 3. CRASH DETECTION
-    if [[ "$restarts" -gt 0 ]]; then
-      log "🚨 FATAL: MQTT container crashed (Restarts: $restarts)."
-      kubectl logs "$pod_name" -n "$NAMESPACE" -c backend-mqtt --tail=50
-      return 1
-    fi
-
-    # 4. LOGIC VERIFICATION (The /tmp/mqtt-healthy file)
+    # THE TRUTH: Check for the Handshake File
     if kubectl exec "$pod_name" -n "$NAMESPACE" -c backend-mqtt -- test -f "$health_file" 2>/dev/null; then
-      log "✅ MQTT Logic Verified: Connection Stable."
+      log "✅ SUCCESS: Handshake completed. External Broker Ingress is WORKING."
       return 0
     fi
 
-    # 5. HEARTBEAT FEEDBACK
+    # HEARTBEAT FEEDBACK
     if [[ $((i % 5)) -eq 0 ]]; then
-       log "⏳ Attempt $i/30: No heartbeat. Last Log: $(kubectl logs "$pod_name" -n "$NAMESPACE" -c backend-mqtt --tail=1)"
+       log "⏳ Attempt $i/30: Still waiting for TLS handshake... (Check Broker Ingress rules)"
     fi
 
     sleep 5
   done
 
-  log "❌ MQTT TIMEOUT: Handshake never completed."
+  log "❌ FATAL TIMEOUT: The Broker never finished the handshake. Ingress is still the prime suspect."
   return 1
 }
+
+
 
 verify_policy_active() {
   local pod_name=$(kubectl get pods -l app=darkseek-backend-mqtt -n "$NAMESPACE" -o jsonpath='{..metadata.name}' | awk '{print $1}')
@@ -981,6 +959,64 @@ verify_policy_active() {
   fi
   echo "-------------------------------------------------------"
 }
+
+# --- ADD TO k8s/deploy_k8s.sh ---
+
+verify_mqtt_readiness() {
+  local pod_label="app=darkseek-backend-mqtt"
+  log "🛡️  PHASE 4.2: Alpine-Python Network Probe (Fail-Fast)..."
+
+  local pod_name=$(kubectl get pods -l "$pod_label" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  
+  if [[ -z "$pod_name" ]]; then
+    log "❌ MQTT Pod not found."
+    return 1
+  fi
+
+  for i in {1..12}; do
+    local phase=$(kubectl get pod "$pod_name" -o jsonpath='{.status.phase}' 2>/dev/null)
+    if [[ "$phase" != "Running" ]]; then
+       log "⏳ ($i/12) Waiting for container (Current: $phase)..."
+       sleep 5; continue
+    fi
+
+    # 1. DNS CHECK
+    if ! kubectl exec "$pod_name" -- nslookup "$MQTT_BROKER_HOST" > /dev/null 2>&1; then
+      log "⚠️  ($i/12) DNS Blocked. Potential Ingress/Egress Port 53 issue."
+    else
+      # 2. PORT 8883 CHECK (Python-native for Alpine)
+      if kubectl exec "$pod_name" -- python3 -c "import socket; s=socket.socket(); s.settimeout(3); exit(s.connect_ex(('$MQTT_BROKER_HOST', 8883)))" 2>/dev/null; then
+        log "✅ MQTT GATES OPEN: TCP 8883 Verified."
+        return 0
+      fi
+      log "⚠️  ($i/12) Port 8883 unreachable."
+    fi
+    sleep 5
+  done
+
+  # --- THE FATAL ERROR DUMP ---
+  echo ""
+  log "🚨 FATAL: Network Logic Failure. Dumping Network Audit for troubleshooting:"
+  echo "-----------------------------------------------------------------------"
+  log "🔍 1. Current NetworkPolicies in $NAMESPACE:"
+  kubectl get netpol -n "$NAMESPACE"
+  
+  echo ""
+  log "🔍 2. Detailed Specs for 'allow-to-backend-mqtt':"
+  kubectl describe netpol allow-to-backend-mqtt -n "$NAMESPACE"
+  
+  echo ""
+  log "🔍 3. Pod Labels (Must match Policy podSelector):"
+  kubectl get pod "$pod_name" --show-labels
+  
+  echo ""
+  log "🔍 4. Recent Pod Events (Check for CNI errors):"
+  kubectl get events --field-selector involvedObject.name="$pod_name" -n "$NAMESPACE" | tail -n 5
+  echo "-----------------------------------------------------------------------"
+
+  return 1
+}
+
 # After ANY policy apply/delete (surgical OR nuclear)
 wait_for_policy_propagation() {
   log "⏳ Waiting 45 for Calico CNI propagation..."
@@ -1247,7 +1283,6 @@ sleep 30
 
 # ... after apply_networking ...
 
-#verify_dns_connectivity || fatal "NetworkPolicy is blocking DNS. Deployment halted."
 # 2. Reset the Frontend Service (clears the bad NEG annotations)
 #kubectl delete service darkseek-frontend --ignore-not-found=true
 
@@ -1282,6 +1317,10 @@ log "⏳ Waiting for pods to pass probes (This may take minutes)..."
 # --- SMART TROUBLESHOOTING START ---
 # Run the check once in the background so it doesn't block the script
 check_mqtt_egress || log "⚠️ Warning: Connectivity check failed. Probes will likely time out."
+# 🛑 THE GATEKEEPER 🛑
+# We check the plumbing while the pods are Running but Unready.
+# This catches Policy errors in 20 seconds, NOT 10 minutes.
+verify_mqtt_readiness || fatal "NetworkPolicy Logic Failure! Check your 03-allow-backend-mqtt.yaml."
 # --- SMART TROUBLESHOOTING END ---
 wait_for_deployments  # NOW waits for ALL deployments + services
 
@@ -1303,6 +1342,8 @@ fi
 echo "🎉 PHASE 4.5 COMPLETE: Network paths verified."
 #log "⏳ 293s CRITICAL Calico CNI propagation..."
 sleep 59  # NO TESTS UNTIL CNI FINISHED
+# THE GATEKEEPER
+
 wait_for_mqtt_health
 #verify_and_fix_networking
 #wait_for_policy_propagation
