@@ -1169,7 +1169,7 @@ kubectl create secret generic darkseek-mqtt-certs \
   --from-file=ca.crt="$CERT_FILE" \
   --dry-run=client -o yaml | kubectl apply -f -
 cd "$K8S_DIR"
-🔥 THE CLEAN SLATE: Target ONLY the DNS policy to prevent ghost rules
+##🔥 THE CLEAN SLATE: Target ONLY the DNS policy to prevent ghost rules
 log "🧹 Wiping stale DNS policy for fresh IP injection..."
 kubectl delete netpol allow-dns-egress -n "$NAMESPACE" --ignore-not-found
 # SECRETS + CONFIGMAP (always first)
