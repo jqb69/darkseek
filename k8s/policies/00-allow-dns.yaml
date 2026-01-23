@@ -8,7 +8,20 @@ metadata:
 spec:
   podSelector: {}
   policyTypes:
+  - Ingress
   - Egress
+  ingress:
+  # ALLOW DNS RESPONSES TO ALL PODS
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+ 
   egress:
   # 1. DNS Resolution (Port 53) - The "Four-Headed Hydra"
   - ports:
