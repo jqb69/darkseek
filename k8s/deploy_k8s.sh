@@ -834,6 +834,58 @@ verify_internal_connectivity() {
   fi
 }
 
+verify_cluster_network_integrity() {
+  log "🛡️  DIAGNOSTIC: Probing Active Network Gates..."
+
+  # 1. FRONTEND PORT ALIGNMENT (Streamlit Zero-Trust)
+  local svc_port=$(kubectl get svc darkseek-frontend -n "$NAMESPACE" -o jsonpath='{.spec.ports[0].targetPort}' 2>/dev/null)
+  if [[ "$svc_port" != "8501" ]]; then
+    log "⚠️  ALIGNMENT ERROR: Frontend Service Port ($svc_port) != Policy Port (8501)!"
+  else
+    log "✅ Frontend Port Alignment Verified: 8501"
+  fi
+
+  # 2. POD IDENTITY
+  local pod_label="app=darkseek-backend-mqtt"
+  local pod_name=$(kubectl get pods -l "$pod_label" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  
+  if [[ -z "$pod_name" ]]; then
+    log "❌ FATAL: MQTT Pod not found. Check deployment manifests."
+    return 1
+  fi
+
+  for i in {1..12}; do
+    local phase=$(kubectl get pod "$pod_name" -o jsonpath='{.status.phase}' 2>/dev/null)
+    if [[ "$phase" != "Running" ]]; then
+       log "⏳ ($i/12) Waiting for container Running phase (Current: $phase)..."
+       sleep 5; continue
+    fi
+
+    # 3. DNS PROBE (Checks Port 53 Ingress/Egress)
+    if ! kubectl exec "$pod_name" -- nslookup "$MQTT_BROKER_HOST" > /dev/null 2>&1; then
+      log "⚠️  ($i/12) DNS Blocked. Check '00-allow-dns' policy."
+    else
+      # 4. MQTT HANDSHAKE (Alpine-Safe Python Probe)
+      if kubectl exec "$pod_name" -- python3 -c "import socket; s=socket.socket(); s.settimeout(3); exit(s.connect_ex(('$MQTT_BROKER_HOST', 8883)))" 2>/dev/null; then
+        log "✅ NETWORK VERIFIED: DNS OK, Broker 8883 Reachable."
+        return 0
+      fi
+      log "⚠️  ($i/12) Port 8883 unreachable. Check '03-allow-backend-mqtt' Egress."
+    fi
+    sleep 5
+  done
+
+  # 5. AUTO-AUDIT (The "Autopsy")
+  log "🚨 DIAGNOSTIC FAILURE: Dumping Network Autopsy..."
+  echo "-----------------------------------------------------------------------"
+  kubectl describe netpol allow-to-backend-mqtt -n "$NAMESPACE"
+  kubectl describe netpol allow-dns-egress -n "$NAMESPACE"
+  kubectl get pod "$pod_name" --show-labels
+  echo "-----------------------------------------------------------------------"
+
+  return 1
+}
+
 apply_networking() {
   log "🛡️ Applying DNS-Aware Policies..."
   
@@ -884,6 +936,7 @@ apply_networking() {
   #kubectl apply -f "$policy_dir"/01-deny-all.yaml -n "$NAMESPACE" && sleep 2
   log "✅ Policies: DNS→Deny→DB→Redis→WS→All ✅"
 }
+
 wait_for_mqtt_health() {
   local app_label="darkseek-backend-mqtt"
   local health_file="/tmp/mqtt-healthy"
@@ -960,62 +1013,6 @@ verify_policy_active() {
   echo "-------------------------------------------------------"
 }
 
-# --- ADD TO k8s/deploy_k8s.sh ---
-
-verify_mqtt_readiness() {
-  local pod_label="app=darkseek-backend-mqtt"
-  log "🛡️  PHASE 4.2: Alpine-Python Network Probe (Fail-Fast)..."
-
-  local pod_name=$(kubectl get pods -l "$pod_label" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [[ -z "$pod_name" ]]; then
-    log "❌ MQTT Pod not found."
-    return 1
-  fi
-
-  for i in {1..12}; do
-    local phase=$(kubectl get pod "$pod_name" -o jsonpath='{.status.phase}' 2>/dev/null)
-    if [[ "$phase" != "Running" ]]; then
-       log "⏳ ($i/12) Waiting for container (Current: $phase)..."
-       sleep 5; continue
-    fi
-
-    # 1. DNS CHECK
-    if ! kubectl exec "$pod_name" -- nslookup "$MQTT_BROKER_HOST" > /dev/null 2>&1; then
-      log "⚠️  ($i/12) DNS Blocked. Potential Ingress/Egress Port 53 issue."
-    else
-      # 2. PORT 8883 CHECK (Python-native for Alpine)
-      if kubectl exec "$pod_name" -- python3 -c "import socket; s=socket.socket(); s.settimeout(3); exit(s.connect_ex(('$MQTT_BROKER_HOST', 8883)))" 2>/dev/null; then
-        log "✅ MQTT GATES OPEN: TCP 8883 Verified."
-        return 0
-      fi
-      log "⚠️  ($i/12) Port 8883 unreachable."
-    fi
-    sleep 5
-  done
-
-  # --- THE FATAL ERROR DUMP ---
-  echo ""
-  log "🚨 FATAL: Network Logic Failure. Dumping Network Audit for troubleshooting:"
-  echo "-----------------------------------------------------------------------"
-  log "🔍 1. Current NetworkPolicies in $NAMESPACE:"
-  kubectl get netpol -n "$NAMESPACE"
-  
-  echo ""
-  log "🔍 2. Detailed Specs for 'allow-to-backend-mqtt':"
-  kubectl describe netpol allow-to-backend-mqtt -n "$NAMESPACE"
-  
-  echo ""
-  log "🔍 3. Pod Labels (Must match Policy podSelector):"
-  kubectl get pod "$pod_name" --show-labels
-  
-  echo ""
-  log "🔍 4. Recent Pod Events (Check for CNI errors):"
-  kubectl get events --field-selector involvedObject.name="$pod_name" -n "$NAMESPACE" | tail -n 5
-  echo "-----------------------------------------------------------------------"
-
-  return 1
-}
 
 # After ANY policy apply/delete (surgical OR nuclear)
 wait_for_policy_propagation() {
@@ -1173,6 +1170,8 @@ kubectl create secret generic darkseek-mqtt-certs \
   --from-file=ca.crt="$CERT_FILE" \
   --dry-run=client -o yaml | kubectl apply -f -
 cd "$K8S_DIR"
+log "🧹 PHASE 0: Wiping existing NetworkPolicies for Clean Slate..."
+kubectl delete networkpolicy --all -n "$NAMESPACE"
 # SECRETS + CONFIGMAP (always first)
 log "🔑 Updating secrets + configmap..."
 kubectl create secret generic darkseek-secrets \
@@ -1319,8 +1318,10 @@ log "⏳ Waiting for pods to pass probes (This may take minutes)..."
 check_mqtt_egress || log "⚠️ Warning: Connectivity check failed. Probes will likely time out."
 # 🛑 THE GATEKEEPER 🛑
 # We check the plumbing while the pods are Running but Unready.
+log "🚀 PHASE 4.5: Verifying Network Integrity..."
+verify_cluster_network_integrity || fatal "Network Logic Failure. Stopping deployment."
 # This catches Policy errors in 20 seconds, NOT 10 minutes.
-verify_mqtt_readiness || fatal "NetworkPolicy Logic Failure! Check your 03-allow-backend-mqtt.yaml."
+
 # --- SMART TROUBLESHOOTING END ---
 wait_for_deployments  # NOW waits for ALL deployments + services
 
