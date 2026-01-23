@@ -16,6 +16,10 @@ spec:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
+    - ipBlock:
+        cidr: DNS_IP_PLACEHOLDER/32   # Allow return from Cloud DNS
+    - ipBlock:
+        cidr: 169.254.20.10/32        # Allow return from NodeLocal
     ports:
     - protocol: UDP
       port: 53
