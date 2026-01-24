@@ -6,27 +6,29 @@ metadata:
   name: allow-dns-egress
   namespace: default
 spec:
-  podSelector: {} # Targets ALL pods in the namespace
+  podSelector: {} 
   policyTypes:
   - Ingress
   - Egress
   ingress:
-  - ports:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
-    # REMOVED the "from" restriction. 
-    # If the packet is Port 53, let it in. This stops the "Ingress Trap."
 
   egress:
-  # 1. DNS Resolution (Port 53)
   - ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
     to:
+    # EACH ONE STARTS WITH A DASH
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
@@ -37,10 +39,16 @@ spec:
     - ipBlock:
         cidr: 169.254.169.254/32
 
-  # 2. GKE Metadata & External API (Common needs)
+  # Separate egress rule for Metadata Port 80
   - ports:
     - protocol: TCP
       port: 80
+    to:
+    - ipBlock:
+        cidr: 169.254.169.254/32
+
+  # Separate egress rule for External API Port 443
+  - ports:
     - protocol: TCP
       port: 443
     to:
