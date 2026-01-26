@@ -4,22 +4,20 @@ metadata:
   name: allow-dns-egress
   namespace: default
 spec:
-  podSelector: {}
+  podSelector: {} 
   policyTypes:
   - Ingress
   - Egress
   ingress:
-  - from:
-    - ipBlock:
-        cidr: 10.0.0.0/8
-    - ipBlock:
-        cidr: 172.16.0.0/12
-    - ipBlock:
-        cidr: 192.168.0.0/16
-    - ipBlock:
-        cidr: 169.254.0.0/16
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+    # THE CIRCLE ENDS HERE: No 'from' block. 
+    # This allows the reply from 34.118.224.10 to enter.
+
   egress:
-  # 1. DNS (Port 53) - Using your placeholder
   - ports:
     - protocol: UDP
       port: 53
@@ -30,7 +28,6 @@ spec:
         cidr: DNS_IP_PLACEHOLDER/32
     - ipBlock:
         cidr: 169.254.0.0/16
-  # 2. Internal Cluster Traffic (DB/Redis access)
   - to:
     - ipBlock:
         cidr: 10.0.0.0/8
@@ -38,7 +35,6 @@ spec:
         cidr: 172.16.0.0/12
     - ipBlock:
         cidr: 192.168.0.0/16
-  # 3. External Internet
   - ports:
     - protocol: TCP
       port: 443
