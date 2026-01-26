@@ -1,37 +1,51 @@
----
-# k8s/policies/00-allow-dns.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-dns-egress
   namespace: default
 spec:
-  podSelector: {} # Targets ALL pods for EGRESS only
+  podSelector: {}
   policyTypes:
+  - Ingress
   - Egress
+  ingress:
+  - from:
+    - ipBlock:
+        cidr: 10.0.0.0/8
+    - ipBlock:
+        cidr: 172.16.0.0/12
+    - ipBlock:
+        cidr: 192.168.0.0/16
+    - ipBlock:
+        cidr: 169.254.0.0/16
   egress:
-  # 1. DNS (The Essentials)
+  # 1. DNS (Port 53) - Using your placeholder
   - ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
     to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
     - ipBlock:
-        cidr: 34.118.224.10/32      # Your Cluster DNS
+        cidr: DNS_IP_PLACEHOLDER/32
     - ipBlock:
-        cidr: 169.254.20.10/32     # GKE NodeLocal DNS
+        cidr: 169.254.0.0/16
+  # 2. Internal Cluster Traffic (DB/Redis access)
+  - to:
     - ipBlock:
-        cidr: 169.254.169.254/32   # GKE Metadata
-
-  # 2. External API Access (Port 443)
+        cidr: 10.0.0.0/8
+    - ipBlock:
+        cidr: 172.16.0.0/12
+    - ipBlock:
+        cidr: 192.168.0.0/16
+  # 3. External Internet
   - ports:
     - protocol: TCP
       port: 443
     to:
     - ipBlock:
         cidr: 0.0.0.0/0
-        except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
