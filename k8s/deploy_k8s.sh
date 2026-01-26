@@ -748,73 +748,93 @@ force_delete_pods() {
 }
 
 verify_dns_connectivity() {
-  log "🧪 Verifying Cluster DNS Configuration..."
-  
-  # 1. Force Label for Namespace Selector (Ensures policy can target kube-system)
-  kubectl label namespace kube-system kubernetes.io/metadata.name=kube-system --overwrite >/dev/null 2>&1
-
-  # 2. Get Live ClusterIP
-  local dns_ip
-  dns_ip=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-  [ -z "$dns_ip" ] && { log "❌ ERROR: kube-dns IP not found."; return 1; }
-  log "🔍 Detected Cluster DNS IP: $dns_ip"
-
-  # 3. Apply the Sanitized Policy
-  if [ -f "$POLICY_DIR/00-allow-dns.yaml" ]; then
-    sed "s/DNS_IP_PLACEHOLDER/$dns_ip/g" "$POLICY_DIR/00-allow-dns.yaml" | tr -d '\302\240' | tr -d '\r' > "$POLICY_DIR/00-allow-dns.tmp.yaml"
-    kubectl apply -f "$POLICY_DIR/00-allow-dns.tmp.yaml" -n "$NAMESPACE" && sleep 3
-    rm -f "$POLICY_DIR/00-allow-dns.tmp.yaml"
-    sleep 15 # Give Calico a head start
-  else
-    fatal "Missing DNS policy file."
-  fi
-
-  local canary_name="network-gate-canary"
-  local max_attempts=15
-  local attempt=1
-
-  # --- STEP 1: PRE-FLIGHT (Outside the loop) ---
-  local canary_status
-  canary_status=$(kubectl get pod "$canary_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
-
-  if [[ "$canary_status" == "Running" ]]; then
-    log "🛰️ Re-using existing ACTIVE Network Canary..."
-  elif [[ "$canary_status" == "Succeeded" ]] || [[ "$canary_status" == "Failed" ]] || [[ "$canary_status" == "Completed" ]]; then
-    log "♻️ Found STALE Canary (Status: $canary_status). Replacing..."
-    kubectl delete pod "$canary_name" -n "$NAMESPACE" --grace-period=0 --force >/dev/null 2>&1
-    sleep 3 
-    # Now create a fresh one
-    kubectl run "$canary_name" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --labels="purpose=monitoring" --command -- sh -c "sleep 3600" >/dev/null 2>&1
-    kubectl wait --for=condition=Ready "pod/$canary_name" -n "$NAMESPACE" --timeout=120s
-  elif [[ "$canary_status" == "NotFound" ]]; then
-    log "📡 Launching Stable Network Canary (60m TTL)..."
-    kubectl run "$canary_name" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --labels="purpose=monitoring" --command -- sh -c "sleep 3600" >/dev/null 2>&1
-    kubectl wait --for=condition=Ready "pod/$canary_name" -n "$NAMESPACE" --timeout=120s
-  fi
-
-  # --- STEP 2: THE PROBE LOOP ---
-  log "📡 Running resolution test (looking for ANY response)..."
-  while [ $attempt -le $max_attempts ]; do
-    log "   Attempt $attempt/$max_attempts..."
+    # --- CONFIGURATION (LOCAL ONLY) ---
+    #local POLICY_DIR="k8s/policies"
+    #local NAMESPACE="default"
+    local TARGETS=(
+        "00-allow-dns.yaml"
+        "03-allow-backend-mqtt.yaml"
+    )
     
-    # Fast execute
-    local output
-    output=$(kubectl exec "$canary_name" -n "$NAMESPACE" -- nslookup google.com 2>&1 || true)
+    log "🧪 Verifying Cluster DNS Configuration..."
+    
+    # --- STEP 1: INFRASTRUCTURE PREP ---
+    # Ensure the policy can target the kube-system namespace
+    kubectl label namespace kube-system kubernetes.io/metadata.name=kube-system --overwrite >/dev/null 2>&1
 
-    if [[ "$output" == *"Address"* ]] || [[ "$output" == *"can't resolve"* ]]; then
-      log "✅ Network Gate OPEN (DNS responded)."
-      return 0
+    local dns_ip
+    dns_ip=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+    [[ -z "$dns_ip" ]] && { log "❌ ERROR: kube-dns IP not found."; return 1; }
+    log "🔍 Detected Cluster DNS IP: $dns_ip"
+
+    # --- STEP 2: POLICY APPLICATION ---
+    local SUCCESS_COUNT=0
+    echo "🛡️ [$(date -u +'%H:%M:%S')] Applying Zero-Trust Network Policies..."
+    
+    for FILENAME in "${TARGETS[@]}"; do
+        local FULL_PATH="$POLICY_DIR/$FILENAME"
+        local TMP_FILE="${FULL_PATH}.tmp"
+        local BACKUP_FILE="${FULL_PATH}.backup.$(date +%s)"
+
+        # Validate source file exists
+        [[ ! -f "$FULL_PATH" ]] && { log "❌ MISSING: $FILENAME"; continue; }
+
+        # Create Safety Backup
+        cp "$FULL_PATH" "$BACKUP_FILE"
+        
+        # Triple-cleanse pipeline (NBSP, CR, Placeholder, Empty Lines)
+        cat "$FULL_PATH" | \
+            tr -d '\302\240\r' | \
+            sed "s/DNS_IP_PLACEHOLDER/$dns_ip/g" | \
+            sed 's/^[[:space:]]*$//; /^$/d' > "$TMP_FILE"
+
+        # Pre-validate & Apply
+        if kubectl apply -f "$TMP_FILE" --dry-run=client --validate=true >/dev/null 2>&1; then
+            if timeout 30 kubectl apply -f "$TMP_FILE"; then
+                echo "✅ $(printf '%-25s' "$FILENAME") → Applied"
+                ((SUCCESS_COUNT++))
+                sleep 2
+                rm -f "$TMP_FILE"
+            else
+                echo "❌ TIMEOUT: $FILENAME → Reverting"
+                kubectl apply -f "$BACKUP_FILE" >/dev/null 2>&1
+                sleep 2
+                rm -f "$TMP_FILE"
+            fi
+        else
+            log "❌ SYNTAX ERROR in $FILENAME"
+            rm -f "$TMP_FILE"
+        fi
+    done
+
+    # Fail fast if the local array targets weren't all applied
+    [[ $SUCCESS_COUNT -lt ${#TARGETS[@]} ]] && { log "🚨 Policy application failed."; return 1; }
+
+    echo "⏳ Waiting 15s for CNI propagation..."
+    sleep 15
+
+    # --- STEP 3: CANARY DEPLOYMENT ---
+    local canary_name="network-gate-canary"
+    local canary_status
+    canary_status=$(kubectl get pod "$canary_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+
+    if [[ "$canary_status" == "Running" ]]; then
+        log "🛰️  Re-using existing ACTIVE Canary..."
+    else
+        [[ "$canary_status" != "NotFound" ]] && kubectl delete pod "$canary_name" -n "$NAMESPACE" --grace-period=0 --force >/dev/null 2>&1
+        log "📡 Launching Network Canary..."
+        kubectl run "$canary_name" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --labels="purpose=monitoring" --command -- sh -c "sleep 3600" >/dev/null 2>&1
+        kubectl wait --for=condition=Ready "pod/$canary_name" -n "$NAMESPACE" --timeout=120s
     fi
 
-    log "⚠️ Attempt $attempt: Network Policy not yet propagated (Output: ${output:0:50}...)"
+    # --- STEP 4: DNS PROBE ---
+    local attempt=1
+    local max_attempts=15
+    log "📡 Running resolution test..."
     
-    [ $attempt -lt $max_attempts ] && sleep 10 # Reduced sleep because exec is cheap
-    ((attempt++))
-  done
-
-  log "❌ DNS STILL BLOCKED (Absolute Timeout)."
-  return 1 
-}
+    while [ $attempt -le $max_attempts ]; do
+        local output
+        output=$(kubectl exec "$canary_name" -n "$NAMESPACE" -- nslookup google.com 2>&1 || true)
 verify_internal_connectivity() {
   local pod_name
   pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$NAMESPACE" -o name | head -1)
