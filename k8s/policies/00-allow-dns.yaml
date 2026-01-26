@@ -3,22 +3,13 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-dns-egress
+  name: allow-dns-global
   namespace: default
 spec:
-  podSelector: {}
+  podSelector: {}          # ← this is the correct “all pods” form
   policyTypes:
-  - Ingress
   - Egress
-  ingress:
-  - ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
-
   egress:
-  # 1. THE MISSING LINK: Allow Egress to the DNS SERVICE in kube-system
   - ports:
     - protocol: UDP
       port: 53
@@ -30,28 +21,3 @@ spec:
           kubernetes.io/metadata.name: kube-system
     - ipBlock:
         cidr: DNS_IP_PLACEHOLDER/32
-    - ipBlock:
-        cidr: 169.254.0.0/16
-
-  # 2. INTERNAL CLUSTER TRAFFIC (For DB/Redis)
-  - to:
-    - ipBlock:
-        cidr: 10.0.0.0/8
-    - ipBlock:
-        cidr: 172.16.0.0/12
-    - ipBlock:
-        cidr: 192.168.0.0/16
-
-  # 3. EXTERNAL TRAFFIC (MQTT & HTTPS)
-  - ports:
-    - protocol: TCP
-      port: 443
-    - protocol: TCP
-      port: 8883
-    to:
-    - ipBlock:
-        cidr: 0.0.0.0/0
-        except:
-        - 10.0.0.0/8
-        - 172.16.0.0/12
-        - 192.168.0.0/16
