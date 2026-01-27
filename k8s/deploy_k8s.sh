@@ -1206,6 +1206,9 @@ sanitize_and_prepare_env() {
     # 4. ConfigMap + Strategic Patching
     kubectl apply -f configmap.yaml
     sleep 3
+    # Ensure we are in the manifest directory for all subsequent steps
+    [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
+    cd "$K8S_DIR"
     log "💉 Injecting Dynamic URIs into ConfigMap..."
     kubectl patch configmap darkseek-config -n "$NAMESPACE" --type merge -p "{
       \"data\": {
@@ -1320,9 +1323,7 @@ main() {
         fatal "❌ ca.crt NOT FOUND at $CERT_FILE_ABS"
     fi
     log "✅ ca.crt VALID → Using: $CERT_FILE_ABS"
-    # Ensure we are in the manifest directory for all subsequent steps
-    [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
-    cd "$K8S_DIR"
+    
 
     # --- PHASE 1: SANITIZATION & PREP ---
     # Handles Secrets, PVC finalizers, and Nuke logic
