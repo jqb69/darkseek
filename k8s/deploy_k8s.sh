@@ -747,94 +747,61 @@ force_delete_pods() {
   log "✅ Cleanup for [$selector] complete."
 }
 
-verify_dns_connectivity() {
-    # --- CONFIGURATION (LOCAL ONLY) ---
-    #local POLICY_DIR="k8s/policies"
-    #local NAMESPACE="default"
-    local TARGETS=(
-        "00-allow-dns.yaml"
-        "03-allow-backend-mqtt.yaml"
-    )
-    
-    log "🧪 Verifying Cluster DNS Configuration..."
-    
-    # --- STEP 1: INFRASTRUCTURE PREP ---
-    # Ensure the policy can target the kube-system namespace
-    kubectl label namespace kube-system kubernetes.io/metadata.name=kube-system --overwrite >/dev/null 2>&1
+template_dns_policies() {
+    local GKE_DNS="$1"
+    # TARGETS are locally scoped to this prep task
+    local TARGETS=("00-allow-dns.yaml" "03-allow-backend-mqtt.yaml")
 
-    local dns_ip
-    dns_ip=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-    [[ -z "$dns_ip" ]] && { log "❌ ERROR: kube-dns IP not found."; return 1; }
-    log "🔍 Detected Cluster DNS IP: $dns_ip"
-
-    # --- STEP 2: POLICY APPLICATION ---
-    local SUCCESS_COUNT=0
-    echo "🛡️ [$(date -u +'%H:%M:%S')] Applying Zero-Trust Network Policies..."
-    
+    log "🧹 Scrubbing and generating temporary manifests..."
     for FILENAME in "${TARGETS[@]}"; do
         local FULL_PATH="$POLICY_DIR/$FILENAME"
-        local TMP_FILE="${FULL_PATH}.tmp"
-        local BACKUP_FILE="${FULL_PATH}.backup.$(date +%s)"
+        [[ ! -f "$FULL_PATH" ]] && { log "❌ MISSING: $FULL_PATH"; return 1; }
 
-        # Validate source file exists
-        [[ ! -f "$FULL_PATH" ]] && { log "❌ MISSING: $FILENAME"; continue; }
-
-        # Create Safety Backup
-        cp "$FULL_PATH" "$BACKUP_FILE"
-        
-        # Triple-cleanse pipeline (NBSP, CR, Placeholder, Empty Lines)
+        # Scrub artifacts and swap placeholder, then flush to .tmp
         cat "$FULL_PATH" | \
             tr -d '\302\240\r' | \
-            sed "s/DNS_IP_PLACEHOLDER/$dns_ip/g" | \
-            sed 's/^[[:space:]]*$//; /^$/d' > "$TMP_FILE"
-
-        # Pre-validate & Apply
-        if kubectl apply -f "$TMP_FILE" --dry-run=client --validate=true >/dev/null 2>&1; then
-            if timeout 30 kubectl apply -f "$TMP_FILE"; then
-                echo "✅ $(printf '%-25s' "$FILENAME") → Applied"
-                ((SUCCESS_COUNT++))
-                sleep 2
-                rm -f "$TMP_FILE"
-            else
-                echo "❌ TIMEOUT: $FILENAME → Reverting"
-                kubectl apply -f "$BACKUP_FILE" >/dev/null 2>&1
-                sleep 2
-                rm -f "$TMP_FILE"
-            fi
-        else
-            log "❌ SYNTAX ERROR in $FILENAME"
-            rm -f "$TMP_FILE"
-        fi
+            sed "s/DNS_IP_PLACEHOLDER/$GKE_DNS/g" | \
+            sed 's/^[[:space:]]*$//; /^$/d' > "${FULL_PATH}.tmp"
+        
+        # Verify the .tmp file actually exists and isn't empty
+        [[ ! -s "${FULL_PATH}.tmp" ]] && { log "❌ ERROR: Failed to create ${FILENAME}.tmp"; return 1; }
     done
+    return 0
+}
 
-    # Fail fast if the local array targets weren't all applied
-    [[ $SUCCESS_COUNT -lt ${#TARGETS[@]} ]] && { log "🚨 Policy application failed."; return 1; }
 
-    echo "⏳ Waiting 15s for CNI propagation..."
-    sleep 15
-
-    # --- STEP 3: CANARY DEPLOYMENT ---
+verify_dns_connectivity() {
     local canary_name="network-gate-canary"
-    local canary_status
-    canary_status=$(kubectl get pod "$canary_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+    local max_attempts=15
+    local attempt=1
 
-    if [[ "$canary_status" == "Running" ]]; then
-        log "🛰️  Re-using existing ACTIVE Canary..."
-    else
-        [[ "$canary_status" != "NotFound" ]] && kubectl delete pod "$canary_name" -n "$NAMESPACE" --grace-period=0 --force >/dev/null 2>&1
-        log "📡 Launching Network Canary..."
+    log "🧪 Starting DNS Canary Probe..."
+    
+    # 1. Label kube-system (Ensures policy selector works)
+    kubectl label namespace kube-system kubernetes.io/metadata.name=kube-system --overwrite >/dev/null 2>&1
+
+    # 2. Manage Canary Pod
+    local status=$(kubectl get pod "$canary_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+    if [[ "$status" != "Running" ]]; then
+        [[ "$status" != "NotFound" ]] && kubectl delete pod "$canary_name" -n "$NAMESPACE" --grace-period=0 --force >/dev/null 2>&1
         kubectl run "$canary_name" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --labels="purpose=monitoring" --command -- sh -c "sleep 3600" >/dev/null 2>&1
-        kubectl wait --for=condition=Ready "pod/$canary_name" -n "$NAMESPACE" --timeout=120s
+        kubectl wait --for=condition=Ready "pod/$canary_name" -n "$NAMESPACE" --timeout=60s
     fi
 
-    # --- STEP 4: DNS PROBE ---
-    local attempt=1
-    local max_attempts=15
-    log "📡 Running resolution test..."
-    
+    # 3. Test Loop
     while [ $attempt -le $max_attempts ]; do
-        local output
-        output=$(kubectl exec "$canary_name" -n "$NAMESPACE" -- nslookup google.com 2>&1 || true)
+        if kubectl exec "$canary_name" -n "$NAMESPACE" -- nslookup google.com >/dev/null 2>&1; then
+            log "✅ DNS Gate confirmed OPEN."
+            kubectl delete pod "$canary_name" -n "$NAMESPACE" --now >/dev/null 2>&1
+            return 0
+        fi
+        log "⚠️ Attempt $attempt: Network not propagated..."
+        sleep 10
+        ((attempt++))
+    done
+    return 1
+}
+        
 verify_internal_connectivity() {
   local pod_name
   pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$NAMESPACE" -o name | head -1)
@@ -908,52 +875,62 @@ verify_cluster_network_integrity() {
 apply_networking() {
   log "🛡️ Applying DNS-Aware Policies..."
   
-  local policy_dir="${POLICY_DIR:-./policies}"
+  # Ensure we use the global variable consistently
+  local p_dir="${POLICY_DIR:-./policies}"
   
-  if [ ! -d "$policy_dir" ]; then
-    log "⚠️ Policy directory $policy_dir not found. Skipping networking layer."
+  if [ ! -d "$p_dir" ]; then
+    log "⚠️ Policy directory $p_dir not found. Skipping networking layer."
     return 0
   fi
 
-  log "📂 Using policy source: $policy_dir"
-  # 1. PREPARE & VALIDATE DNS (The Gatekeeper)
-  # This function now handles the IP detection, the Patching, and the Retry Loop.
-  # 2. RUN THE DNS GATE
-  if ! verify_dns_connectivity; then
-    log "🚨 NETWORK ERROR: DNS is blocked."
-    log "Current Policy State:"
-    kubectl describe netpol allow-dns-egress -n "$NAMESPACE"
-    fatal "Deployment halted to avoid application isolation."
-  fi
-  #kubectl apply -f "$policy_dir"/00-allow-dns.yaml -n "$NAMESPACE" && sleep 2
+  # 1. DISCOVER & TEMPLATE
+  local GKE_DNS
+  GKE_DNS=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+  [[ -z "$GKE_DNS" ]] && { log "❌ CRITICAL: Could not find kube-dns IP."; return 1; }
+
+  # Generates .tmp files for 00 and 03
+  template_dns_policies "$GKE_DNS" || return 1
   
+  # 2. APPLY FOUNDATION (DNS First)
+  kubectl apply -f "$p_dir/00-allow-dns.yaml.tmp" && sleep 2
+  
+  # 3. APPLY INFRASTRUCTURE (DB & Redis)
   log "🔑 Opening paths to Database and Redis..."
-  # 1. DB FIRST (backend-ws needs postgres:5432)
-  kubectl apply -f "$policy_dir"/04-allow-db-access.yaml -n "$NAMESPACE" && sleep 3
+  [ -f "$p_dir/04-allow-db-access.yaml" ] && kubectl apply -f "$p_dir/04-allow-db-access.yaml"
+  [ -f "$p_dir/05-allow-redis-access.yaml" ] && kubectl apply -f "$p_dir/05-allow-redis-access.yaml"
+  sleep 3
   
-  # 2. REDIS SECOND (backend-ws needs redis:6379)  
-  kubectl apply -f "$policy_dir"/05-allow-redis-access.yaml -n "$NAMESPACE" && sleep 3
-  
-  # 3. OPEN THE APP PIPES (Producer then Consumer)
+  # 4. APPLY APP WORKERS (MQTT then WS)
   log "📡 Opening MQTT Worker paths..."
-  kubectl apply -f "$policy_dir"/03-allow-backend-mqtt.yaml -n "$NAMESPACE" && sleep 5
+  kubectl apply -f "$p_dir/03-allow-backend-mqtt.yaml.tmp" && sleep 5
   
   log "🔌 Opening WebSocket API paths..."
-  # 3. WS LAST (now has DB + Redis ingress)
-  kubectl apply -f "$policy_dir"/02-allow-backend-ws.yaml -n "$NAMESPACE" && sleep 3
+  [ -f "$p_dir/02-allow-backend-ws.yaml" ] && kubectl apply -f "$p_dir/02-allow-backend-ws.yaml"
+  sleep 3
   
-  # Remaining policies (safe order)
+  # 5. REMAINING POLICIES (Safe globbing)
   log "Applying remaining application rules..."
-  for policy in "$policy_dir"/{06,07}-*.yaml; do
-    [ -f "$policy" ] && kubectl apply -f "$policy" -n "$NAMESPACE"
+  # This syntax is safer for loops
+  for policy in "$p_dir"/0[67]-*.yaml "$p_dir"/allow-frontend*.yaml; do
+    if [ -f "$policy" ]; then
+       kubectl apply -f "$policy"
+    fi
   done
 
-  log "Applying frontend ingress rules..."
-  for policy in "$policy_dir"/allow-frontend*.yaml; do
-    [ -f "$policy" ] && kubectl apply -f "$policy" -n "$NAMESPACE"
-  done
-  #kubectl apply -f "$policy_dir"/01-deny-all.yaml -n "$NAMESPACE" && sleep 2
-  log "✅ Policies: DNS→Deny→DB→Redis→WS→All ✅"
+  # 6. CLEANUP
+  sleep 2
+  rm -f "$p_dir"/*.tmp
+  log "🧹 Temp files purged."
+
+  # 7. VERIFY (The Final Gate)
+  if ! verify_dns_connectivity; then
+    log "🚨 NETWORK ERROR: DNS is blocked."
+    log "Current Policy State (Egress):"
+    kubectl describe netpol allow-dns-global # Matching the name in your 00-allow-dns.yaml
+    fatal "Deployment halted to avoid application isolation."
+  fi
+
+  log "✅ Policies: DNS → DB → Redis → MQTT → WS → Frontend ✅"
 }
 
 wait_for_mqtt_health() {
@@ -1170,279 +1147,206 @@ RESTARTS:.status.containerStatuses[*].restartCount"
   log "========================================================="
   echo -e "\n"
 }
+# --- PHASE 0: SANITIZATION & PREP ---
+sanitize_and_prepare_env() {
+    log "🧹 PHASE 0: Sanitizing Environment & Syncing Secrets..."
+    
+    # 1. Project Lowercasing & Cert Validation
+    export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
+    check_ca_cert_exists
 
+    # 2. Wipe stale DNS policy to prevent "Ghost" rules blocking initial pulls
+    log "🧹 Wiping stale DNS policy for fresh IP injection..."
+    kubectl delete netpol allow-dns-egress -n "$NAMESPACE" --ignore-not-found
 
-# --- MAIN (FINAL CLEAN VERSION) ---
-log "Starting deployment..."
-check_kubectl
-check_envsubst
-[ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
-check_env_vars
-check_manifest_files
-check_network_policy_support
+    # 3. Recreate Secrets (Idempotent)
+    kubectl create secret generic darkseek-mqtt-certs \
+        --from-file=ca.crt="$CERT_FILE" \
+        --dry-run=client -o yaml | kubectl apply -f -
 
-export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
+    kubectl create secret generic darkseek-secrets \
+        --from-literal=GOOGLE_API_KEY="${GOOGLE_API_KEY}" \
+        --from-literal=GOOGLE_CSE_ID="${GOOGLE_CSE_ID}" \
+        --from-literal=HUGGINGFACEHUB_API_TOKEN="${HUGGINGFACEHUB_API_TOKEN}" \
+        --from-literal=DATABASE_URL="${DATABASE_URL}" \
+        --from-literal=REDIS_URL="${REDIS_URL}" \
+        --from-literal=MQTT_BROKER_HOST="${MQTT_BROKER_HOST}" \
+        --from-literal=MQTT_BROKER_PORT="${MQTT_BROKER_PORT}" \
+        --from-literal=MQTT_TLS="${MQTT_TLS}" \
+        --from-literal=MQTT_USERNAME="${MQTT_USERNAME}" \
+        --from-literal=MQTT_PASSWORD="${MQTT_PASSWORD}" \
+        --from-literal=POSTGRES_USER="${POSTGRES_USER}" \
+        --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
+        --from-literal=POSTGRES_DB="${POSTGRES_DB}" \
+        --from-literal=GCP_PROJECT_ID="${GCP_PROJECT_ID}" \
+        --dry-run=client -o yaml | kubectl apply -f -
 
-# Change ca.cert to ca.crt
-check_ca_cert_exists
-kubectl create secret generic darkseek-mqtt-certs \
-  --from-file=ca.crt="$CERT_FILE" \
-  --dry-run=client -o yaml | kubectl apply -f -
-cd "$K8S_DIR"
-##🔥 THE CLEAN SLATE: Target ONLY the DNS policy to prevent ghost rules
-log "🧹 Wiping stale DNS policy for fresh IP injection..."
-kubectl delete netpol allow-dns-egress -n "$NAMESPACE" --ignore-not-found
-# SECRETS + CONFIGMAP (always first)
-log "🔑 Updating secrets + configmap..."
-kubectl create secret generic darkseek-secrets \
-  --from-literal=GOOGLE_API_KEY="${GOOGLE_API_KEY}" \
-  --from-literal=GOOGLE_CSE_ID="${GOOGLE_CSE_ID}" \
-  --from-literal=HUGGINGFACEHUB_API_TOKEN="${HUGGINGFACEHUB_API_TOKEN}" \
-  --from-literal=DATABASE_URL="${DATABASE_URL}" \
-  --from-literal=REDIS_URL="${REDIS_URL}" \
-  --from-literal=MQTT_BROKER_HOST="${MQTT_BROKER_HOST}" \
-  --from-literal=MQTT_BROKER_PORT="${MQTT_BROKER_PORT}" \
-  --from-literal=MQTT_TLS="${MQTT_TLS}" \
-  --from-literal=MQTT_USERNAME="${MQTT_USERNAME}" \
-  --from-literal=MQTT_PASSWORD="${MQTT_PASSWORD}" \
-  --from-literal=POSTGRES_USER="${POSTGRES_USER}" \
-  --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
-  --from-literal=POSTGRES_DB="${POSTGRES_DB}" \
-  --from-literal=GCP_PROJECT_ID="${GCP_PROJECT_ID}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+    # 4. ConfigMap + Strategic Patching
+    kubectl apply -f configmap.yaml
+    sleep 3
+    log "💉 Injecting Dynamic URIs into ConfigMap..."
+    kubectl patch configmap darkseek-config -n "$NAMESPACE" --type merge -p "{
+      \"data\": {
+        \"WEBSOCKET_URI\": \"wss://darkseek-backend-ws:8443/ws/\",
+        \"MQTT_URI\": \"http://darkseek-backend-ws:8000\"
+      }
+    }" || log "⚠️ Patch failed, check configmap.yaml"
 
-kubectl apply -f configmap.yaml
+    # 5. Pod Cleanup & Storage Fixes
+    dryrun_server
+    force_delete_pods "" "monitoring"
+    kill_stale_pods "darkseek-db"
 
+    if kubectl get pvc postgres-pvc -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null | grep -q .; then
+        log "⚠️ PVC stuck → Force clearing finalizers..."
+        kubectl patch pvc postgres-pvc -p '{"metadata":{"finalizers":null}}' --type=merge
+    fi
 
-# 3. THE STRATEGIC PATCH
-# We wait slightly to ensure the resource exists in the API
-sleep 3
-log "💉 Injecting Dynamic URIs into ConfigMap..."
-kubectl patch configmap darkseek-config -n "$NAMESPACE" --type merge -p "{
-  \"data\": {
-    \"WEBSOCKET_URI\": \"wss://darkseek-backend-ws:8443/ws/\",
-    \"MQTT_URI\": \"http://darkseek-backend-ws:8000\"
-  }
-}" || log "⚠️ Patch failed, check if configmap.yaml contains 'darkseek-config' name."
+    # 6. Targeted Nuking
+    if [ "${NUKE_MQTT_PODS:-false}" = "true" ]; then force_delete_pods "darkseek-backend-mqtt"; fi
+    if [ "${NUKE_WS_PODS:-false}" = "true" ]; then force_delete_pods "darkseek-backend-ws"; fi
+    if [[ "${NUKE_WS_PODS:-false}" == "true" || "${NUKE_MQTT_PODS:-false}" == "true" ]]; then
+        force_delete_pods "darkseek-frontend"
+        sleep 15
+    fi
+}
 
-dryrun_server
-log "🧹 Clearing stale monitoring pods..."
-force_delete_pods "" "monitoring"
-# =======================================================
-# PHASE 1: STORAGE + DATABASE (PVC → DB → Service)
-# =======================================================
-log "🏗️ PHASE 1: Storage + Database..."
-kill_stale_pods "darkseek-db"
+deploy_core() {
+    log "🏗️ PHASE 1: Storage + Database..."
+    apply_with_retry db-pvc.yaml
+    apply_with_retry db-deployment.yaml
+    apply_with_retry db-service.yaml
 
-# Clear PVC finalizers if stuck
-if kubectl get pvc postgres-pvc -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null | grep -q .; then
-    log "⚠️ PVC stuck → Clearing finalizers..."
-    kubectl patch pvc postgres-pvc -p '{"metadata":{"finalizers":null}}' --type=merge
-fi
+    log "⏳ 90s: DB initialization + PVC bind..."
+    sleep 90
+    
+    ensure_db_exists
+    check_db_initialization
 
-# APPlY ONE TIME TO BE DELETED!
-if [ "${NUKE_MQTT_PODS:-false}" = "true" ]; then
-  log "💣 Force deleting existing MQTT pods..."
-  force_delete_pods "darkseek-backend-mqtt"
-  sleep 15
-fi
-# APPlY ONE TIME TO BE DELETED!
-if [ "${NUKE_WS_PODS:-false}" = "true" ]; then
-  log "💣 Force deleting existing WS pods..."
-  force_delete_pods "darkseek-backend-ws"
-  sleep 15
-fi
-# APPlLY ONE TIME TO BE DELETED!
-if [[ "${NUKE_WS_PODS:-false}" == "true" ||  "${NUKE_MQTT_PODS:-false}" == "true" ]]; then
-  log "💣 Force deleting existing Frontend pods..."
-  force_delete_pods "darkseek-frontend"
-  sleep 15
-fi
-log "🔒 PHASE 1.5: Network lockdown..."
-#kubectl delete netpol allow-dns-egress -n "$NAMESPACE" --ignore-not-found
-# 🔥 ALL NETWORK POLICIES FIRST - PODS BORN SECURE
-#log "🔒 Applying COMPLETE Zero-Trust framework (DNS+DB+Redis+WS)..."
-apply_networking  # ALL policies - 00-dns + 04-db + 05-redis + 02-ws + ALL
+    log "🧹 Removing ghost command overrides..."
+    kubectl patch deployment darkseek-backend-ws --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
+    kubectl patch deployment darkseek-backend-mqtt --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
 
-log "⏳ 60s: CNI sync (all iptables rules ready)..."
-sleep 60
+    log "🔴 PHASE 2: Redis + Core Services..."
+    apply_with_retry redis-deployment.yaml
+    apply_with_retry redis-service.yaml
+    sleep 30
 
-apply_with_retry db-pvc.yaml
-apply_with_retry db-deployment.yaml
-apply_with_retry db-service.yaml
+    # --- Step 3: Applications ---
+    log "🚀 PHASE 3: Deploying Main Applications..."
+    deploy_main_apps  # ws + mqtt + frontend deployments
+    
+    log "⏳ 45s: App pods startup + image pulls..."
+    sleep 45
+    
+    verify_backend_image "darkseek-backend-ws"
+    verify_backend_image "darkseek-backend-mqtt"
 
-log "⏳ 90s: DB initialization + PVC bind..."
-sleep 90  # Postgres init container + PVC provisioning
+    # --- Step 4: Services ---
+    log "🌐 PHASE 4.0: All services (BEFORE wait)..."
+    apply_with_retry backend-ws-service.yaml
+    apply_with_retry backend-mqtt-service.yaml
+    apply_with_retry frontend-service.yaml
 
-pvc_name="postgres-pvc"
-if [ "$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}')" != "Bound" ]; then
-    troubleshoot_pvc_and_nodes "$pvc_name"
-    fatal "PVC $pvc_name not Bound"
-fi
+    log "⏳ 30s: Service endpoints ready..."
+    sleep 30
 
+    # --- Connectivity Telemetry ---
+    log "📡 Running egress diagnostic (Background)..."
+    check_mqtt_egress || log "⚠️ Warning: Initial egress check failed. Probes might fail until CNI stabilizes."
+}
 
-ensure_db_exists
-check_db_initialization  # Your retry version
+provision_loadbalancer_ip() {
+    log "⏳ Waiting for LoadBalancer IPs (60s max)..."
+    local FRONTEND_IP=""
+    for i in {1..12}; do
+        FRONTEND_IP=$(kubectl get svc darkseek-frontend -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+        if [[ -n "$FRONTEND_IP" && "$FRONTEND_IP" != "<pending>" ]]; then
+            log "✅ Frontend LoadBalancer IP Provisioned: $FRONTEND_IP"
+            return 0
+        fi
+        log "  ... LB still provisioning ($i/12)"
+        sleep 5
+    done
+    log "⚠️ LB IP is taking longer than expected. It will continue provisioning in the background."
+}
 
+# --- MAIN (FINAL GEMINI EDITION) ---
+main() {
+    log "🏁 Starting DarkSeek Deployment: Gemini Edition"
+    
+    # --- PHASE 0: PRE-FLIGHT ---
+    check_kubectl
+    check_envsubst
+    check_env_vars
+    check_network_policy_support
+    
+    # Lowercase Project ID (GCP requirement)
+    export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
 
-# 🔥 PERMANENT SAFETY: Strip ANY ghost command overrides (safe idempotent)
-log "🧹 Ensuring clean Deployment specs..."
-kubectl patch deployment darkseek-backend-ws --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
-kubectl patch deployment darkseek-backend-mqtt --type=json -p='[{"op":"remove","path":"/spec/template/spec/containers/0/command"}]' 2>/dev/null || true
+    # Ensure we are in the manifest directory for all subsequent steps
+    [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
+    cd "$K8S_DIR"
 
-log "🔴 PHASE 2: Redis + Core Services..."
-apply_with_retry redis-deployment.yaml
-apply_with_retry redis-service.yaml
+    # --- PHASE 1: SANITIZATION & PREP ---
+    # Handles Secrets, PVC finalizers, and Nuke logic
+    sanitize_and_prepare_env
 
-log "⏳ 30s: Redis startup..."
-sleep 30
-# =======================================================
-# PHASE 2: NETWORK LOCKDOWN (Everything else ready)
-# =======================================================
+    # --- PHASE 2: NETWORK LOCKDOWN ---
+    # Apply policies BEFORE pods are born so they are SECURE from second zero
+    log "🔒 PHASE 1.5: Applying Zero-Trust Framework..."
+    apply_networking 
+    
+    log "⏳ 60s: CNI propagation sync..."
+    sleep 60
 
-# ... after apply_networking ...
+    # --- PHASE 3: INFRA + APPS + SERVICES ---
+    # Consolidated block as requested: DB -> Redis -> Apps -> Services -> Egress Check
+    deploy_core
 
-# 2. Reset the Frontend Service (clears the bad NEG annotations)
-#kubectl delete service darkseek-frontend --ignore-not-found=true
+    # --- PHASE 4: THE GATEKEEPER ---
+    log "🚀 PHASE 4.0: Verifying Network Integrity..."
+    # Proves the "pipes" are open while pods are Running but before Probes time out
+    verify_cluster_network_integrity || fatal "Network Logic Failure. Stopping deployment."
 
-# =======================================================
-# PHASE 3: REDIS + SERVICES
-# =======================================================
+    # --- PHASE 5: STABILIZATION ---
+    log "⏳ Waiting for Readiness Probes to pass..."
+    wait_for_deployments
 
-# =======================================================
-# PHASE 3: APPLICATIONS (Now DB/Redis ready)
-# =======================================================
-log "🚀 PHASE 4: Deploy applications..."
-deploy_main_apps  # ws + mqtt + frontend deployments
+    log "🧪 PHASE 4b: Final Network Settlement..."
+    sleep 59 # The "Calico Polish" sleep
+    verify_internal_connectivity || fatal "Internal connectivity test failed."
+    wait_for_mqtt_health
 
-log "⏳ 45s: App pods startup + image pulls..."
-sleep 45
+    # --- PHASE 6: GOLDEN VERIFICATION ---
+    log "🧪 PHASE 5: Production Handshake Verification..."
+    run_policy_audit || true
+    verify_policy_active
 
-verify_backend_image "darkseek-backend-ws"
-verify_backend_image "darkseek-backend-mqtt"
+    log "🟢 GOLDEN COMMAND 1: MQTT TLS Handshake..."
+    kubectl logs -l app=darkseek-backend-mqtt -n "$NAMESPACE" --tail=100 | grep -i "connected\|ssl\|tls" || log "⚠️ No TLS logs found"
 
-# =======================================================
-# PHASE 4.5: ALL SERVICES BEFORE WAIT (CRITICAL FIX)
-# =======================================================
-log "🌐 PHASE 4.5: All services (BEFORE wait)..."
-apply_with_retry backend-ws-service.yaml
-apply_with_retry backend-mqtt-service.yaml
-apply_with_retry frontend-service.yaml
+    log "🟢 GOLDEN COMMAND 2: Zero-Trust WS → Redis..."
+    if kubectl exec deployment/darkseek-backend-ws -n "$NAMESPACE" -- nc -zv darkseek-redis 6379 &>/dev/null; then
+        log "✅ Zero-Trust: WS → Redis:6379 OPEN ✓"
+    else
+        log "❌ Zero-Trust: WS → Redis BLOCKED"
+    fi
+    
+    monitor_handshake
+    
+    log "🟢 GOLDEN COMMAND 3: ConfigMap URI Patch Verification..."
+    kubectl get configmap darkseek-config -n "$NAMESPACE" -o jsonpath='{.data.WEBSOCKET_URI}' && echo ""
 
-log "⏳ 30s: Service endpoints ready..."
-sleep 30
-log "⏳ Waiting for pods to pass probes (This may take minutes)..."
+    # --- PHASE 7: EXTERNAL EXPOSURE ---
+    provision_loadbalancer_ip
 
-# --- SMART TROUBLESHOOTING START ---
-# Run the check once in the background so it doesn't block the script
-check_mqtt_egress || log "⚠️ Warning: Connectivity check failed. Probes will likely time out."
-# 🛑 THE GATEKEEPER 🛑
-# We check the plumbing while the pods are Running but Unready.
-log "🚀 PHASE 4.5: Verifying Network Integrity..."
-verify_cluster_network_integrity || fatal "Network Logic Failure. Stopping deployment."
-# This catches Policy errors in 20 seconds, NOT 10 minutes.
+    # --- PHASE 8: DASHBOARD & LOGS ---
+    show_deployment_dashboard
 
-# --- SMART TROUBLESHOOTING END ---
-wait_for_deployments  # NOW waits for ALL deployments + services
+    log "💡 Real-time logs: kubectl logs -f -n $NAMESPACE -l 'app in (darkseek-backend-ws, darkseek-backend-mqtt, darkseek-frontend)' --tail=20 --prefix"
+    log "🎉 DEPLOYMENT COMPLETE!"
+}
 
-#apply_networking  # DNS → DB → Redis → Apps
-
-# =======================================================
-# PHASE 4b: Connectivity & Health (The Validation Gate)
-# =======================================================
-log "🧪 PHASE 4b: Internal Network Validation..."
-
-# 1. Check if the "Pipes" are open first
-if ! verify_internal_connectivity; then
-    log "🚨 CRITICAL: NetworkPolicy is blocking MQTT -> DB."
-    log "Dumping NetworkPolicies for immediate audit:"
-    kubectl get netpol -n "$NAMESPACE"
-    # Exit early so you don't wait for a timeout that will never succeed
-    fatal "Internal connectivity test failed."
-fi
-echo "🎉 PHASE 4.5 COMPLETE: Network paths verified."
-#log "⏳ 293s CRITICAL Calico CNI propagation..."
-sleep 59  # NO TESTS UNTIL CNI FINISHED
-# THE GATEKEEPER
-
-wait_for_mqtt_health
-#verify_and_fix_networking
-#wait_for_policy_propagation
-# =======================================================
-# PHASE 5: REDIS + SERVICES
-# =======================================================
-log "🔴 PHASE 5: Run Policy Audit ..."
-run_policy_audit || true
-verify_policy_active  # <--- CALL IT HERE
-
-log "🌐 SERVICE HEALTH CHECKS (Ignores Calico DNS issues):"
-# CHECK DEPLOYMENTS EXIST + PODS RUNNING (not blocked by readiness)
-kubectl get deployments -n "$NAMESPACE" || true
-kubectl get pods -n "$NAMESPACE" || true
-
-# CHECK ACTUAL CONTAINERS ALIVE (ignores readiness probes)
-kubectl get pods -n "$NAMESPACE" -o jsonpath='{.items[*].status.phase}' | grep -v "Pending\|Failed" && echo "✅ Pods Running"
-
-#log "✅ PHASE 6: Finalize..."
-
-# Trigger a rolling update so apps pick up the NEW URIs
-log "🔄 Refreshing apps to pick up new ConfigMap values..."
-
-# Only restart if the previous command (patch) was successful
-#if kubectl get configmap darkseek-config -n "$NAMESPACE" ; then
-#    kubectl rollout restart deployment/darkseek-backend-ws -n "$NAMESPACE"
-#    kubectl rollout restart deployment/darkseek-backend-mqtt -n "$NAMESPACE"
-#fi
-#sleep 33
-#log "⏳ Waiting for rolling update to stabilize..."
-#kubectl rollout status deployment/darkseek-backend-ws -n "$NAMESPACE" --timeout=120s
-#kubectl rollout status deployment/darkseek-backend-mqtt -n "$NAMESPACE" --timeout=120s
-
-
-# =======================================================
-# GOLDEN COMMANDS - PRODUCTION VERIFICATION
-# =======================================================
-log "🟢 GOLDEN COMMAND 1: MQTT TLS Handshake Verification..."
-kubectl logs -l app=darkseek-backend-mqtt -n "$NAMESPACE" --tail=100 | grep -i "connected\|ssl\|tls" || log "⚠️ No TLS logs found - check MQTT connection"
-
-log "🟢 GOLDEN COMMAND 2: Zero-Trust Networking Test (WS → Redis)..."
-if kubectl exec deployment/darkseek-backend-ws -n "$NAMESPACE" -- nc -zv darkseek-redis 6379 &>/dev/null; then
-  log "✅ Zero-Trust: WS → Redis:6379 OPEN ✓"
-else
-  log "❌ Zero-Trust: WS → Redis BLOCKED - Check allow-redis-access.yaml"
-fi
-monitor_handshake
-log "🟢 GOLDEN COMMAND 3: ConfigMap Phase 6 Patch Verification..."
-kubectl get configmap darkseek-config -n "$NAMESPACE" -o jsonpath='{.data.WEBSOCKET_URI}' && echo "" || log "⚠️ ConfigMap WEBSOCKET_URI missing"
-kubectl get configmap darkseek-config -n "$NAMESPACE" -o jsonpath='{.data.MQTT_URI}' && echo "" || log "⚠️ ConfigMap MQTT_URI missing"
-
-log "✅ GOLDEN VERIFICATION COMPLETE"
-
-log "✅ Deploy COMPLETE - Calico policies applied successfully"
-# =======================================================
-# PHASE 6: FINAL CONFIG + STATUS
-# =======================================================
-
-log "⏳ Waiting for LoadBalancer IPs (60s max)..."
-for i in {1..12}; do
-  FRONTEND_IP=$(kubectl get svc darkseek-frontend -n $NAMESPACE -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
-  [ -n "$FRONTEND_IP" ] && [ "$FRONTEND_IP" != "<pending>" ] && break
-  log "Frontend LB still provisioning... ($i/12)"
-  sleep 5
-done
-log "🎉 DEPLOYMENT COMPLETE!"
-echo "Services:"
-kubectl get svc -n "$NAMESPACE" -o wide
-echo "Deployments:"
-kubectl get deployments -n "$NAMESPACE" -o wide
-
-log "🎉 DEPLOYMENT COMPLETE!"
-
-# Call the new Dashboard
-show_deployment_dashboard
-
-log "💡 To monitor all application logs in real-time, run:"
-echo "kubectl logs -f -n $NAMESPACE -l 'app in (darkseek-backend-ws, darkseek-backend-mqtt, darkseek-frontend)' --tail=20 --prefix"
-
-log "✅ Done."
-log "🎉 Done! Use 'kubectl logs -f deployment/darkseek-backend-mqtt' to watch TLS traffic."
+# START
+main "$@"
