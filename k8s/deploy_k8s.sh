@@ -1219,7 +1219,12 @@ deploy_core() {
 
     log "⏳ 90s: DB initialization + PVC bind..."
     sleep 90
-    
+    pvc_name="postgres-pvc"
+    if [ "$(kubectl get pvc "$pvc_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}')" != "Bound" ]; then
+        troubleshoot_pvc_and_nodes "$pvc_name"
+        fatal "PVC $pvc_name not Bound"
+    fi
+
     ensure_db_exists
     check_db_initialization
 
