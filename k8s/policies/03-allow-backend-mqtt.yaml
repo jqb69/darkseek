@@ -14,7 +14,7 @@ spec:
   - Egress
   
   ingress:
-  # ONLY WS → MQTT on 8885
+  # 1. Internal Communication
   - from:
     - podSelector:
         matchLabels:
@@ -22,11 +22,13 @@ spec:
     ports:
     - protocol: TCP
       port: 8885
-  # DNS responses only
+  # 2. Allow DNS Responses (The Return Path)
   - from:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
+    - ipBlock:
+        cidr: DNS_IP_PLACEHOLDER/32
     ports:
     - protocol: UDP
       port: 53
@@ -34,39 +36,36 @@ spec:
       port: 53
 
   egress:
-  # DNS (3 paths → bulletproof)
+  # 1. DNS (The "Hall Pass")
   - to:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
-      podSelector:
-        matchLabels:
-          k8s-app: kube-dns
     - ipBlock:
-        cidr: 0.0.0.0/0
+        cidr: DNS_IP_PLACEHOLDER/32  # <-- THIS MUST BE HERE
     - ipBlock:
-        cidr: 169.254.169.254/32
+        cidr: 169.254.0.0/16
     ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
 
-  # Internal DB/Redis
+  # 2. Internal DB/Redis (Using Labels is safer than IP blocks)
   - to:
-    - ipBlock:
-        cidr: 10.0.0.0/8
-    - ipBlock:
-        cidr: 172.16.0.0/12
-    - ipBlock:
-        cidr: 192.168.0.0/16
+    - podSelector:
+        matchLabels:
+          app: darkseek-db
+    - podSelector:
+        matchLabels:
+          app: darkseek-redis
     ports:
     - protocol: TCP
-      port: 6379  # Redis
+      port: 6379
     - protocol: TCP
-      port: 5432  # Postgres
+      port: 5432
 
-  # External MQTT broker
+  # 3. External MQTT (Strictly non-internal)
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
