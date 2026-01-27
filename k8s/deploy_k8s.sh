@@ -1174,8 +1174,8 @@ sanitize_and_prepare_env() {
     log "🧹 PHASE 0: Sanitizing Environment & Syncing Secrets..."
     
     # 1. Project Lowercasing & Cert Validation
-    export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
-    check_ca_cert_exists
+    #export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
+    #check_ca_cert_exists
 
     # 2. Wipe stale DNS policy to prevent "Ghost" rules blocking initial pulls
     log "🧹 Wiping stale DNS policy for fresh IP injection..."
@@ -1310,6 +1310,7 @@ main() {
     
     # Lowercase Project ID (GCP requirement)
     export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
+    check_ca_cert_exists
 
     # Ensure we are in the manifest directory for all subsequent steps
     [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
