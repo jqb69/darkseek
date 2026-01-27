@@ -378,12 +378,34 @@ troubleshoot_k8s() {
 }
 
 ensure_db_exists() {
-  log "Ensuring DB '$POSTGRES_DB' exists..."
-  if ! kubectl exec -n "$NAMESPACE" deployment/darkseek-db -- psql -U "$POSTGRES_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '$POSTGRES_DB'" | grep -q 1; then
-    log "Creating database '$POSTGRES_DB'..."
-    kubectl exec -n "$NAMESPACE" deployment/darkseek-db -- psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE \"$POSTGRES_DB\";"
+  local db_pod
+  db_pod=$(kubectl get pods -n "$NAMESPACE" -l app=darkseek-db -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  
+  [[ -z "$db_pod" ]] && fatal "Postgres pod not found. Cannot ensure database existence."
+
+  log "🐘 Checking for Database: '$POSTGRES_DB'..."
+
+  # 1. WAIT for the SQL socket to be ready (internal to the pod)
+  # This prevents "Connection Refused" errors during the psql call
+  local retry=0
+  local max_retries=10
+  until kubectl exec -n "$NAMESPACE" "$db_pod" -- pg_isready -U "$POSTGRES_USER" &>/dev/null; do
+    ((retry++))
+    if [ $retry -gt $max_retries ]; then
+      fatal "Postgres engine failed to respond to pg_isready after 50s."
+    fi
+    log "⏳ Waiting for Postgres engine to accept local connections... ($retry/$max_retries)"
+    sleep 5
+  done
+
+  # 2. Check and Create Logic
+  # We use the pod name directly (faster/more stable than deployment/ name in exec)
+  if ! kubectl exec -n "$NAMESPACE" "$db_pod" -- psql -U "$POSTGRES_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = '$POSTGRES_DB'" | grep -q 1; then
+    log "🏗️ Creating database '$POSTGRES_DB'..."
+    kubectl exec -n "$NAMESPACE" "$db_pod" -- psql -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE \"$POSTGRES_DB\";"
+    log "✅ Database '$POSTGRES_DB' created successfully."
   else
-    log "Database '$POSTGRES_DB' already exists."
+    log "✅ Database '$POSTGRES_DB' already exists."
   fi
 }
 
