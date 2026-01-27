@@ -1302,16 +1302,24 @@ provision_loadbalancer_ip() {
 main() {
     log "🏁 Starting DarkSeek Deployment: Gemini Edition"
     
+    # 1. FIX: Capture the absolute path while we are still in the ROOT
+    # This prevents the "no such file or directory" error after the cd
+    local SCRIPT_ROOT=$(pwd)
+    export CERT_FILE_ABS="$SCRIPT_ROOT/certs/ca.crt"
+    
     # --- PHASE 0: PRE-FLIGHT ---
     check_kubectl
     check_envsubst
     check_env_vars
     check_network_policy_support
     
-    # Lowercase Project ID (GCP requirement)
     export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
-    check_ca_cert_exists
-
+    
+    # Check using the absolute path
+    if [[ ! -f "$CERT_FILE_ABS" ]]; then
+        fatal "❌ ca.crt NOT FOUND at $CERT_FILE_ABS"
+    fi
+    log "✅ ca.crt VALID → Using: $CERT_FILE_ABS"
     # Ensure we are in the manifest directory for all subsequent steps
     [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
     cd "$K8S_DIR"
