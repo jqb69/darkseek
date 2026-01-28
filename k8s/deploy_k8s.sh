@@ -137,7 +137,7 @@ check_env_vars() {
 }
 
 check_ca_cert_exists() {
-  local cert_path="certs/ca.crt"
+  local cert_path=$CERT_FILE_ABS
   
   log "🔍 Verifying ca.crt at $cert_path..."
   
@@ -1177,14 +1177,11 @@ sanitize_and_prepare_env() {
     #export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
     #check_ca_cert_exists
 
-    # 2. Wipe stale DNS policy to prevent "Ghost" rules blocking initial pulls
-    log "🧹 Wiping stale DNS policy for fresh IP injection..."
-    kubectl delete netpol allow-dns-egress -n "$NAMESPACE" --ignore-not-found
-
-    # 3. Recreate Secrets (Idempotent)
-    kubectl create secret generic darkseek-mqtt-certs \
-        --from-file=ca.crt="$CERT_FILE" \
-        --dry-run=client -o yaml | kubectl apply -f -
+    # moved delete netpol to main to avoid confusion
+    # 3. Recreate Secrets (Idempotent) MOVED TO main
+    #kubectl create secret generic darkseek-mqtt-certs \
+    #    --from-file=ca.crt="$CERT_FILE" \
+    #    --dry-run=client -o yaml | kubectl apply -f -
 
     kubectl create secret generic darkseek-secrets \
         --from-literal=GOOGLE_API_KEY="${GOOGLE_API_KEY}" \
@@ -1207,8 +1204,8 @@ sanitize_and_prepare_env() {
     kubectl apply -f configmap.yaml
     sleep 3
     # Ensure we are in the manifest directory for all subsequent steps
-    [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
-    cd "$K8S_DIR"
+    #[ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
+    #cd "$K8S_DIR"
     log "💉 Injecting Dynamic URIs into ConfigMap..."
     kubectl patch configmap darkseek-config -n "$NAMESPACE" --type merge -p "{
       \"data\": {
@@ -1301,9 +1298,9 @@ provision_loadbalancer_ip() {
     log "⚠️ LB IP is taking longer than expected. It will continue provisioning in the background."
 }
 
-# --- MAIN (FINAL GEMINI EDITION) ---
+# --- MAIN (ULTIMATE BADDA** GEMINI EDITION) ---
 main() {
-    log "🏁 Starting DarkSeek Deployment: Gemini Edition"
+    log "🏁 Starting DarkSeek Deployment: Gemini Ultimate Edition"
     
     # 1. FIX: Capture the absolute path while we are still in the ROOT
     # This prevents the "no such file or directory" error after the cd
@@ -1318,12 +1315,21 @@ main() {
     
     export GCP_PROJECT_ID=$(echo "$GCP_PROJECT_ID" | tr '[:upper:]' '[:lower:]')
     
-    # Check using the absolute path
-    if [[ ! -f "$CERT_FILE_ABS" ]]; then
-        fatal "❌ ca.crt NOT FOUND at $CERT_FILE_ABS"
-    fi
-    log "✅ ca.crt VALID → Using: $CERT_FILE_ABS"
-    
+    check_ca_cert_exists
+    # 2. Wipe stale DNS policy to prevent "Ghost" rules blocking initial pulls
+    log "🧹 Wiping stale DNS policy for fresh IP injection..."
+    kubectl delete netpol allow-dns-egress -n "$NAMESPACE" --ignore-not-found
+    # STEP 4: CREATE SECRET (Works because path is Absolute)
+    log "🔑 Syncing TLS Secret..."
+    kubectl create secret generic darkseek-mqtt-certs \
+      --from-file=ca.crt="$CERT_FILE_ABS" \
+      --dry-run=client -o yaml | kubectl apply -f -
+
+    # STEP 5: THE PIVOT
+    # Now we change directory so all 'apply -f' commands find their .yaml files
+    [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
+    cd "$K8S_DIR"
+    log "📂 Working directory shifted to: $(pwd)"
 
     # --- PHASE 1: SANITIZATION & PREP ---
     # Handles Secrets, PVC finalizers, and Nuke logic
