@@ -920,15 +920,24 @@ apply_networking() {
   fi
 
   # 1. DISCOVER & TEMPLATE
-  local GKE_DNS
+ # 1. Fetch the real IP
   GKE_DNS=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-  [[ -z "$GKE_DNS" ]] && { log "❌ CRITICAL: Could not find kube-dns IP."; return 1; }
 
+  # 2. Fallback + LOUD LOGGING
+  if [[ -z "$GKE_DNS" ]]; then
+    GKE_DNS="34.118.224.10"
+    log "⚠️ DNS DISCOVERY FAILED! Using fallback: $GKE_DNS"
+  else
+    log "🎯 GKE_DNS DETECTED: $GKE_DNS"
+  fi
+  # --- Inside apply_networking() right after GKE_DNS detection ---
+  log "🏷️ Ensuring kube-system has the standard metadata label..."
+  kubectl label ns kube-system kubernetes.io/metadata.name=kube-system --overwrite
   # Generates .tmp files for 00 and 03
   template_dns_policies "$GKE_DNS" || return 1
   
   # 2. APPLY FOUNDATION (DNS First)
-  kubectl apply -f "$p_dir/00-allow-dns.yaml.tmp" && sleep 2
+  kubectl apply -f "$p_dir/00-allow-dns.yaml.tmp" --force && sleep 2
   
   # 3. APPLY INFRASTRUCTURE (DB & Redis)
   log "🔑 Opening paths to Database and Redis..."
@@ -1397,7 +1406,9 @@ main() {
 
     # --- PHASE 7: EXTERNAL EXPOSURE ---
     provision_loadbalancer_ip
-
+    # Manual check if the script halts:
+    # Faster "Golden Check" using an existing image to avoid pull-rate limits
+    kubectl run dns-shield-test -n "$NAMESPACE" --image=busybox --rm -it --restart=Never -- nslookup google.com
     # --- PHASE 8: DASHBOARD & LOGS ---
     show_deployment_dashboard
 
