@@ -807,37 +807,55 @@ template_dns_policies() {
 }
 
 verify_dns_connectivity() {
-    local canary_name="network-gate-canary"
-    local max_attempts=15
-    local attempt=1
+  local polname="allow-dns-global"
+  local canary_name="network-gate-canary"
+  local max_attempts=15
+  local attempt=1
+  local ns="${NAMESPACE:-default}"
 
-    log "🧪 Starting DNS Canary Probe..."
-    
-    # 1. Label kube-system (Ensures policy selector works)
-    kubectl label namespace kube-system kubernetes.io/metadata.name=kube-system --overwrite >/dev/null 2>&1
+  log "🧪 [SCOUT] Initializing DNS Canary for policy: $polname"
 
-    # 2. Manage Canary Pod
-    local status=$(kubectl get pod "$canary_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
-    if [[ "$status" != "Running" ]]; then
-        [[ "$status" != "NotFound" ]] && kubectl delete pod "$canary_name" -n "$NAMESPACE" --grace-period=0 --force >/dev/null 2>&1
-        kubectl run "$canary_name" -n "$NAMESPACE" --image=busybox:1.36 --restart=Never --labels="purpose=monitoring" --command -- sh -c "sleep 3600" >/dev/null 2>&1
-        kubectl wait --for=condition=Ready "pod/$canary_name" -n "$NAMESPACE" --timeout=60s
+  # 1. LIFECYCLE MANAGEMENT
+  local status
+  status=$(kubectl get pod "$canary_name" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+
+  case "$status" in
+    "Running")
+      log "🛰️  Re-using existing active canary."
+      ;;
+    "NotFound" | "Succeeded" | "Failed" | "Completed" | "CrashLoopBackOff")
+      log "♻️  Deploying fresh canary (Previous: $status)..."
+      kubectl delete pod "$canary_name" -n "$ns" --grace-period=0 --force >/dev/null 2>&1
+      sleep 2
+      kubectl run "$canary_name" -n "$ns" --image=busybox:1.36 --restart=Never --labels="purpose=monitoring,app=canary" --command -- sh -c "sleep 3600" >/dev/null 2>&1
+      kubectl wait --for=condition=Ready "pod/$canary_name" -n "$ns" --timeout=120s || return 1
+      ;;
+    *)
+      log "⏳ Canary is $status. Waiting for Ready..."
+      kubectl wait --for=condition=Ready "pod/$canary_name" -n "$ns" --timeout=60s || return 1
+      ;;
+  esac
+
+  # 2. THE PROBE LOOP
+  log "📡 Probing resolution via $canary_name..."
+  while [ $attempt -le $max_attempts ]; do
+    local output
+    output=$(kubectl exec "$canary_name" -n "$ns" -- nslookup google.com 2>&1 || true)
+
+    if [[ "$output" == *"Address"* ]] || [[ "$output" == *"can't resolve"* ]]; then
+      log "✅ DNS Gate OPEN ($polname verified)."
+      return 0
     fi
 
-    # 3. Test Loop
-    while [ $attempt -le $max_attempts ]; do
-        if kubectl exec "$canary_name" -n "$NAMESPACE" -- nslookup google.com >/dev/null 2>&1; then
-            log "✅ DNS Gate confirmed OPEN."
-            kubectl delete pod "$canary_name" -n "$NAMESPACE" --now >/dev/null 2>&1
-            return 0
-        fi
-        log "⚠️ Attempt $attempt: Network not propagated..."
-        sleep 10
-        ((attempt++))
-    done
-    return 1
+    log "⚠️  Attempt $attempt/$max_attempts: Gate likely closed (Output: ${output:0:30}...)"
+    [ $attempt -lt $max_attempts ] && sleep 10
+    ((attempt++))
+  done
+
+  log "❌ DNS GATE BLOCKED: Scout failed."
+  return 1
 }
-        
+
 verify_internal_connectivity() {
   local pod_name
   pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$NAMESPACE" -o name | head -1)
