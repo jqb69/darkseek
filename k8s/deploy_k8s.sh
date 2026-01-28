@@ -858,56 +858,67 @@ verify_internal_connectivity() {
 }
 
 verify_cluster_network_integrity() {
-  log "🛡️  DIAGNOSTIC: Probing Active Network Gates..."
-
-  # 1. Check Frontend Alignment
-  local svc_port=$(kubectl get svc darkseek-frontend -n "$NAMESPACE" -o jsonpath='{.spec.ports[0].targetPort}' 2>/dev/null)
-  [[ "$svc_port" != "8501" ]] && log "⚠️  ALIGNMENT ERROR: Service Port ($svc_port) != Policy Port (8501)!"
-
-  # 2. Identify MQTT Pod
-  local pod_name=$(kubectl get pods -l "app=darkseek-backend-mqtt" -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  [[ -z "$pod_name" ]] && { log "❌ FATAL: MQTT Pod missing."; return 1; }
+  local TARGET_LABEL="app=darkseek-backend-mqtt"
+  local current_pod=""
+  log "🛡️  DIAGNOSTIC: Probing Active Network Gates via $TARGET_LABEL..."
 
   for i in {1..12}; do
-    local phase=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
-    [[ "$phase" != "Running" ]] && { log "⏳ ($i/12) Waiting for Running phase (Current: $phase)..."; sleep 5; continue; }
+    current_pod=$(kubectl get pods -n "$NAMESPACE" -l "$TARGET_LABEL" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    
+    if [[ -z "$current_pod" ]]; then
+      log "⏳ ($i/12) Waiting for any pod with label $TARGET_LABEL..."
+      sleep 5
+      continue
+    fi
 
-    # 3. DNS Probe (The Hydra Check) - Added 5s timeout to prevent hanging
-    if ! kubectl exec "$pod_name" -n "$NAMESPACE" -- nslookup -timeout=5 "$MQTT_BROKER_HOST" > /dev/null 2>&1; then
-      log "⚠️  ($i/12) DNS Blocked. Possible Ingress/Labeling failure."
+    local phase=$(kubectl get pod "$current_pod" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
+    if [[ "$phase" != "Running" ]]; then
+      log "⏳ ($i/12) Pod $current_pod found but phase is: $phase. Waiting..."
+      sleep 5
+      continue
+    fi
+
+    # 3. DNS PROBE
+    if ! kubectl exec "$current_pod" -n "$NAMESPACE" -- nslookup -timeout=5 "$MQTT_BROKER_HOST" > /dev/null 2>&1; then
+      log "⚠️  ($i/12) DNS Blocked on $current_pod."
     else
-      # 4. Port 8883 Handshake
-      if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(3); exit(s.connect_ex(('$MQTT_BROKER_HOST', 8883)))" 2>/dev/null; then
+      # 4. PORT 8883 HANDSHAKE
+      if kubectl exec "$current_pod" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(3); exit(s.connect_ex(('$MQTT_BROKER_HOST', 8883)))" 2>/dev/null; then
         log "✅ NETWORK VERIFIED: DNS OK, Broker 8883 Reachable."
         return 0
       fi
-      log "⚠️  ($i/12) Port 8883 unreachable."
+      log "⚠️  ($i/12) DNS OK, but Port 8883 unreachable."
     fi
     sleep 5
   done
 
   # --- AUTOPSY SECTION ---
-  log "🚨 DNS AUTOPSY: Why did the app fail after the Canary passed?"
+  local polname="allow-dns-global"
+  log "🚨 DNS AUTOPSY: Starting deep-dive failure analysis..."
   echo "-----------------------------------------------------------------------"
+  
   echo "1. Namespace Label Check:"
   kubectl get ns kube-system --show-labels | grep "kubernetes.io/metadata.name=kube-system" || echo "❌ ERROR: kube-system label GONE!"
-  
-  echo "2. Policy Selector Check: Is the policy even targeting this pod?"
-  # This confirms if the pod selector matches the app labels
-  kubectl describe netpol allow-dns-egress -n "$NAMESPACE" | grep -A 3 "Spec:"
-  
-  echo "3. Placeholder Verification:"
-  # Verify if the sed replacement actually worked in the live object
-  kubectl get netpol allow-dns-egress -n "$NAMESPACE" -o yaml | grep -iC 2 "cidr"
+
+  echo "2. Policy Selector Check:"
+  kubectl describe netpol "$polname" -n "$NAMESPACE" | grep -A 5 "Spec:" || echo "❌ ERROR: Policy $polname NOT FOUND"
+
+  echo "3. Placeholder Verification (Live CIDR):"
+  kubectl get netpol "$polname" -n "$NAMESPACE" -o yaml | grep -iC 2 "cidr" || echo "❌ ERROR: No CIDR found in policy"
 
   echo "4. Raw IP Egress Test (Bypassing DNS):"
-  # If this passes but DNS fails, the problem is 100% Port 53 Ingress/Egress
-  kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(2); exit(s.connect_ex(('8.8.8.8', 53)))" 2>/dev/null \
-    && echo "✅ Raw UDP/53 Egress is OPEN" || echo "❌ Raw UDP/53 Egress is BLOCKED"
+  if [[ -n "$current_pod" ]]; then
+    # FIXED: Using current_pod instead of pod_name
+    kubectl exec "$current_pod" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(2); exit(s.connect_ex(('8.8.8.8', 53)))" 2>/dev/null \
+      && echo "✅ Raw UDP/53 Egress is OPEN" || echo "❌ Raw UDP/53 Egress is BLOCKED"
+  else
+    echo "❌ ERROR: No pod available to run Egress test."
+  fi
   echo "-----------------------------------------------------------------------"
 
   return 1
 }
+
 
 apply_networking() {
   log "🛡️ Applying DNS-Aware Policies..."
@@ -1339,7 +1350,7 @@ main() {
     check_ca_cert_exists
     # 2. Wipe stale DNS policy to prevent "Ghost" rules blocking initial pulls
     log "🧹 Wiping stale DNS policy for fresh IP injection..."
-    kubectl delete netpol allow-dns-egress -n "$NAMESPACE" --ignore-not-found
+    kubectl delete netpol allow-dns-global -n "$NAMESPACE" --ignore-not-found
     # STEP 4: CREATE SECRET (Works because path is Absolute)
     log "🔑 Syncing TLS Secret..."
     kubectl create secret generic darkseek-mqtt-certs \
