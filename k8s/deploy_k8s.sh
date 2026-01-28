@@ -770,7 +770,16 @@ force_delete_pods() {
 }
 
 template_dns_policies() {
-    local GKE_DNS="$1"
+    # 1. VALIDATE OR SET DEFAULT
+    # Uses 34.118.224.10 if $1 is empty or unset
+    local GKE_DNS="${1:-34.118.224.10}" 
+    
+    if [[ -z "$1" ]]; then
+        log "⚠️ WARNING: GKE_DNS not provided. Falling back to default: $GKE_DNS"
+    else
+        log "🎯 GKE_DNS identified: $GKE_DNS"
+    fi
+
     # TARGETS are locally scoped to this prep task
     local TARGETS=("00-allow-dns.yaml" "03-allow-backend-mqtt.yaml")
 
@@ -780,17 +789,22 @@ template_dns_policies() {
         [[ ! -f "$FULL_PATH" ]] && { log "❌ MISSING: $FULL_PATH"; return 1; }
 
         # Scrub artifacts and swap placeholder, then flush to .tmp
+        # tr -d '\302\240\r' handles those invisible copy-paste characters
         cat "$FULL_PATH" | \
             tr -d '\302\240\r' | \
             sed "s/DNS_IP_PLACEHOLDER/$GKE_DNS/g" | \
             sed 's/^[[:space:]]*$//; /^$/d' > "${FULL_PATH}.tmp"
         
         # Verify the .tmp file actually exists and isn't empty
-        [[ ! -s "${FULL_PATH}.tmp" ]] && { log "❌ ERROR: Failed to create ${FILENAME}.tmp"; return 1; }
+        if [[ ! -s "${FULL_PATH}.tmp" ]]; then
+            log "❌ ERROR: Failed to create ${FILENAME}.tmp"
+            return 1
+        fi
     done
+
+    log "✅ Templates prepared with DNS IP: $GKE_DNS"
     return 0
 }
-
 
 verify_dns_connectivity() {
     local canary_name="network-gate-canary"
