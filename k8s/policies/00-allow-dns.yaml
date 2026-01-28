@@ -6,7 +6,7 @@ metadata:
   name: allow-dns-global
   namespace: default
 spec:
-  podSelector: {}          # ← this is the correct “all pods” form
+  podSelector: {} # All pods in the namespace
   policyTypes:
   - Egress
   egress:
@@ -16,8 +16,7 @@ spec:
     - protocol: TCP
       port: 53
     to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
     - ipBlock:
-        cidr: DNS_IP_PLACEHOLDER/32
+        cidr: DNS_IP_PLACEHOLDER/32  # This is the sniper rule
+    - ipBlock:
+        cidr: 0.0.0.0/0              # This is the fallback for safety (Port 53 ONLY)
