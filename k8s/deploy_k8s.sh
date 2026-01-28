@@ -896,11 +896,12 @@ verify_cluster_network_integrity() {
       continue
     fi
 
-    # 3. DNS PROBE
-    if ! kubectl exec "$current_pod" -n "$NAMESPACE" -- nslookup -timeout=5 "$MQTT_BROKER_HOST" > /dev/null 2>&1; then
-      log "⚠️  ($i/12) DNS Blocked on $current_pod."
+    # --- REPLACING NSLOOKUP WITH NATIVE PYTHON DNS CHECK ---
+    # 3. DNS PROBE (The Python Way)
+    if ! kubectl exec "$current_pod" -n "$NAMESPACE" -- python3 -c "import socket; socket.gethostbyname('$MQTT_BROKER_HOST')" > /dev/null 2>&1; then
+      log "⚠️  ($i/12) DNS Resolution failed via Python on $current_pod."
     else
-      # 4. PORT 8883 HANDSHAKE
+      # 4. PORT 8883 HANDSHAKE (Already using Python)
       if kubectl exec "$current_pod" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(3); exit(s.connect_ex(('$MQTT_BROKER_HOST', 8883)))" 2>/dev/null; then
         log "✅ NETWORK VERIFIED: DNS OK, Broker 8883 Reachable."
         return 0
