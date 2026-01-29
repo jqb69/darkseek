@@ -1334,6 +1334,50 @@ deploy_core() {
     check_mqtt_egress || log "⚠️ Warning: Initial egress check failed. Probes might fail until CNI stabilizes."
 }
 
+run_deep_network_diagnostic() {
+    local target_app="darkseek-backend-mqtt"
+    local pod_name=$(kubectl get pods -n "$NAMESPACE" -l app=$target_app --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    
+    if [ -z "$pod_name" ]; then
+        echo "[DIAGNOSTIC] ⚠️ No running pod found. Cannot verify network."
+        return 1
+    fi
+
+    echo "------------------------------------------------------------"
+    echo "🔍 PHASE 4.5: STRESS-TESTING NETWORK (Max 5 Tries)"
+    echo "------------------------------------------------------------"
+
+    # Capture output and exit code
+    local probe_output
+    probe_output=$(kubectl exec -n "$NAMESPACE" "$pod_name" -- python3 -c "
+import asyncio, socket, time
+
+async def probe(attempt):
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection('$MQTT_BROKER_URI', $MQTT_PORT), 5.0)
+        print(f'   [Try {attempt}] ✅ GATE OPEN')
+        writer.close(); await writer.wait_closed()
+        return True
+    except Exception as e:
+        print(f'   [Try {attempt}] ❌ {type(e).__name__}')
+        return False
+
+async def main():
+    for i in range(1, 6):
+        if await probe(i): return 0
+        if i < 5: await asyncio.sleep(2)
+    return 1
+
+import sys
+sys.exit(asyncio.run(main()))
+")
+    local status=$?
+
+    echo "$probe_output"
+    echo "------------------------------------------------------------"
+    
+    return $status
+}
 provision_loadbalancer_ip() {
     log "⏳ Waiting for LoadBalancer IPs (60s max)..."
     local FRONTEND_IP=""
@@ -1402,6 +1446,10 @@ main() {
     log "🚀 PHASE 4.0: Verifying Network Integrity..."
     # Proves the "pipes" are open while pods are Running but before Probes time out
     verify_cluster_network_integrity || fatal "Network Logic Failure. Stopping deployment."
+    
+    # --- PHASE 4: THE GATEKEEPER ---
+    log "🚀 PHASE 4.5: MQTT Network Deep Daignostic.."
+    run_deep_network_diagnostic || fatal "Network Diagnostic for MQTT Failure."
 
     # --- PHASE 5: STABILIZATION ---
     log "⏳ Waiting for Readiness Probes to pass..."
