@@ -1336,48 +1336,68 @@ deploy_core() {
 
 run_deep_network_diagnostic() {
     local target_app="darkseek-backend-mqtt"
+    # Identify the pod in the specific namespace
     local pod_name=$(kubectl get pods -n "$NAMESPACE" -l app=$target_app --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    
+
     if [ -z "$pod_name" ]; then
-        echo "[DIAGNOSTIC] ⚠️ No running pod found. Cannot verify network."
-        return 1
+        log "⚠️ [DIAGNOSTIC] No running pod found for $target_app. Skipping probe."
+        return 0
     fi
 
-    echo "------------------------------------------------------------"
-    echo "🔍 PHASE 4.5: STRESS-TESTING NETWORK (Max 5 Tries)"
-    echo "------------------------------------------------------------"
+    log "🔍 PHASE 4.5: Deep Network Probe (5 Tries) on $pod_name"
+    log "🎯 Target: $MQTT_BROKER_HOST:$MQTT_BROKER_PORT"
 
-    # Capture output and exit code
-    local probe_output
-    probe_output=$(kubectl exec -n "$NAMESPACE" "$pod_name" -- python3 -c "
-import asyncio, socket, time
+    # We execute Python directly. Note the use of $MQTT_BROKER_HOST and $MQTT_BROKER_PORT 
+    # passed from your shell environment into the container.
+    kubectl exec -n "$NAMESPACE" "$pod_name" -- python3 -c "
+import asyncio
+import socket
+import time
+import sys
 
 async def probe(attempt):
     try:
-        _, writer = await asyncio.wait_for(asyncio.open_connection('$MQTT_BROKER_HOST', $MQTT_BROKER_PORT), 5.0)
-        print(f'   [Try {attempt}] ✅ GATE OPEN')
-        writer.close(); await writer.wait_closed()
+        start = time.time()
+        # This performs both DNS resolution and the TCP Handshake
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection('$MQTT_BROKER_HOST', $MQTT_BROKER_PORT), 
+            timeout=5.0
+        )
+        elapsed = time.time() - start
+        print(f'   [Try {attempt}] ✅ GATE OPEN: Success in {elapsed:.2f}s')
+        writer.close()
+        await writer.wait_closed()
         return True
+    except asyncio.TimeoutError:
+        print(f'   [Try {attempt}] ❌ GATE CLOSED: Timeout (Firewall dropping packets)')
+    except socket.gaierror:
+        print(f'   [Try {attempt}] ❌ DNS FAILURE: Could not resolve $MQTT_BROKER_HOST')
     except Exception as e:
-        print(f'   [Try {attempt}] ❌ {type(e).__name__}')
-        return False
+        print(f'   [Try {attempt}] ❌ ERROR: {type(e).__name__} - {e}')
+    return False
 
 async def main():
     for i in range(1, 6):
-        if await probe(i): return 0
-        if i < 5: await asyncio.sleep(2)
-    return 1
+        if await probe(i):
+            sys.exit(0) # Success exit code
+        if i < 5:
+            await asyncio.sleep(2)
+    sys.exit(1) # Failure exit code
 
-import sys
-sys.exit(asyncio.run(main()))
-")
-    local status=$?
-
-    echo "$probe_output"
-    echo "------------------------------------------------------------"
+asyncio.run(main())
+" 
     
-    return $status
+    local diagnostic_result=$?
+    
+    if [ $diagnostic_result -eq 0 ]; then
+        log "🏆 Network infrastructure verified for MQTT."
+    else
+        log "💀 NetworkPolicy is blocking $MQTT_BROKER_HOST."
+    fi
+
+    return $diagnostic_result
 }
+
 provision_loadbalancer_ip() {
     log "⏳ Waiting for LoadBalancer IPs (60s max)..."
     local FRONTEND_IP=""
