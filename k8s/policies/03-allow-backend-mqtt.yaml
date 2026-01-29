@@ -27,8 +27,6 @@ spec:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
-    - ipBlock:
-        cidr: DNS_IP_PLACEHOLDER/32
     ports:
     - protocol: UDP
       port: 53
@@ -36,22 +34,20 @@ spec:
       port: 53
 
   egress:
-  # 1. DNS (The "Hall Pass")
+  # 1. DNS (No Placeholder needed)
   - to:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
     - ipBlock:
-        cidr: DNS_IP_PLACEHOLDER/32  # <-- THIS MUST BE HERE
-    - ipBlock:
-        cidr: 169.254.0.0/16
+        cidr: 169.254.0.0/16   # Essential for GKE Node-Local DNS
     ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
 
-  # 2. Internal DB/Redis (Using Labels is safer than IP blocks)
+  # 2. Internal DB/Redis
   - to:
     - podSelector:
         matchLabels:
@@ -65,7 +61,7 @@ spec:
     - protocol: TCP
       port: 5432
 
-  # 3. External MQTT (Strictly non-internal)
+  # 3. External MQTT (The 'Except' block)
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
