@@ -1334,6 +1334,34 @@ deploy_core() {
     check_mqtt_egress || log "⚠️ Warning: Initial egress check failed. Probes might fail until CNI stabilizes."
 }
 
+# --- Function : The Final Verification (Phase 5) ---
+verify_mqtt_connectivity() {
+    log "🧪 PHASE 5: Final Handshake Verification (5 Tries)..."
+    local pod_name=$(kubectl get pods -n "$NAMESPACE" -l app=darkseek-backend-mqtt --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+    kubectl exec -n "$NAMESPACE" "$pod_name" -- python3 -c "
+import asyncio, sys, time
+
+async def test(attempt):
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection('$MQTT_BROKER_HOST', $MQTT_BROKER_PORT), 5.0)
+        print(f'   [Try {attempt}] ✅ FINAL PATH VERIFIED')
+        writer.close(); await writer.wait_closed()
+        return True
+    except Exception as e:
+        print(f'   [Try {attempt}] ❌ PATH BLOCKED: {type(e).__name__}')
+        return False
+
+async def main():
+    for i in range(1, 6):
+        if await test(i): sys.exit(0)
+        if i < 5: await asyncio.sleep(2)
+    sys.exit(1)
+
+asyncio.run(main())
+"
+}
+
 run_deep_network_diagnostic() {
     local target_app="darkseek-backend-mqtt"
     # Identify the pod in the specific namespace
@@ -1478,10 +1506,19 @@ main() {
     log "🧪 PHASE 4b: Final Network Settlement..."
     sleep 59 # The "Calico Polish" sleep
     verify_internal_connectivity || fatal "Internal connectivity test failed."
+    
+    # --- PHASE 5: GOLDEN VERIFICATION ---
+    log "🧪 PHASE 5: Production Handshake Verification..."
+    
+    # This will now try 5 times over ~10-15 seconds before giving up
+    verify_mqtt_connectivity || fatal "💀 Final connectivity check failed after 5 attempts."
+
+    log "🎉 MQTT Infrastructure is 100% verified and reachable."
     wait_for_mqtt_health
+    
 
     # --- PHASE 6: GOLDEN VERIFICATION ---
-    log "🧪 PHASE 5: Production Handshake Verification..."
+    log "🧪 PHASE 5.5: Production Handshake Verification..."
     run_policy_audit || true
     verify_policy_active
 
