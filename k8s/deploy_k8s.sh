@@ -1354,7 +1354,7 @@ import asyncio, socket, time
 
 async def probe(attempt):
     try:
-        _, writer = await asyncio.wait_for(asyncio.open_connection('$MQTT_BROKER_URI', $MQTT_PORT), 5.0)
+        _, writer = await asyncio.wait_for(asyncio.open_connection('$MQTT_BROKER_HOST', $MQTT_BROKER_PORT), 5.0)
         print(f'   [Try {attempt}] ✅ GATE OPEN')
         writer.close(); await writer.wait_closed()
         return True
