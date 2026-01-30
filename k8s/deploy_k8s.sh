@@ -487,8 +487,55 @@ debug_python_startup() {
 
 # -----------------------------------------------------------------------
 #  MODIFIED: wait for deployments with FAST feedback loop (LOGS IMPROVED)
+
 # -----------------------------------------------------------------------
 wait_for_deployments() {
+  local deployments=("darkseek-db" "darkseek-redis" "darkseek-backend-mqtt" "darkseek-backend-ws" "darkseek-frontend")
+  local timeout=900
+
+  log "Waiting up to ${timeout}s for deployments to become Available..."
+  
+  for dep in "${deployments[@]}"; do
+    log "=== Checking deployment/$dep ==="
+    
+    # Start your background logger
+    check_pods_in_background "$dep" "$timeout" &
+    local bg_pid=$!
+
+    # --- SMART SUB-LOOP ---
+    local start_time=$(date +%s)
+    while true; do
+      local current_time=$(date +%s)
+      local elapsed=$((current_time - start_time))
+
+      # Check if K8s considers it "Available"
+      if kubectl get deployment "$dep" -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' | grep -q "True"; then
+        log "✅ Deployment $dep is Available."
+        kill "$bg_pid" 2>/dev/null || true
+        break
+      fi
+
+      # FAIL FAST: Check for restarts (The "21-minute" Killer)
+      local restarts=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}' 2>/dev/null || echo "0")
+      if [ "$restarts" -gt 0 ]; then
+        log "❌ CRITICAL: $dep has restarted ($restarts times). Diagnosing now..."
+        # Trigger your existing diagnostic logic
+        dump_pod_diagnostics "$dep" 
+        kill "$bg_pid" 2>/dev/null || true
+        fatal "Deployment '$dep' is crashing. Stopping."
+      fi
+
+      if [ "$elapsed" -gt "$timeout" ]; then
+        kill "$bg_pid" 2>/dev/null || true
+        fatal "Timeout waiting for $dep."
+      fi
+
+      sleep 5
+    done
+  done
+}
+
+wait_for_deployments_old() {
   local deployments=(
     "darkseek-backend-mqtt"  
     "darkseek-backend-ws"
@@ -721,6 +768,33 @@ apply_with_sed() {
     sleep $APPLY_SLEEP
   done
   fatal "Failed to apply ${file} after ${RETRY_APPLY} attempts."
+}
+
+dump_pod_diagnostics() {
+    local dep=$1
+    log "🔍 STARTING DIAGNOSTIC DUMP FOR: $dep"
+    
+    local pod_names
+    pod_names=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
+    
+    if [ -n "$pod_names" ]; then
+      for pod in $pod_names; do
+        log "--- 📋 Description for pod: $pod ---"
+        kubectl describe pod "$pod" -n "$NAMESPACE" || true
+        
+        log "--- 📝 Logs for pod: $pod (Current + Previous) ---"
+        # We try to get the 'previous' logs first, as that's where the crash reason lives
+        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=100 --previous 2>/dev/null || \
+        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=100 || \
+        log "⚠️ Warning: Could not retrieve any logs for pod '$pod'."
+        
+        # Check for Python-specific pathing issues
+        log "--- 🐍 Python System Path ---"
+        kubectl exec "$pod" -n "$NAMESPACE" -- python3 -c "import sys; print(sys.path)" 2>/dev/null || true
+      done
+    else
+      log "❌ No pods found for label app=$dep"
+    fi
 }
 
 kill_stale_pods() {
@@ -1426,6 +1500,48 @@ asyncio.run(main())
     return $diagnostic_result
 }
 
+run_final_path_diagnostic() {
+    log "🕵️ PHASE 4.7: Final Path & DNS Audit..."
+    local pod_name=$(kubectl get pods -n "$NAMESPACE" -l app=darkseek-backend-mqtt --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+    if [ -z "$pod_name" ]; then
+        log "⚠️ No pod found to diagnose."
+        return 1
+    fi
+
+    kubectl exec -n "$NAMESPACE" "$pod_name" -- python3 -c "
+import os, socket
+
+paths = [
+    '/app/certs/ca.crt',        # Absolute App Path
+    './certs/ca.crt',           # Relative App Path
+    '/certs/ca.crt',            # K8s Secret Mount Path
+    'certs/ca.crt'              # Pure Relative
+]
+
+print('--- 📂 FILE AUDIT ---')
+for p in paths:
+    exists = os.path.exists(p)
+    status = '✅ FOUND' if exists else '❌ MISSING'
+    print(f'{status}: {p}')
+
+print('\n--- 📡 DNS/EGRESS AUDIT ---')
+try:
+    # Test internal Kube-DNS
+    socket.gethostbyname('kubernetes.default.svc.cluster.local')
+    print('✅ INTERNAL DNS: OK')
+except:
+    print('❌ INTERNAL DNS: FAILED')
+
+try:
+    # Test external Canary (The one your app is likely hanging on)
+    socket.gethostbyname('google.com')
+    print('✅ EXTERNAL DNS (Canary): OK')
+except Exception as e:
+    print(f'❌ EXTERNAL DNS (Canary): FAILED ({type(e).__name__})')
+"
+}
+
 provision_loadbalancer_ip() {
     log "⏳ Waiting for LoadBalancer IPs (60s max)..."
     local FRONTEND_IP=""
@@ -1498,6 +1614,7 @@ main() {
     # --- PHASE 4: THE GATEKEEPER ---
     log "🚀 PHASE 4.5: MQTT Network Deep Daignostic.."
     run_deep_network_diagnostic || fatal "Network Diagnostic for MQTT Failure."
+    run_final_path_diagnostic
 
     # --- PHASE 5: STABILIZATION ---
     log "⏳ Waiting for Readiness Probes to pass..."
