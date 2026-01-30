@@ -1614,7 +1614,7 @@ main() {
     # --- PHASE 4: THE GATEKEEPER ---
     log "🚀 PHASE 4.5: MQTT Network Deep Daignostic.."
     run_deep_network_diagnostic || fatal "Network Diagnostic for MQTT Failure."
-    run_final_path_diagnostic
+    
 
     # --- PHASE 5: STABILIZATION ---
     log "⏳ Waiting for Readiness Probes to pass..."
@@ -1628,7 +1628,9 @@ main() {
     log "🧪 PHASE 5: Production Handshake Verification..."
     
     # This will now try 5 times over ~10-15 seconds before giving up
+    run_final_path_diagnostic
     verify_mqtt_connectivity || fatal "💀 Final connectivity check failed after 5 attempts."
+    
 
     log "🎉 MQTT Infrastructure is 100% verified and reachable."
     wait_for_mqtt_health
