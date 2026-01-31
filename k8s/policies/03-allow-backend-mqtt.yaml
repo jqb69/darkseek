@@ -12,41 +12,33 @@ spec:
   policyTypes:
   - Ingress
   - Egress
-  
-  # --- INGRESS: THE HARMLESS WILDCARD ---
   ingress:
   - from:
-    - podSelector: {} # Trust all internal pods in 'default' namespace
-
-  # --- EGRESS: SERVICE-SPECIFIC ONLY ---
+    - podSelector: {} # HARMLESS WILDCARD
   egress:
-  # 1. GKE METADATA SERVER (The "Deep Probe" Fix)
-  # This is NOT in the global DNS policy, so it MUST be here.
+  # 1. THE "GKE INFRA" OVERRIDE
+  # We are whitelisting the entire 10.0.0.0/8 for EGRESS. 
+  # This is usually "taboo," but GKE uses this for the Node -> NAT Gateway path.
   - to:
     - ipBlock:
-        cidr: 169.254.169.254/32
-    ports:
-    - protocol: TCP
-      port: 80
-
-  # 2. INTERNAL INFRA (DB & REDIS)
+        cidr: 10.0.0.0/8  # Allow GKE Internal Routing
+    - ipBlock:
+        cidr: 169.254.169.254/32 # Metadata
+  
+  # 2. INTERNAL APPS
   - to:
     - podSelector:
         matchLabels:
           app: darkseek-db
-  - to:
     - podSelector:
         matchLabels:
           app: darkseek-redis
 
-  # 3. EXTERNAL BROKER (The "No-Trap" Egress)
+  # 3. THE PUBLIC INTERNET (MQTT BROKER)
+  # REMOVE THE EXCEPTIONS. If it's timing out, let's go Nuclear.
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
-        except:
-        - 172.16.0.0/12
-        - 192.168.0.0/16
-        # 10.0.0.0/8 REMOVED to allow GKE routing
     ports:
     - protocol: TCP
       port: 1883
