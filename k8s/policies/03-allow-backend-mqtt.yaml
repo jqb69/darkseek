@@ -18,19 +18,10 @@ spec:
   - from:
     - podSelector: {} # Trust all internal pods in 'default' namespace
 
-  # --- EGRESS: DYNAMIC & GKE-FRIENDLY ---
+  # --- EGRESS: SERVICE-SPECIFIC ONLY ---
   egress:
-  # 1. DNS (DYNAMICALLY INJECTED BY SCRIPT)
-  - to:
-    - ipBlock:
-        cidr: DNS_IP_PLACEHOLDER/32 # <--- THE RESTORED HERO
-    ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
-
-  # 2. GKE METADATA SERVER (Prevents Python handshakes from timing out)
+  # 1. GKE METADATA SERVER (The "Deep Probe" Fix)
+  # This is NOT in the global DNS policy, so it MUST be here.
   - to:
     - ipBlock:
         cidr: 169.254.169.254/32
@@ -38,7 +29,7 @@ spec:
     - protocol: TCP
       port: 80
 
-  # 3. INTERNAL INFRA (DB & REDIS)
+  # 2. INTERNAL INFRA (DB & REDIS)
   - to:
     - podSelector:
         matchLabels:
@@ -48,7 +39,7 @@ spec:
         matchLabels:
           app: darkseek-redis
 
-  # 4. EXTERNAL BROKER (The "No-Trap" Egress)
+  # 3. EXTERNAL BROKER (The "No-Trap" Egress)
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
