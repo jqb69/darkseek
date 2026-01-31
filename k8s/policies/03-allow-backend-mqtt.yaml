@@ -16,57 +16,51 @@ spec:
   ingress:
   # 1. Internal Communication
   - from:
+    - podSelector: {}
+
+  - from:
     - podSelector:
         matchLabels:
-          app: darkseek-backend-ws
+          purpose: monitoring # Allows GKE/K8s health checks
     ports:
     - protocol: TCP
-      port: 8885
-  # 2. Allow DNS Responses (The Return Path)
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-    ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
+      port: 8080 # App health port (adjust if different)
 
+  # --- EGRESS: THE "NO-TIMEOUT" CONFIG ---
   egress:
-  # 1. DNS (No Placeholder needed)
+  # 1. DNS (IP-BASED TO BYPASS GKE WARDEN)
   - to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
     - ipBlock:
-        cidr: 169.254.0.0/16   # Essential for GKE Node-Local DNS
+        cidr: 0.0.0.0/0
     ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
 
-  # 2. Internal DB/Redis
+  # 2. INTERNAL INFRA (DB & REDIS)
   - to:
     - podSelector:
         matchLabels:
           app: darkseek-db
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
     - podSelector:
         matchLabels:
           app: darkseek-redis
     ports:
     - protocol: TCP
       port: 6379
-    - protocol: TCP
-      port: 5432
 
-  # 3. External MQTT (The 'Except' block)
+  # 3. EXTERNAL MQTT BROKER + CANARY
+  # We REMOVED 10.0.0.0/8 from the "except" list.
+  # This prevents the policy from dropping packets destined for the GKE NAT/Gateway.
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
         except:
-        - 10.0.0.0/8
         - 172.16.0.0/12
         - 192.168.0.0/16
     ports:
