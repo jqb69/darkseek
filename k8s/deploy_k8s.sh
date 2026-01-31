@@ -1578,6 +1578,7 @@ main() {
     # 2. Wipe stale DNS policy to prevent "Ghost" rules blocking initial pulls
     log "🧹 Wiping stale DNS policy for fresh IP injection..."
     kubectl delete netpol allow-dns-global -n "$NAMESPACE" --ignore-not-found
+    kubectl delete netpol allow-to-backend-mqtt -n "$NAMESPACE" --ignore-not-found
     # STEP 4: CREATE SECRET (Works because path is Absolute)
     log "🔑 Syncing TLS Secret..."
     kubectl create secret generic darkseek-mqtt-certs \
@@ -1611,11 +1612,12 @@ main() {
     # Proves the "pipes" are open while pods are Running but before Probes time out
     verify_cluster_network_integrity || fatal "Network Logic Failure. Stopping deployment."
     
+    sleep 5
     # --- PHASE 4: THE GATEKEEPER ---
     log "🚀 PHASE 4.5: MQTT Network Deep Daignostic.."
     run_deep_network_diagnostic || fatal "Network Diagnostic for MQTT Failure."
+    run_final_path_diagnostic
     
-
     # --- PHASE 5: STABILIZATION ---
     log "⏳ Waiting for Readiness Probes to pass..."
     wait_for_deployments
