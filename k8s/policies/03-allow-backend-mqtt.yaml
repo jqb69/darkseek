@@ -13,56 +13,49 @@ spec:
   - Ingress
   - Egress
   
+  # --- INGRESS: THE HARMLESS WILDCARD ---
   ingress:
-  # 1. Internal Communication
   - from:
-    - podSelector: {}
+    - podSelector: {} # Trust all internal pods in 'default' namespace
 
-  - from:
-    - podSelector:
-        matchLabels:
-          purpose: monitoring # Allows GKE/K8s health checks
-    ports:
-    - protocol: TCP
-      port: 8080 # App health port (adjust if different)
-
-  # --- EGRESS: THE "NO-TIMEOUT" CONFIG ---
+  # --- EGRESS: DYNAMIC & GKE-FRIENDLY ---
   egress:
-  # 1. DNS (IP-BASED TO BYPASS GKE WARDEN)
+  # 1. DNS (DYNAMICALLY INJECTED BY SCRIPT)
   - to:
     - ipBlock:
-        cidr: 0.0.0.0/0
+        cidr: DNS_IP_PLACEHOLDER/32 # <--- THE RESTORED HERO
     ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
 
-  # 2. INTERNAL INFRA (DB & REDIS)
+  # 2. GKE METADATA SERVER (Prevents Python handshakes from timing out)
+  - to:
+    - ipBlock:
+        cidr: 169.254.169.254/32
+    ports:
+    - protocol: TCP
+      port: 80
+
+  # 3. INTERNAL INFRA (DB & REDIS)
   - to:
     - podSelector:
         matchLabels:
           app: darkseek-db
-    ports:
-    - protocol: TCP
-      port: 5432
   - to:
     - podSelector:
         matchLabels:
           app: darkseek-redis
-    ports:
-    - protocol: TCP
-      port: 6379
 
-  # 3. EXTERNAL MQTT BROKER + CANARY
-  # We REMOVED 10.0.0.0/8 from the "except" list.
-  # This prevents the policy from dropping packets destined for the GKE NAT/Gateway.
+  # 4. EXTERNAL BROKER (The "No-Trap" Egress)
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
         except:
         - 172.16.0.0/12
         - 192.168.0.0/16
+        # 10.0.0.0/8 REMOVED to allow GKE routing
     ports:
     - protocol: TCP
       port: 1883
