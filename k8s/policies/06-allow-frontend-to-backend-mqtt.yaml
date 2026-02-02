@@ -1,36 +1,17 @@
-# k8s/07-allow-debug-to-backend.yaml
+# k8s/06-allow-debug-to-backend.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-debug-to-backend
+  name: allow-debug-nuclear
   namespace: default
 spec:
   podSelector:
     matchLabels:
-      app: debug-mqtt
+      app: debug-mqtt # ONLY for your debugger pod
   policyTypes:
+  - Ingress
   - Egress
+  ingress:
+  - {} # Open Inbound
   egress:
-  # Rule 1: MQTT broker (1883)
-  - to:
-    - podSelector:
-        matchLabels:
-          app: darkseek-backend-mqtt
-    ports:
-    - protocol: TCP
-      port: 1883
-  # Rule 2: DNS
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-      podSelector:
-        matchLabels:
-          k8s-app: coredns
-    ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
-  # Rule 3: Allow all else (temporary - remove later)
-  - {}
+  - {} # Open Outbound
