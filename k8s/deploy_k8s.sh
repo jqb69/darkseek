@@ -1579,6 +1579,8 @@ main() {
     log "🧹 Wiping stale DNS policy for fresh IP injection..."
     kubectl delete netpol allow-dns-global -n "$NAMESPACE" --ignore-not-found
     kubectl delete netpol allow-to-backend-mqtt -n "$NAMESPACE" --ignore-not-found
+    echo "[$(date +%T)] ⚠️  Wiping all stale NetworkPolicies..."
+    kubectl delete netpol --all -n "$NAMESPACE" --ignore-not-found
     # STEP 4: CREATE SECRET (Works because path is Absolute)
     log "🔑 Syncing TLS Secret..."
     kubectl create secret generic darkseek-mqtt-certs \
