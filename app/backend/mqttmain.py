@@ -97,15 +97,17 @@ class AsyncMQTTServer:
                         self.client = client
                         self._connected = True
                         logger.info("✅ MQTT connected via TLS")
+                        # 1. SUBSCRIBE FIRST
+                        await client.subscribe("chat/#")
                         
-                        # Set health signal
+                        # 2. SIGNAL HEALTH (K8s Readiness Probe now passes)
                         with open(self.health_file, "w") as f:
                             f.write("healthy")
-
-                        reconnect_interval = 2 # Reset backoff on success
-
-                        async with client.messages() as messages:
-                            await client.subscribe("chat/#")
+    
+                        reconnect_interval = 2 
+    
+                        # 3. LISTEN (Property access, NO parentheses)
+                        async with client.messages as messages:
                             async for message in messages:
                                 await self.on_message(client, message)
                                 
