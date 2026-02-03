@@ -2,7 +2,7 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-debug-nuclear
+  name: allow-mqtt-debug
   namespace: default
 spec:
   podSelector:
