@@ -8,39 +8,18 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: darkseek-backend-mqtt
+      app: darkseek-backend-mqtt  # TARGETING THE ACTUAL WORKER
   policyTypes:
   - Ingress
   - Egress
+  
+  # --- INGRESS: ALLOW INTERNAL ---
   ingress:
   - from:
-    - podSelector: {} # HARMLESS WILDCARD
-  egress:
-  # 1. THE "GKE INFRA" OVERRIDE
-  # We are whitelisting the entire 10.0.0.0/8 for EGRESS. 
-  # This is usually "taboo," but GKE uses this for the Node -> NAT Gateway path.
-  - to:
-    - ipBlock:
-        cidr: 10.0.0.0/8  # Allow GKE Internal Routing
-    - ipBlock:
-        cidr: 169.254.169.254/32 # Metadata
-  
-  # 2. INTERNAL APPS
-  - to:
-    - podSelector:
-        matchLabels:
-          app: darkseek-db
-    - podSelector:
-        matchLabels:
-          app: darkseek-redis
+    - podSelector: {} # Allows frontend and debugger to talk to this pod
 
-  # 3. THE PUBLIC INTERNET (MQTT BROKER)
-  # REMOVE THE EXCEPTIONS. If it's timing out, let's go Nuclear.
-  - to:
-    - ipBlock:
-        cidr: 0.0.0.0/0
-    ports:
-    - protocol: TCP
-      port: 1883
-    - protocol: TCP
-      port: 8883
+  # --- EGRESS: THE NUCLEAR MERGE ---
+  egress:
+  # This single rule replaces the lists for DNS, Redis, Postgres, and MQTT.
+  # It grants this pod the same "Diplomatic Immunity" as your debug-mqtt pod.
+  - {}
