@@ -9,20 +9,11 @@ spec:
   policyTypes:
   - Egress
   egress:
-  - ports:
+  - to:
+    - ipBlock:
+        cidr: DNS_IP_PLACEHOLDER/32
+    ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
-    to:
-    # 1. THE SNIPER: Match the specific IP (Inject via sed)
-    - ipBlock:
-        cidr: DNS_IP_PLACEHOLDER/32
-    # 2. THE IDENTITY: Match the namespace (GKE Standard)
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-    # 3. THE BACKUP: Match the pods directly (Standard K8s)
-    - podSelector:
-        matchLabels:
-          k8s-app: kube-dns
