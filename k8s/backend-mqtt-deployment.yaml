@@ -15,6 +15,10 @@ spec:
         app: darkseek-backend-mqtt
     spec:
       restartPolicy: Always
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "1"
       containers:
         - name: backend-mqtt
           image: us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/darkseek/darkseek-backend-mqtt:latest
