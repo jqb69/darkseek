@@ -585,8 +585,6 @@ wait_for_deployments_old() {
 }
 
 
-
-
 check_dns_resolution() {
   # Test if backend can see redis
   kubectl exec deployment/darkseek-backend-ws -- nslookup darkseek-redis &>/dev/null
@@ -1221,32 +1219,69 @@ monitor_handshake() {
 }
 
 check_mqtt_egress() {
-    # 1. Validate variables
-    if [ -z "$MQTT_BROKER_HOST" ]; then
-        log "⚠️ Skipping egress check: MQTT_BROKER_HOST not set."
-        return 0
+    # 1. Global Variable Sanity Check
+    if [[ -z "$GKE_DNS" ]]; then
+        log "⚠️ GKE_DNS was null, forcing default."
+        GKE_DNS="34.118.224.10"
     fi
-    
+
     local port="8883"
     local canary="network-gate-canary"
     
-    log "🔍 DIAGNOSTIC: Testing MQTT Egress to $MQTT_BROKER_HOST:$port..."
-    
-    # 2. IDENTIFY: Give canary the 'app' label so NetPol allows it
-    kubectl label pod "$canary" app=darkseek-backend-mqtt --overwrite >/dev/null 2>&1
-    
-    # 3. PROPAGATE: Wait for Calico CNI to notice the label change
-    sleep 3
+    log "📡 PHASE 4.1: Spawning Egress Canary (Retries: 5)..."
 
-    # 4. TEST: Use the actual variable, not a hardcoded string
-    if kubectl exec "$canary" -n "$NAMESPACE" -- timeout 5 nc -zv "$MQTT_BROKER_HOST" "$port" 2>&1; then
-        log "✅ GATE OPEN: $MQTT_BROKER_HOST:$port is reachable."
-        return 0
-    else
-        log "❌ GATE BLOCKED: Identity $canary (as darkseek-backend-mqtt) cannot reach $MQTT_BROKER_HOST."
-        log "👉 Check GKE VPC-level Egress Firewalls or Cloud NAT settings."
-        return 1
+    # 2. Ensure Canary is Running
+    if ! kubectl get pod "$canary" -n "$NAMESPACE" >/dev/null 2>&1; then
+        kubectl run "$canary" -n "$NAMESPACE" --image=python:3.11-slim --labels="app=darkseek-backend-mqtt" --command -- sleep 300
+        kubectl wait --for=condition=Ready pod/"$canary" -n "$NAMESPACE" --timeout=30s
     fi
+
+    # 3. Label and Sync
+    kubectl label pod "$canary" -n "$NAMESPACE" app=darkseek-backend-mqtt --overwrite >/dev/null 2>&1
+    
+    # 4. THE 5-ATTEMPT PYTHON PROBE
+    kubectl exec "$canary" -n "$NAMESPACE" -- python3 -c "
+import socket
+import time
+import sys
+
+def probe(ip, port, proto):
+    try:
+        s = socket.socket(socket.AF_INET, proto)
+        s.settimeout(2)
+        s.connect((ip, port))
+        return True
+    except:
+        return False
+
+def run_gauntlet():
+    target_dns = '$GKE_DNS'
+    target_mqtt = '$MQTT_BROKER_HOST'
+    mqtt_port = $port
+    
+    for i in range(1, 6):
+        print(f'   [Attempt {i}/5] Checking Gates...')
+        
+        # Check DNS (UDP) and MQTT (TCP)
+        dns_ok = probe(target_dns, 53, socket.SOCK_DGRAM)
+        mqtt_ok = probe(target_mqtt, mqtt_port, socket.SOCK_STREAM)
+        
+        if dns_ok and mqtt_ok:
+            print(f'✅ SUCCESS: All gates open (DNS: {target_dns}, MQTT: {target_mqtt})')
+            sys.exit(0)
+        
+        if not dns_ok: print(f'⚠️  DNS Gate ({target_dns}:53) CLOSED')
+        if not mqtt_ok: print(f'⚠️  MQTT Gate ({target_mqtt}:{mqtt_port}) CLOSED')
+        
+        if i < 5:
+            time.sleep(3) # Give the CNI time to breathe
+            
+    print('❌ FATAL: Network Gates failed to open after 5 attempts.')
+    sys.exit(1)
+
+run_gauntlet()
+"
+    return $?
 }
 
 check_pod_stability() {
