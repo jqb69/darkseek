@@ -1438,7 +1438,6 @@ asyncio.run(main())
 
 run_deep_network_diagnostic() {
     local target_app="darkseek-backend-mqtt"
-    # Identify the pod in the specific namespace
     local pod_name=$(kubectl get pods -n "$NAMESPACE" -l app=$target_app --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
     if [ -z "$pod_name" ]; then
@@ -1449,8 +1448,7 @@ run_deep_network_diagnostic() {
     log "🔍 PHASE 4.5: Deep Network Probe (5 Tries) on $pod_name"
     log "🎯 Target: $MQTT_BROKER_HOST:$MQTT_BROKER_PORT"
 
-    # We execute Python directly. Note the use of $MQTT_BROKER_HOST and $MQTT_BROKER_PORT 
-    # passed from your shell environment into the container.
+    # THE PYTHON CODE INJECTED INTO BASH
     kubectl exec -n "$NAMESPACE" "$pod_name" -- python3 -c "
 import asyncio
 import socket
@@ -1459,21 +1457,32 @@ import sys
 
 async def probe(attempt):
     try:
-        start = time.time()
-        # This performs both DNS resolution and the TCP Handshake
+        # 1. TEST DNS RESOLUTION (Port 53)
+        start_dns = time.time()
+        # This checks if we can even talk to the K8s DNS Service
+        resolved_ip = socket.gethostbyname('$MQTT_BROKER_HOST')
+        dns_time = time.time() - start_dns
+        print(f'   [Try {attempt}] 🌍 DNS SUCCESS: $MQTT_BROKER_HOST -> {resolved_ip} ({dns_time:.2f}s)')
+
+        # 2. TEST TCP HANDSHAKE (Port 8883)
+        start_tcp = time.time()
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection('$MQTT_BROKER_HOST', $MQTT_BROKER_PORT), 
+            asyncio.open_connection(resolved_ip, $MQTT_BROKER_PORT), 
             timeout=5.0
         )
-        elapsed = time.time() - start
-        print(f'   [Try {attempt}] ✅ GATE OPEN: Success in {elapsed:.2f}s')
+        tcp_time = time.time() - start_tcp
+        print(f'   [Try {attempt}] ✅ TCP SUCCESS: Port $MQTT_BROKER_PORT OPEN ({tcp_time:.2f}s)')
+        
         writer.close()
         await writer.wait_closed()
         return True
-    except asyncio.TimeoutError:
-        print(f'   [Try {attempt}] ❌ GATE CLOSED: Timeout (Firewall dropping packets)')
+
     except socket.gaierror:
-        print(f'   [Try {attempt}] ❌ DNS FAILURE: Could not resolve $MQTT_BROKER_HOST')
+        # This usually means Port 53/UDP is blocked by NetPol
+        print(f'   [Try {attempt}] ❌ DNS FAILURE: Cannot resolve $MQTT_BROKER_HOST')
+    except asyncio.TimeoutError:
+        # This means DNS worked, but the firewall is dropping packets to $MQTT_BROKER_PORT
+        print(f'   [Try {attempt}] ❌ TCP FAILURE: Timeout on $MQTT_BROKER_PORT (Gate is SHUT)')
     except Exception as e:
         print(f'   [Try {attempt}] ❌ ERROR: {type(e).__name__} - {e}')
     return False
@@ -1481,10 +1490,10 @@ async def probe(attempt):
 async def main():
     for i in range(1, 6):
         if await probe(i):
-            sys.exit(0) # Success exit code
+            sys.exit(0)
         if i < 5:
             await asyncio.sleep(2)
-    sys.exit(1) # Failure exit code
+    sys.exit(1)
 
 asyncio.run(main())
 " 
@@ -1494,7 +1503,9 @@ asyncio.run(main())
     if [ $diagnostic_result -eq 0 ]; then
         log "🏆 Network infrastructure verified for MQTT."
     else
-        log "💀 NetworkPolicy is blocking $MQTT_BROKER_HOST."
+        log "💀 NetworkPolicy is blocking traffic. Diagnosing now..."
+        # If it failed, show the user the NetPol that is currently applied
+        kubectl describe netpol -n "$NAMESPACE" -l app=$target_app || true
     fi
 
     return $diagnostic_result
