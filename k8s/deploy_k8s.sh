@@ -535,55 +535,6 @@ wait_for_deployments() {
   done
 }
 
-wait_for_deployments_old() {
-  local deployments=(
-    "darkseek-backend-mqtt"  
-    "darkseek-backend-ws"
-    "darkseek-frontend"
-    "darkseek-db"
-    "darkseek-redis"
-  )
-  local timeout=900
-
-  log "Waiting up to ${timeout}s for deployments to become Available..."
-  for dep in "${deployments[@]}"; do
-    log "=== Waiting for deployment/$dep ==="
-
-    # Start the background check and get its Process ID (PID)
-    check_pods_in_background "$dep" "$timeout" &
-    local bg_pid=$!
-
-    if kubectl wait --for=condition=available --timeout=${timeout}s "deployment/$dep" -n "$NAMESPACE"; then
-      log "Deployment $dep is Available."
-      kill "$bg_pid" 2>/dev/null || true
-      continue
-    fi
-
-    # ------------------------------------------------------------------
-    #  If we get here, the main wait command timed out.
-    # ------------------------------------------------------------------
-    kill "$bg_pid" 2>/dev/null || true
-    log "WARNING: Deployment '$dep' did NOT become Available – dumping full diagnostics..."
-
-    local pod_names
-    pod_names=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || echo "")
-    if [ -n "$pod_names" ]; then
-      for pod in $pod_names; do
-        log "--- Full diagnostics for pod: $pod ---"
-        kubectl describe pod "$pod" -n "$NAMESPACE" || true
-        log "Logs for pod '$pod' (last 200 lines, including previous container crash):"
-        # ADDED --previous flag to main log dump for CrashLoopBackOff analysis
-        kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 --previous || kubectl logs "$pod" -n "$NAMESPACE" --all-containers=true --tail=200 || log "Warning: Could not retrieve logs for pod '$pod'."
-        kubectl exec "$pod" -n "$NAMESPACE" -- python -c "import sys; print(sys.path)" || true
-      done
-    else
-      log "No pods found for label app=$dep"
-    fi
-
-    fatal "Deployment '$dep' failed to become ready – see diagnostics above."
-  done
-}
-
 
 check_dns_resolution() {
   # Test if backend can see redis
@@ -885,7 +836,7 @@ verify_dns_connectivity() {
   local attempt=1
   local ns="${NAMESPACE:-default}"
 
-  log "🧪 [SCOUT] Initializing DNS Canary for policy: $polname"
+  log "🧪 [SCOUT] Initializing DNS Canary: $canary_name"
 
   # 1. LIFECYCLE MANAGEMENT
   local status
@@ -899,32 +850,28 @@ verify_dns_connectivity() {
       log "♻️  Deploying fresh canary (Previous: $status)..."
       kubectl delete pod "$canary_name" -n "$ns" --grace-period=0 --force >/dev/null 2>&1
       sleep 2
-      kubectl run "$canary_name" -n "$ns" --image=busybox:1.36 --restart=Never --labels="purpose=monitoring,app=canary" --command -- sh -c "sleep 3600" >/dev/null 2>&1
+      # STICKING TO NAME, FIXING LABEL
+      kubectl run "$canary_name" -n "$ns" \
+        --image=busybox:1.36 \
+        --restart=Never \
+        --labels="app=darkseek-backend-mqtt" \
+        --command -- sh -c "sleep 3600" >/dev/null 2>&1
+      
       kubectl wait --for=condition=Ready "pod/$canary_name" -n "$ns" --timeout=120s || return 1
-      ;;
-    *)
-      log "⏳ Canary is $status. Waiting for Ready..."
-      kubectl wait --for=condition=Ready "pod/$canary_name" -n "$ns" --timeout=60s || return 1
       ;;
   esac
 
   # 2. THE PROBE LOOP
-  log "📡 Probing resolution via $canary_name..."
   while [ $attempt -le $max_attempts ]; do
-    local output
-    output=$(kubectl exec "$canary_name" -n "$ns" -- nslookup google.com 2>&1 || true)
-
-    if [[ "$output" == *"Address"* ]] || [[ "$output" == *"can't resolve"* ]]; then
-      log "✅ DNS Gate OPEN ($polname verified)."
+    if kubectl exec "$canary_name" -n "$ns" -- nslookup google.com >/dev/null 2>&1; then
+      log "✅ DNS Gate OPEN."
       return 0
     fi
-
-    log "⚠️  Attempt $attempt/$max_attempts: Gate likely closed (Output: ${output:0:30}...)"
-    [ $attempt -lt $max_attempts ] && sleep 10
+    log "⚠️  Attempt $attempt/$max_attempts: Gate closed..."
+    sleep 10
     ((attempt++))
   done
 
-  log "❌ DNS GATE BLOCKED: Scout failed."
   return 1
 }
 
@@ -1056,7 +1003,7 @@ apply_networking() {
   # 5. REMAINING POLICIES (Safe globbing)
   log "Applying remaining application rules..."
   # This syntax is safer for loops
-  for policy in "$p_dir"/0[67]-*.yaml "$p_dir"/allow-frontend*.yaml; do
+  for policy in "$p_dir"/0[6]-*.yaml "$p_dir"/allow-frontend*.yaml; do
     if [ -f "$policy" ]; then
        kubectl apply -f "$policy"
     fi
@@ -1219,67 +1166,28 @@ monitor_handshake() {
 }
 
 check_mqtt_egress() {
-    local port="8883"
-    local canary="network-gate-canary"
-    
-    log "📡 PHASE 4.1: Spawning Egress Canary (Retries: 5)..."
-    log "🎯 GKE_DNS Context: $GKE_DNS | Target: $MQTT_BROKER_HOST"
+  local canary_name="network-gate-canary"
+  local ns="${NAMESPACE:-default}"
+  local port="8883"
+  local attempt=1
 
-    # 1. Ensure Canary is Running with a guaranteed Python environment
-    if ! kubectl get pod "$canary" -n "$NAMESPACE" >/dev/null 2>&1; then
-        # Use alpine for smaller footprint and predictable binary paths
-        kubectl run "$canary" -n "$NAMESPACE" \
-            --image=python:3.11-alpine \
-            --labels="app=darkseek-backend-mqtt" \
-            --command -- sleep 300
-        
-        log "⏳ Waiting for canary to initialize..."
-        kubectl wait --for=condition=Ready pod/"$canary" -n "$NAMESPACE" --timeout=30s
+  log "🧪 [SCOUT] Probing MQTT Gate via $canary_name (Raw Socket Mode)"
+
+  while [ $attempt -le 5 ]; do
+    # Logic: Try to open a connection to the host/port. 
+    # 'timeout 2' prevents hanging. '>&3' is a shell trick to test the descriptor.
+    if kubectl exec "$canary_name" -n "$ns" -- sh -c "timeout 2 sh -c 'cat < /dev/null > /dev/tcp/$MQTT_BROKER_HOST/$port'" >/dev/null 2>&1; then
+      log "✅ MQTT Gate OPEN (Path to $MQTT_BROKER_HOST verified)."
+      return 0
     fi
 
-    # 2. Label Identity (Force sync for NetPol)
-    kubectl label pod "$canary" -n "$NAMESPACE" app=darkseek-backend-mqtt --overwrite >/dev/null 2>&1
-    
-    # Give the CNI (Calico) a moment to digest the new label
-    sleep 3 
+    log "⚠️  Attempt $attempt/5: MQTT Blocked or nc incompatible. Retrying..."
+    sleep 5
+    ((attempt++))
+  done
 
-    # 3. The 5-Attempt Gauntlet
-    # Calling the absolute path to bypass the "executable not found" idiot error
-    kubectl exec "$canary" -n "$NAMESPACE" -- /usr/local/bin/python3 -c "
-import socket
-import time
-import sys
-
-def probe_tcp(host, port):
-    try:
-        # Implicitly tests DNS (UDP/53)
-        target_ip = socket.gethostbyname(host)
-        # Explicitly tests MQTT (TCP/8883)
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(3)
-        s.connect((target_ip, port))
-        s.close()
-        return True, target_ip
-    except Exception as e:
-        return False, str(e)
-
-for i in range(1, 6):
-    print(f'   [Attempt {i}/5] Testing DNS + MQTT Path...')
-    success, detail = probe_tcp('$MQTT_BROKER_HOST', $port)
-    
-    if success:
-        print(f'✅ SUCCESS: Resolved {detail} and connected to $port')
-        sys.exit(0)
-    else:
-        print(f'⚠️  FAILED: {detail}')
-    
-    if i < 5:
-        time.sleep(5)
-
-print('❌ FATAL: Egress blocked after 5 tries.')
-sys.exit(1)
-"
-    return $?
+  log "❌ MQTT GATE BLOCKED: Scout failed."
+  return 1
 }
 
 check_pod_stability() {
