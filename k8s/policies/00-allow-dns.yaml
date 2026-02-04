@@ -14,7 +14,7 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-      to:
-        - ipBlock:
-            cidr: DNS_IP_PLACEHOLDER/32
-        - namespaceSelector: {} # Standard GKE fallback for internal DNS
+     # to:
+     #   - ipBlock:
+     #       cidr: DNS_IP_PLACEHOLDER/32
+     #   - namespaceSelector: {} # Standard GKE fallback for internal DNS
