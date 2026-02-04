@@ -1,4 +1,3 @@
----
 # k8s/policies/00-allow-dns.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -6,7 +5,7 @@ metadata:
   name: allow-dns-global
   namespace: default
 spec:
-  podSelector: {} # All pods in the namespace
+  podSelector: {} 
   policyTypes:
   - Egress
   egress:
@@ -16,7 +15,8 @@ spec:
     - protocol: TCP
       port: 53
     to:
-    - ipBlock:
-        cidr: DNS_IP_PLACEHOLDER/32  # This is the sniper rule
-    - ipBlock:
-        cidr: 0.0.0.0/0              # This is the fallback for safety (Port 53 ONLY)
+    # ❌ ipBlock: DNS_IP_PLACEHOLDER/32 <--- THIS IS THE TRAP
+    # ✅ DO THIS INSTEAD:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
