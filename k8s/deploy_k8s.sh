@@ -1170,47 +1170,61 @@ check_mqtt_egress() {
   local ns="${NAMESPACE:-default}"
   local port="8883"
   local target="$MQTT_BROKER_HOST"
-  
-  # 1. FIND THE REAL POD (Stop using the canary)
-  local pod_name
-  pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$ns" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  local max_attempts=3
+  local attempt=1
 
-  if [[ -z "$pod_name" ]]; then
-      log "❌ FATAL: No darkseek-backend-mqtt pods found. Cannot run diagnostic."
-      return 1
-  fi
+  log "🧪 [DIAGNOSTIC] Starting Unified Egress Probe (Max Attempts: $max_attempts)"
 
-  log "🧪 [DIAGNOSTIC] Probing REAL pod: $pod_name"
+  while [ $attempt -le $max_attempts ]; do
+    log "📡 Attempt $attempt/$max_attempts: Probing $target..."
 
-  # 2. THE THREE-TIER CHECK
-  # --- TCP ---
-  if kubectl exec "$pod_name" -n "$ns" -- sh -c "timeout 2 telnet $target $port </dev/null" 2>&1 | grep -q "Connected"; then
-      log "  ✅ [1/3] TCP PATH: OPEN"
-  else
-      log "  ❌ [1/3] TCP PATH: BLOCKED"
-      log "--- DUMPING LABELS & POLICIES ---"
-      kubectl get pod "$pod_name" -n "$ns" --show-labels
-      kubectl get netpol -n "$ns"
-      return 1
-  fi
+    # 1. FIND THE REAL POD
+    local pod_name
+    pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$ns" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
-  # --- DNS (SHELL) ---
-  if kubectl exec "$pod_name" -n "$ns" -- nslookup "$target" >/dev/null 2>&1; then
-      log "  ✅ [2/3] DNS SHELL: SUCCESS"
-  else
-      log "  ❌ [2/3] DNS SHELL: FAILED"
-      kubectl exec "$pod_name" -n "$ns" -- cat /etc/resolv.conf
-      return 1
-  fi
+    if [[ -z "$pod_name" ]]; then
+        log "  ⚠️ Attempt $attempt: No pods found yet. Waiting for deployment..."
+    else
+        log "  🔎 Target Pod: $pod_name"
 
-  # --- DNS (PYTHON) ---
-  if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('$target'))" >/dev/null 2>&1; then
-      log "  ✅ [3/3] PYTHON DNS: SUCCESS"
-      return 0
-  else
-      log "  ❌ [3/3] PYTHON DNS: FAILED (Check ndots: 1 setting)"
-      return 1
-  fi
+        # --- STEP 1: TCP ---
+        if kubectl exec "$pod_name" -n "$ns" -- sh -c "timeout 2 telnet $target $port </dev/null" 2>&1 | grep -q "Connected"; then
+            log "  ✅ [1/3] TCP PATH: OPEN"
+            
+            # --- STEP 2: DNS (SHELL) ---
+            if kubectl exec "$pod_name" -n "$ns" -- nslookup "$target" >/dev/null 2>&1; then
+                log "  ✅ [2/3] DNS SHELL: SUCCESS"
+                
+                # --- STEP 3: DNS (PYTHON) ---
+                if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('$target'))" >/dev/null 2>&1; then
+                    log "  ✅ [3/3] PYTHON DNS: SUCCESS"
+                    log "🚀 ALL SYSTEMS GO: Diagnostic Passed on attempt $attempt."
+                    return 0
+                else
+                    log "  ❌ [3/3] PYTHON DNS: FAILED (Check ndots: 1 setting)"
+                fi
+            else
+                log "  ❌ [2/3] DNS SHELL: FAILED"
+                kubectl exec "$pod_name" -n "$ns" -- cat /etc/resolv.conf
+            fi
+        else
+            log "  ❌ [1/3] TCP PATH: BLOCKED"
+            log "--- DEBUG DUMP ---"
+            kubectl get pod "$pod_name" -n "$ns" --show-labels
+            kubectl get netpol -n "$ns"
+        fi
+    fi
+
+    # Loop management
+    if [ $attempt -lt $max_attempts ]; then
+        log "⏳ Attempt $attempt failed. Retrying in 5s..."
+        sleep 5
+    fi
+    ((attempt++))
+  done
+
+  log "❌ FATAL: Diagnostic failed after $max_attempts attempts."
+  return 1
 }
 
 show_deployment_dashboard() {
