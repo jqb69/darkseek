@@ -1178,16 +1178,29 @@ check_mqtt_egress() {
   while [ $attempt -le $max_attempts ]; do
     log "📡 Attempt $attempt/$max_attempts: Probing $target..."
 
-    # 1. FIND THE REAL POD
+    # FIND THE NEWEST POD (handles restarts/replacements)
     local pod_name
-    pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$ns" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$ns" \
+      --sort-by='.metadata.creationTimestamp' \
+      -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null)
 
     if [[ -z "$pod_name" ]]; then
-        log "  ⚠️ Attempt $attempt: No pods found yet. Waiting for deployment..."
+        log "  ⚠️ Attempt $attempt: No pods found. Waiting..."
     else
-        log "  🔎 Target Pod: $pod_name"
+        # CHECK POD HEALTH FIRST
+        local status=$(kubectl get pod "$pod_name" -n "$ns" -o jsonpath='{.status.phase}')
+        log "  🔎 Target Pod: $pod_name (Status: $status)"
 
-        # --- STEP 1: TCP ---
+        if [[ "$status" != "Running" ]]; then
+            log "  ❌ POD IS NOT RUNNING (Status: $status)"
+            log "🛡️ ACTIVE POLICY YAML:"
+            kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml
+            log "📝 PREVIOUS LOGS (CRASH REASON):"
+            kubectl logs "$pod_name" -n "$ns" --previous --tail=20 || log "No logs."
+            ((attempt++)); sleep 5; continue
+        fi
+
+        # --- STEP 1: TCP (Using telnet - more reliable across images) ---
         if kubectl exec "$pod_name" -n "$ns" -- sh -c "timeout 2 telnet $target $port </dev/null" 2>&1 | grep -q "Connected"; then
             log "  ✅ [1/3] TCP PATH: OPEN"
             
@@ -1198,41 +1211,26 @@ check_mqtt_egress() {
                 # --- STEP 3: DNS (PYTHON) ---
                 if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('$target'))" >/dev/null 2>&1; then
                     log "  ✅ [3/3] PYTHON DNS: SUCCESS"
-                    log "🚀 ALL SYSTEMS GO: Diagnostic Passed on attempt $attempt."
+                    log "🚀 ALL SYSTEMS GO: Diagnostic Passed."
                     return 0
                 else
-                    log "  ❌ [3/3] PYTHON DNS: FAILED (Check ndots: 1 setting)"
+                    log "  ❌ [3/3] PYTHON DNS: FAILED (ndots: 1 issue)"
                 fi
             else
                 log "  ❌ [2/3] DNS SHELL: FAILED"
                 kubectl exec "$pod_name" -n "$ns" -- cat /etc/resolv.conf
             fi
         else
-            log "  ❌ [1/3] TCP PATH: BLOCKED (OR POD DIED)"
-            
-            # --- INSERTED DIAGNOSTIC DUMP START ---
-            log "🛡️ ACTIVE POLICY YAML:"
+            log "  ❌ [1/3] TCP PATH: BLOCKED"
+            log "🛡️ POLICY DUMP:"
             kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml
-            
-            log "📝 PREVIOUS LOGS for $pod_name (WHY DID IT CRASH?):"
-            kubectl logs "$pod_name" -n "$ns" --previous --tail=20 || log "⚠️ No previous logs available."
-            # --- INSERTED DIAGNOSTIC DUMP END ---
-
-            log "--- DEBUG DUMP ---"
-            kubectl get pod "$pod_name" -n "$ns" --show-labels
-            kubectl get netpol -n "$ns"
         fi
     fi
 
-    # Loop management
-    if [ $attempt -lt $max_attempts ]; then
-        log "⏳ Attempt $attempt failed. Retrying in 5s..."
-        sleep 5
-    fi
+    [ $attempt -lt $max_attempts ] && sleep 5
     ((attempt++))
   done
 
-  log "❌ FATAL: Diagnostic failed after $max_attempts attempts."
   return 1
 }
 
