@@ -107,9 +107,8 @@ class AsyncMQTTServer:
                         reconnect_interval = 2 
     
                         # 3. LISTEN (Property access, NO parentheses)
-                        async with client.messages as messages:
-                            async for message in messages:
-                                await self.on_message(client, message)
+                       async for message in client.messages:
+                             await self.on_message(client, message)
                                 
                 except (aiomqtt.MqttError, Exception) as e:
                     self._connected = False
