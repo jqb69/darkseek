@@ -5,15 +5,16 @@ metadata:
   name: allow-dns-global
   namespace: default
 spec:
-  podSelector: {} 
+  podSelector: {}
   policyTypes:
-  - Egress
+    - Egress
   egress:
-  - to:
-    - ipBlock:
-        cidr: DNS_IP_PLACEHOLDER/32
-    ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+      to:
+        - ipBlock:
+            cidr: DNS_IP_PLACEHOLDER/32
+        - namespaceSelector: {} # Standard GKE fallback for internal DNS
