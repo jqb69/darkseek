@@ -1167,57 +1167,50 @@ monitor_handshake() {
 }
 
 check_mqtt_egress() {
-  local canary="network-gate-canary"
   local ns="${NAMESPACE:-default}"
   local port="8883"
   local target="$MQTT_BROKER_HOST"
-  local attempt=1
+  
+  # 1. FIND THE REAL POD (Stop using the canary)
+  local pod_name
+  pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$ns" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
-  log "🧪 [DIAGNOSTIC] Unified Egress Probe starting on $canary..."
+  if [[ -z "$pod_name" ]]; then
+      log "❌ FATAL: No darkseek-backend-mqtt pods found. Cannot run diagnostic."
+      return 1
+  fi
 
-  while [ $attempt -le 5 ]; do
-    log "📡 Attempt $attempt/5: Probing $target:$port"
+  log "🧪 [DIAGNOSTIC] Probing REAL pod: $pod_name"
 
-    # 1. TCP LAYER (The Infrastructure Gate)
-    if kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 sh -c 'cat < /dev/null > /dev/tcp/$target/$port'" >/dev/null 2>&1 || \
-       kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 telnet $target $port </dev/null" 2>&1 | grep -q "Connected"; then
-        log "  ✅ [1/3] TCP PATH: OPEN"
-    else
-        log "  ❌ [1/3] TCP PATH: BLOCKED"
-        log "--- EMERGENCY NETWORK DUMP ---"
-        kubectl get netpol -n "$ns"
-        kubectl describe pod -l app=darkseek-backend-mqtt -n "$ns" | grep -A 5 "Network" || log "⚠️ No Network info in describe"
-        log "-------------------------------"
-        ((attempt++)); [ $attempt -le 5 ] && sleep 5; continue
-    fi
+  # 2. THE THREE-TIER CHECK
+  # --- TCP ---
+  if kubectl exec "$pod_name" -n "$ns" -- sh -c "timeout 2 telnet $target $port </dev/null" 2>&1 | grep -q "Connected"; then
+      log "  ✅ [1/3] TCP PATH: OPEN"
+  else
+      log "  ❌ [1/3] TCP PATH: BLOCKED"
+      log "--- DUMPING LABELS & POLICIES ---"
+      kubectl get pod "$pod_name" -n "$ns" --show-labels
+      kubectl get netpol -n "$ns"
+      return 1
+  fi
 
-    # 2. SHELL DNS LAYER (The OS Resolver)
-    if kubectl exec "$canary" -n "$ns" -- nslookup "$target" >/dev/null 2>&1; then
-        log "  ✅ [2/3] DNS SHELL: SUCCESS"
-    else
-        log "  ❌ [2/3] DNS SHELL: FAILED"
-        kubectl exec "$canary" -n "$ns" -- cat /etc/resolv.conf
-        ((attempt++)); sleep 5; continue
-    fi
+  # --- DNS (SHELL) ---
+  if kubectl exec "$pod_name" -n "$ns" -- nslookup "$target" >/dev/null 2>&1; then
+      log "  ✅ [2/3] DNS SHELL: SUCCESS"
+  else
+      log "  ❌ [2/3] DNS SHELL: FAILED"
+      kubectl exec "$pod_name" -n "$ns" -- cat /etc/resolv.conf
+      return 1
+  fi
 
-    # 3. PYTHON LAYER (The ndots:1 Environment)
-    if kubectl exec "$canary" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('$target'))" >/dev/null 2>&1; then
-        log "  ✅ [3/3] PYTHON DNS: SUCCESS"
-        log "🚀 ALL SYSTEMS GO: Diagnostic Passed."
-        return 0
-    else
-        log "  ❌ [3/3] PYTHON DNS: FAILED"
-        log "--- EMERGENCY DNS DUMP ---"
-        kubectl exec "$canary" -n "$ns" -- cat /etc/resolv.conf
-        kubectl get netpol allow-dns-global -o yaml
-        log "--------------------------"
-    fi
-
-    ((attempt++))
-    [ $attempt -le 5 ] && sleep 5
-  done
-
-  return 1
+  # --- DNS (PYTHON) ---
+  if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('$target'))" >/dev/null 2>&1; then
+      log "  ✅ [3/3] PYTHON DNS: SUCCESS"
+      return 0
+  else
+      log "  ❌ [3/3] PYTHON DNS: FAILED (Check ndots: 1 setting)"
+      return 1
+  fi
 }
 
 show_deployment_dashboard() {
