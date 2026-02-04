@@ -1219,39 +1219,44 @@ monitor_handshake() {
 }
 
 check_mqtt_egress() {
-    # GKE_DNS is global, but we use the service name 'kube-dns.kube-system' 
-    # in the probe to verify the namespaceSelector actually works.
     local port="8883"
     local canary="network-gate-canary"
     
     log "📡 PHASE 4.1: Spawning Egress Canary (Retries: 5)..."
     log "🎯 GKE_DNS Context: $GKE_DNS | Target: $MQTT_BROKER_HOST"
 
-    # 1. Ensure Canary is Running
+    # 1. Ensure Canary is Running with a guaranteed Python environment
     if ! kubectl get pod "$canary" -n "$NAMESPACE" >/dev/null 2>&1; then
+        # Use alpine for smaller footprint and predictable binary paths
         kubectl run "$canary" -n "$NAMESPACE" \
-            --image=python:3.11-slim \
+            --image=python:3.11-alpine \
             --labels="app=darkseek-backend-mqtt" \
             --command -- sleep 300
+        
+        log "⏳ Waiting for canary to initialize..."
         kubectl wait --for=condition=Ready pod/"$canary" -n "$NAMESPACE" --timeout=30s
     fi
 
-    # 2. Label Identity (Trigger for the NetPol)
+    # 2. Label Identity (Force sync for NetPol)
     kubectl label pod "$canary" -n "$NAMESPACE" app=darkseek-backend-mqtt --overwrite >/dev/null 2>&1
     
+    # Give the CNI (Calico) a moment to digest the new label
+    sleep 3 
+
     # 3. The 5-Attempt Gauntlet
-    kubectl exec "$canary" -n "$NAMESPACE" -- python3 -c "
+    # Calling the absolute path to bypass the "executable not found" idiot error
+    kubectl exec "$canary" -n "$NAMESPACE" -- /usr/local/bin/python3 -c "
 import socket
 import time
 import sys
 
 def probe_tcp(host, port):
     try:
-        # Use gethostbyname to test DNS (UDP/53) implicitly
-        # and socket.connect to test the Broker (TCP/8883) explicitly
+        # Implicitly tests DNS (UDP/53)
         target_ip = socket.gethostbyname(host)
+        # Explicitly tests MQTT (TCP/8883)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(2)
+        s.settimeout(3)
         s.connect((target_ip, port))
         s.close()
         return True, target_ip
@@ -1263,15 +1268,15 @@ for i in range(1, 6):
     success, detail = probe_tcp('$MQTT_BROKER_HOST', $port)
     
     if success:
-        print(f'✅ SUCCESS: Resolved to {detail} and connected to port $port')
+        print(f'✅ SUCCESS: Resolved {detail} and connected to $port')
         sys.exit(0)
     else:
         print(f'⚠️  FAILED: {detail}')
     
     if i < 5:
-        time.sleep(3)
+        time.sleep(5)
 
-print('❌ FATAL: Network Policy still blocking traffic after 5 tries.')
+print('❌ FATAL: Egress blocked after 5 tries.')
 sys.exit(1)
 "
     return $?
