@@ -16,45 +16,45 @@ spec:
     spec:
       restartPolicy: Always
       containers:
-      - name: backend-mqtt
-        image: us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/darkseek/darkseek-backend-mqtt:latest
-        envFrom:
-        - configMapRef:
-            name: darkseek-config
-        - secretRef:
-            name: darkseek-secrets
-        startupProbe:
-          exec:
-            command: ["cat", "/tmp/mqtt-healthy"]
-          initialDelaySeconds: 15
-          failureThreshold: 60
-          periodSeconds: 10
-        livenessProbe:
-          exec:
-            command: ["cat", "/tmp/mqtt-healthy"]
-          initialDelaySeconds: 30
-          periodSeconds: 60
-          timeoutSeconds: 5
-          failureThreshold: 5
-        readinessProbe:
-          exec:
-            command: ["cat", "/tmp/mqtt-healthy"]
-          initialDelaySeconds: 23
-          periodSeconds: 30
-          timeoutSeconds: 5
-          failureThreshold: 5
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "256Mi"
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
-        volumeMounts:
-        - name: certs-volume
-          mountPath: /etc/mosquitto/ssl # Forced path to match your code
-          readOnly: true    
+        - name: backend-mqtt
+          image: us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/darkseek/darkseek-backend-mqtt:latest
+          envFrom:
+            - configMapRef:
+                name: darkseek-config
+            - secretRef:
+                name: darkseek-secrets
+          startupProbe:
+            exec:
+              command: ["cat", "/tmp/mqtt-healthy"]
+            initialDelaySeconds: 15
+            failureThreshold: 60
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["cat", "/tmp/mqtt-healthy"]
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command: ["cat", "/tmp/mqtt-healthy"]
+            initialDelaySeconds: 23
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: certs-volume
+              mountPath: /etc/mosquitto/ssl
+              readOnly: true 
       volumes:
-      - name: certs-volume
-        secret:
-          secretName: darkseek-mqtt-certs 
+        - name: certs-volume
+          secret:
+            secretName: darkseek-mqtt-certs
