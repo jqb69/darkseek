@@ -1513,10 +1513,10 @@ run_final_path_diagnostic() {
 import os, socket
 
 paths = [
-    '/app/certs/ca.crt',        # Absolute App Path
-    './certs/ca.crt',           # Relative App Path
-    '/certs/ca.crt',            # K8s Secret Mount Path
-    'certs/ca.crt'              # Pure Relative
+    '/etc/mosquitto/ssl/ca.crt',        # Absolute App Path
+    './etc/mosquitto/ssl/ca.crt',           # Relative App Path
+    '/mosquitto/ssl/ca.crt',            # K8s Secret Mount Path
+    'etc/mosquitto/ssl/ca.crt'              # Pure Relative
 ]
 
 print('--- 📂 FILE AUDIT ---')
