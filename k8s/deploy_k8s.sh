@@ -1288,7 +1288,7 @@ sanitize_and_prepare_env() {
 
     # 5. Pod Cleanup & Storage Fixes
     dryrun_server
-    force_delete_pods "" "monitoring"
+    #force_delete_pods "" "monitoring"
     kill_stale_pods "darkseek-db"
 
     if kubectl get pvc postgres-pvc -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null | grep -q .; then
