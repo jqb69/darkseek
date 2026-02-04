@@ -1632,7 +1632,7 @@ main() {
     log "🧪 PHASE 5: Production Handshake Verification..."
     
     # This will now try 5 times over ~10-15 seconds before giving up
-    run_final_path_diagnostic
+    #run_final_path_diagnostic
     verify_mqtt_connectivity || fatal "💀 Final connectivity check failed after 5 attempts."
     
 
