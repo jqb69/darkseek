@@ -795,12 +795,12 @@ force_delete_pods() {
 template_dns_policies() {
     # 1. VALIDATE OR SET DEFAULT
     # Uses 34.118.224.10 if $1 is empty or unset
-    local GKE_DNS="${1:-34.118.224.10}" 
+    local gkedns="${1:-34.118.224.10}" 
     
     if [[ -z "$1" ]]; then
         log "⚠️ WARNING: GKE_DNS not provided. Falling back to default: $GKE_DNS"
     else
-        log "🎯 GKE_DNS identified: $GKE_DNS"
+        log "🎯 GKE_DNS identified: $gkedns"
     fi
 
     # TARGETS are locally scoped to this prep task
@@ -815,7 +815,7 @@ template_dns_policies() {
         # tr -d '\302\240\r' handles those invisible copy-paste characters
         cat "$FULL_PATH" | \
             tr -d '\302\240\r' | \
-            sed "s/DNS_IP_PLACEHOLDER/$GKE_DNS/g" | \
+            sed "s/DNS_IP_PLACEHOLDER/$gkedns/g" | \
             sed 's/^[[:space:]]*$//; /^$/d' > "${FULL_PATH}.tmp"
         
         # Verify the .tmp file actually exists and isn't empty
@@ -976,6 +976,7 @@ apply_networking() {
   GKE_DNS=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
   [[ -z "$GKE_DNS" ]] && GKE_DNS="34.118.224.10"
   log "🎯 GKE_DNS DETECTED: $GKE_DNS"
+  export GKE_DNS
 
   # 2. DO NOT FORCE THE COMMAND - Let it fail silently if Warden blocks it
   log "🏷️ Attempting to label kube-system (skipping if forbidden)..."
@@ -1166,27 +1167,32 @@ monitor_handshake() {
 }
 
 check_mqtt_egress() {
-  local canary_name="network-gate-canary"
+  local canary="network-gate-canary"
   local ns="${NAMESPACE:-default}"
   local port="8883"
-  local attempt=1
+  
+  log "📡 PHASE 4.1: Scout Egress Diagnostic (5 Retries)..."
 
-  log "🧪 [SCOUT] Probing MQTT Gate via $canary_name (Raw Socket Mode)"
+  for i in {1..5}; do
+    log "   [Attempt $i/5] Probing $MQTT_BROKER_HOST..."
 
-  while [ $attempt -le 5 ]; do
-    # Logic: Try to open a connection to the host/port. 
-    # 'timeout 2' prevents hanging. '>&3' is a shell trick to test the descriptor.
-    if kubectl exec "$canary_name" -n "$ns" -- sh -c "timeout 2 sh -c 'cat < /dev/null > /dev/tcp/$MQTT_BROKER_HOST/$port'" >/dev/null 2>&1; then
-      log "✅ MQTT Gate OPEN (Path to $MQTT_BROKER_HOST verified)."
+    # 1. TRY RAW SHELL SOCKET (Zero Dependencies)
+    if kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 sh -c 'cat < /dev/null > /dev/tcp/$MQTT_BROKER_HOST/$port'" >/dev/null 2>&1; then
+      log "✅ SUCCESS: Raw socket connected to $MQTT_BROKER_HOST"
       return 0
     fi
 
-    log "⚠️  Attempt $attempt/5: MQTT Blocked or nc incompatible. Retrying..."
+    # 2. FALLBACK TO TELNET (Last ditch effort)
+    if kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 telnet $MQTT_BROKER_HOST $port </dev/null" 2>&1 | grep -q "Connected"; then
+      log "✅ SUCCESS: Telnet connected to $MQTT_BROKER_HOST"
+      return 0
+    fi
+
+    log "⚠️ Attempt $i failed. Gate likely blocked by VPC Firewall or DNS latency."
     sleep 5
-    ((attempt++))
   done
 
-  log "❌ MQTT GATE BLOCKED: Scout failed."
+  log "❌ PHASE 4.1 FATAL: 5 Retries exhausted. Nuclear Policy is ignored by Infrastructure."
   return 1
 }
 
