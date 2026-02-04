@@ -1208,7 +1208,16 @@ check_mqtt_egress() {
                 kubectl exec "$pod_name" -n "$ns" -- cat /etc/resolv.conf
             fi
         else
-            log "  ❌ [1/3] TCP PATH: BLOCKED"
+            log "  ❌ [1/3] TCP PATH: BLOCKED (OR POD DIED)"
+            
+            # --- INSERTED DIAGNOSTIC DUMP START ---
+            log "🛡️ ACTIVE POLICY YAML:"
+            kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml
+            
+            log "📝 PREVIOUS LOGS for $pod_name (WHY DID IT CRASH?):"
+            kubectl logs "$pod_name" -n "$ns" --previous --tail=20 || log "⚠️ No previous logs available."
+            # --- INSERTED DIAGNOSTIC DUMP END ---
+
             log "--- DEBUG DUMP ---"
             kubectl get pod "$pod_name" -n "$ns" --show-labels
             kubectl get netpol -n "$ns"
