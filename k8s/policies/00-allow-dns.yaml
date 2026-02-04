@@ -15,8 +15,14 @@ spec:
     - protocol: TCP
       port: 53
     to:
-    # ❌ ipBlock: DNS_IP_PLACEHOLDER/32 <--- THIS IS THE TRAP
-    # ✅ DO THIS INSTEAD:
+    # 1. THE SNIPER: Match the specific IP (Inject via sed)
+    - ipBlock:
+        cidr: DNS_IP_PLACEHOLDER/32
+    # 2. THE IDENTITY: Match the namespace (GKE Standard)
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: kube-system
+    # 3. THE BACKUP: Match the pods directly (Standard K8s)
+    - podSelector:
+        matchLabels:
+          k8s-app: kube-dns
