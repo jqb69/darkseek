@@ -88,6 +88,7 @@ class AsyncMQTTServer:
                 try:
                     logger.info(f"Connecting to {MQTT_BROKER_URI}:{MQTT_PORT}...")
                     
+                    # === Corrected block in AsyncMQTTServer.start ===
                     async with aiomqtt.Client(
                         hostname=MQTT_BROKER_URI,
                         port=MQTT_PORT,
@@ -97,18 +98,19 @@ class AsyncMQTTServer:
                         self.client = client
                         self._connected = True
                         logger.info("✅ MQTT connected via TLS")
+                        
                         # 1. SUBSCRIBE FIRST
                         await client.subscribe("chat/#")
                         
-                        # 2. SIGNAL HEALTH (K8s Readiness Probe now passes)
+                        # 2. SIGNAL HEALTH
                         with open(self.health_file, "w") as f:
                             f.write("healthy")
     
-                        reconnect_interval = 2 
+                        reconnect_interval = 2  
     
-                        # 3. LISTEN (Property access, NO parentheses)
-                       async for message in client.messages:
-                             await self.on_message(client, message)
+                        # 3. LISTEN (Aligned exactly with the lines above)
+                        async for message in client.messages:
+                            await self.on_message(client, message)
                                 
                 except (aiomqtt.MqttError, Exception) as e:
                     self._connected = False
