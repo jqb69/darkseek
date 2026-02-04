@@ -1170,29 +1170,51 @@ check_mqtt_egress() {
   local canary="network-gate-canary"
   local ns="${NAMESPACE:-default}"
   local port="8883"
-  
-  log "📡 PHASE 4.1: Scout Egress Diagnostic (5 Retries)..."
+  local attempt=1
+  local max_attempts=5
 
-  for i in {1..5}; do
-    log "   [Attempt $i/5] Probing $MQTT_BROKER_HOST..."
+  log "🧪 [DIAGNOSTIC] Starting Unified Egress Probe on $canary..."
 
-    # 1. TRY RAW SHELL SOCKET (Zero Dependencies)
-    if kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 sh -c 'cat < /dev/null > /dev/tcp/$MQTT_BROKER_HOST/$port'" >/dev/null 2>&1; then
-      log "✅ SUCCESS: Raw socket connected to $MQTT_BROKER_HOST"
-      return 0
+  while [ $attempt -le $max_attempts ]; do
+    log "📡 Attempt $attempt/$max_attempts: Probing $MQTT_BROKER_HOST:$port"
+
+    # --- STEP 1: TCP PROBE (Is the gate open?) ---
+    # Try raw socket first, then telnet. 
+    if kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 sh -c 'cat < /dev/null > /dev/tcp/$MQTT_BROKER_HOST/$port'" >/dev/null 2>&1 || \
+       kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 telnet $MQTT_BROKER_HOST $port </dev/null" 2>&1 | grep -q "Connected"; then
+        log "  ✅ TCP PATH: OPEN (Nuclear Policy Working)"
+    else
+        log "  ❌ TCP PATH: BLOCKED (Check VPC Firewall or Nuclear Policy Syntax)"
+        ((attempt++)); [ $attempt -le $max_attempts ] && sleep 5; continue
     fi
 
-    # 2. FALLBACK TO TELNET (Last ditch effort)
-    if kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 telnet $MQTT_BROKER_HOST $port </dev/null" 2>&1 | grep -q "Connected"; then
-      log "✅ SUCCESS: Telnet connected to $MQTT_BROKER_HOST"
-      return 0
+    # --- STEP 2: DNS SYSTEM PROBE (Can the shell resolve?) ---
+    if kubectl exec "$canary" -n "$ns" -- nslookup "$MQTT_BROKER_HOST" >/dev/null 2>&1; then
+        log "  ✅ DNS SHELL: SUCCESS (resolv.conf is functional)"
+    else
+        log "  ❌ DNS SHELL: FAILED (00-allow-dns-global is blocking port 53)"
     fi
 
-    log "⚠️ Attempt $i failed. Gate likely blocked by VPC Firewall or DNS latency."
-    sleep 5
+    # --- STEP 3: PYTHON RESOLVER PROBE (The "Final Boss") ---
+    # This checks if Python's specific library is the one choking
+    local py_dns
+    py_dns=$(kubectl exec "$canary" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('$MQTT_BROKER_HOST'))" 2>/dev/null || echo "FAIL")
+    
+    if [[ "$py_dns" != "FAIL" ]]; then
+        log "  ✅ PYTHON DNS: SUCCESS (IP: $py_dns)"
+        log "🎉 ALL SYSTEMS GO: Network, DNS, and Python are synced."
+        return 0
+    else
+        log "  ❌ PYTHON DNS: FAILED (Python library cannot resolve host)"
+        log "  📝 DEBUG: resolv.conf content below:"
+        kubectl exec "$canary" -n "$ns" -- cat /etc/resolv.conf
+    fi
+
+    ((attempt++))
+    [ $attempt -le $max_attempts ] && sleep 5
   done
 
-  log "❌ PHASE 4.1 FATAL: 5 Retries exhausted. Nuclear Policy is ignored by Infrastructure."
+  log "❌ FATAL: Unified probe failed after $max_attempts attempts."
   return 1
 }
 
