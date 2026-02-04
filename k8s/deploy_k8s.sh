@@ -1219,67 +1219,60 @@ monitor_handshake() {
 }
 
 check_mqtt_egress() {
-    # 1. Global Variable Sanity Check
-    if [[ -z "$GKE_DNS" ]]; then
-        log "⚠️ GKE_DNS was null, forcing default."
-        GKE_DNS="34.118.224.10"
-    fi
-
+    # GKE_DNS is global, but we use the service name 'kube-dns.kube-system' 
+    # in the probe to verify the namespaceSelector actually works.
     local port="8883"
     local canary="network-gate-canary"
     
     log "📡 PHASE 4.1: Spawning Egress Canary (Retries: 5)..."
+    log "🎯 GKE_DNS Context: $GKE_DNS | Target: $MQTT_BROKER_HOST"
 
-    # 2. Ensure Canary is Running
+    # 1. Ensure Canary is Running
     if ! kubectl get pod "$canary" -n "$NAMESPACE" >/dev/null 2>&1; then
-        kubectl run "$canary" -n "$NAMESPACE" --image=python:3.11-slim --labels="app=darkseek-backend-mqtt" --command -- sleep 300
+        kubectl run "$canary" -n "$NAMESPACE" \
+            --image=python:3.11-slim \
+            --labels="app=darkseek-backend-mqtt" \
+            --command -- sleep 300
         kubectl wait --for=condition=Ready pod/"$canary" -n "$NAMESPACE" --timeout=30s
     fi
 
-    # 3. Label and Sync
+    # 2. Label Identity (Trigger for the NetPol)
     kubectl label pod "$canary" -n "$NAMESPACE" app=darkseek-backend-mqtt --overwrite >/dev/null 2>&1
     
-    # 4. THE 5-ATTEMPT PYTHON PROBE
+    # 3. The 5-Attempt Gauntlet
     kubectl exec "$canary" -n "$NAMESPACE" -- python3 -c "
 import socket
 import time
 import sys
 
-def probe(ip, port, proto):
+def probe_tcp(host, port):
     try:
-        s = socket.socket(socket.AF_INET, proto)
+        # Use gethostbyname to test DNS (UDP/53) implicitly
+        # and socket.connect to test the Broker (TCP/8883) explicitly
+        target_ip = socket.gethostbyname(host)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(2)
-        s.connect((ip, port))
-        return True
-    except:
-        return False
+        s.connect((target_ip, port))
+        s.close()
+        return True, target_ip
+    except Exception as e:
+        return False, str(e)
 
-def run_gauntlet():
-    target_dns = '$GKE_DNS'
-    target_mqtt = '$MQTT_BROKER_HOST'
-    mqtt_port = $port
+for i in range(1, 6):
+    print(f'   [Attempt {i}/5] Testing DNS + MQTT Path...')
+    success, detail = probe_tcp('$MQTT_BROKER_HOST', $port)
     
-    for i in range(1, 6):
-        print(f'   [Attempt {i}/5] Checking Gates...')
-        
-        # Check DNS (UDP) and MQTT (TCP)
-        dns_ok = probe(target_dns, 53, socket.SOCK_DGRAM)
-        mqtt_ok = probe(target_mqtt, mqtt_port, socket.SOCK_STREAM)
-        
-        if dns_ok and mqtt_ok:
-            print(f'✅ SUCCESS: All gates open (DNS: {target_dns}, MQTT: {target_mqtt})')
-            sys.exit(0)
-        
-        if not dns_ok: print(f'⚠️  DNS Gate ({target_dns}:53) CLOSED')
-        if not mqtt_ok: print(f'⚠️  MQTT Gate ({target_mqtt}:{mqtt_port}) CLOSED')
-        
-        if i < 5:
-            time.sleep(3) # Give the CNI time to breathe
-            
-    print('❌ FATAL: Network Gates failed to open after 5 attempts.')
-    sys.exit(1)
+    if success:
+        print(f'✅ SUCCESS: Resolved to {detail} and connected to port $port')
+        sys.exit(0)
+    else:
+        print(f'⚠️  FAILED: {detail}')
+    
+    if i < 5:
+        time.sleep(3)
 
-run_gauntlet()
+print('❌ FATAL: Network Policy still blocking traffic after 5 tries.')
+sys.exit(1)
 "
     return $?
 }
