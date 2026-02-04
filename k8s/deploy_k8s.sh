@@ -1170,70 +1170,54 @@ check_mqtt_egress() {
   local canary="network-gate-canary"
   local ns="${NAMESPACE:-default}"
   local port="8883"
+  local target="$MQTT_BROKER_HOST"
   local attempt=1
-  local max_attempts=5
 
-  log "🧪 [DIAGNOSTIC] Starting Unified Egress Probe on $canary..."
+  log "🧪 [DIAGNOSTIC] Unified Egress Probe starting on $canary..."
 
-  while [ $attempt -le $max_attempts ]; do
-    log "📡 Attempt $attempt/$max_attempts: Probing $MQTT_BROKER_HOST:$port"
+  while [ $attempt -le 5 ]; do
+    log "📡 Attempt $attempt/5: Probing $target:$port"
 
-    # --- STEP 1: TCP PROBE (Is the gate open?) ---
-    # Try raw socket first, then telnet. 
-    if kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 sh -c 'cat < /dev/null > /dev/tcp/$MQTT_BROKER_HOST/$port'" >/dev/null 2>&1 || \
-       kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 telnet $MQTT_BROKER_HOST $port </dev/null" 2>&1 | grep -q "Connected"; then
-        log "  ✅ TCP PATH: OPEN (Nuclear Policy Working)"
+    # 1. TCP LAYER (The Infrastructure Gate)
+    if kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 sh -c 'cat < /dev/null > /dev/tcp/$target/$port'" >/dev/null 2>&1 || \
+       kubectl exec "$canary" -n "$ns" -- sh -c "timeout 2 telnet $target $port </dev/null" 2>&1 | grep -q "Connected"; then
+        log "  ✅ [1/3] TCP PATH: OPEN"
     else
-        log "  ❌ TCP PATH: BLOCKED (Check VPC Firewall or Nuclear Policy Syntax)"
-        ((attempt++)); [ $attempt -le $max_attempts ] && sleep 5; continue
+        log "  ❌ [1/3] TCP PATH: BLOCKED"
+        log "--- EMERGENCY NETWORK DUMP ---"
+        kubectl get netpol -n "$ns"
+        kubectl describe pod -l app=darkseek-backend-mqtt -n "$ns" | grep -A 5 "Network" || log "⚠️ No Network info in describe"
+        log "-------------------------------"
+        ((attempt++)); [ $attempt -le 5 ] && sleep 5; continue
     fi
 
-    # --- STEP 2: DNS SYSTEM PROBE (Can the shell resolve?) ---
-    if kubectl exec "$canary" -n "$ns" -- nslookup "$MQTT_BROKER_HOST" >/dev/null 2>&1; then
-        log "  ✅ DNS SHELL: SUCCESS (resolv.conf is functional)"
+    # 2. SHELL DNS LAYER (The OS Resolver)
+    if kubectl exec "$canary" -n "$ns" -- nslookup "$target" >/dev/null 2>&1; then
+        log "  ✅ [2/3] DNS SHELL: SUCCESS"
     else
-        log "  ❌ DNS SHELL: FAILED (00-allow-dns-global is blocking port 53)"
+        log "  ❌ [2/3] DNS SHELL: FAILED"
+        kubectl exec "$canary" -n "$ns" -- cat /etc/resolv.conf
+        ((attempt++)); sleep 5; continue
     fi
 
-    # --- STEP 3: PYTHON RESOLVER PROBE (The "Final Boss") ---
-    # This checks if Python's specific library is the one choking
-    local py_dns
-    py_dns=$(kubectl exec "$canary" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('$MQTT_BROKER_HOST'))" 2>/dev/null || echo "FAIL")
-    
-    if [[ "$py_dns" != "FAIL" ]]; then
-        log "  ✅ PYTHON DNS: SUCCESS (IP: $py_dns)"
-        log "🎉 ALL SYSTEMS GO: Network, DNS, and Python are synced."
+    # 3. PYTHON LAYER (The ndots:1 Environment)
+    if kubectl exec "$canary" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('$target'))" >/dev/null 2>&1; then
+        log "  ✅ [3/3] PYTHON DNS: SUCCESS"
+        log "🚀 ALL SYSTEMS GO: Diagnostic Passed."
         return 0
     else
-        log "  ❌ PYTHON DNS: FAILED (Python library cannot resolve host)"
-        log "  📝 DEBUG: resolv.conf content below:"
+        log "  ❌ [3/3] PYTHON DNS: FAILED"
+        log "--- EMERGENCY DNS DUMP ---"
         kubectl exec "$canary" -n "$ns" -- cat /etc/resolv.conf
+        kubectl get netpol allow-dns-global -o yaml
+        log "--------------------------"
     fi
 
     ((attempt++))
-    [ $attempt -le $max_attempts ] && sleep 5
+    [ $attempt -le 5 ] && sleep 5
   done
 
-  log "❌ FATAL: Unified probe failed after $max_attempts attempts."
   return 1
-}
-
-check_pod_stability() {
-  log "🔍 Auditing Pod Stability..."
-  
-  # Fetch pods with restarts > 0
-  local unstable_pods
-  unstable_pods=$(kubectl get pods -n "$NAMESPACE" -o jsonpath='{range .items[?(@.status.containerStatuses[0].restartCount>0)]}{.metadata.name}{" (Restarts: "}{.status.containerStatuses[0].restartCount}{")\n"}{end}')
-
-  if [ -n "$unstable_pods" ]; then
-    echo -e "🚨 \033[0;31mSTABILITY ALERT: The following pods are crash-looping:\033[0m"
-    echo -e "$unstable_pods"
-    log "💡 Advice: Run 'kubectl describe pod <name>' to see the 'Last State: Terminated' reason."
-    return 1
-  else
-    log "✅ All pods are stable (0 restarts)."
-    return 0
-  fi
 }
 
 show_deployment_dashboard() {
