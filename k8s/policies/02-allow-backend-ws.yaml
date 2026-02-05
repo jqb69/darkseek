@@ -24,6 +24,8 @@ spec:
       ports:
       - protocol: TCP
         port: 8000
+      - protocol: TCP
+        port: 8443
   
   egress:
     # 1. DNS (GKE Tank Version - Requires labeled namespace)
@@ -59,7 +61,9 @@ spec:
             app: debug-mqtt
       ports:
       - protocol: TCP
-        port: 8000
+        port: 8000  
+      - protocol: TCP
+        port: 8443 # Added 
 
     # 3. Infrastructure (Redis + DB)
     - to:
