@@ -8,18 +8,45 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: darkseek-backend-mqtt  # TARGETING THE ACTUAL WORKER
-  policyTypes:
-  - Ingress
-  - Egress
-  
-  # --- INGRESS: ALLOW INTERNAL ---
+      app: darkseek-backend-mqtt
+  policyTypes: [Ingress, Egress]
   ingress:
-  - from:
-    - podSelector: {} # Allows frontend and debugger to talk to this pod
-
-  # --- EGRESS: THE NUCLEAR MERGE ---
+    - from:
+        - podSelector:
+            matchLabels:
+              app: darkseek-frontend
   egress:
-  # This single rule replaces the lists for DNS, Redis, Postgres, and MQTT.
-  # It grants this pod the same "Diplomatic Immunity" as your debug-mqtt pod.
-  - {}
+    # 1. DNS: Your sed script will target DNS_IP_PLACEHOLDER
+    - to:
+        - ipBlock:
+            cidr: DNS_IP_PLACEHOLDER/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # 2. External MQTT (Broker)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [169.254.169.254/32]
+      ports:
+        - protocol: TCP
+          port: 8883
+
+    # 3. Internal Database & Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: darkseek-db
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: darkseek-redis
+      ports:
+        - protocol: TCP
+          port: 6379
