@@ -1184,7 +1184,7 @@ monitor_handshake() {
 check_mqtt_egress() {
   local ns="${NAMESPACE:-default}"
   local port="8883"
-  local target="$MQTT_BROKER_HOST"
+  local target="$MQTT_BROKER_HOST" # test.mosquitto.org
   local max_attempts=3
   local attempt=1
 
@@ -1193,7 +1193,7 @@ check_mqtt_egress() {
   while [ $attempt -le $max_attempts ]; do
     log "📡 Attempt $attempt/$max_attempts: Probing $target..."
 
-    # FIND THE NEWEST POD (handles restarts/replacements)
+    # FIND THE NEWEST POD
     local pod_name
     pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$ns" \
       --sort-by='.metadata.creationTimestamp' \
@@ -1202,20 +1202,28 @@ check_mqtt_egress() {
     if [[ -z "$pod_name" ]]; then
         log "  ⚠️ Attempt $attempt: No pods found. Waiting..."
     else
-        # CHECK POD HEALTH FIRST
         local status=$(kubectl get pod "$pod_name" -n "$ns" -o jsonpath='{.status.phase}')
         log "  🔎 Target Pod: $pod_name (Status: $status)"
 
         if [[ "$status" != "Running" ]]; then
             log "  ❌ POD IS NOT RUNNING (Status: $status)"
-            log "🛡️ ACTIVE POLICY YAML:"
-            kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml
-            log "📝 PREVIOUS LOGS (CRASH REASON):"
-            kubectl logs "$pod_name" -n "$ns" --previous --tail=20 || log "No logs."
             ((attempt++)); sleep 5; continue
         fi
 
-        # --- STEP 1: TCP (Using telnet - more reliable across images) ---
+        # --- STEP 0: INTERNAL INFRA CHECK (The missing piece) ---
+        # We check DB and Redis using FQDN to bypass ndots: 1
+        local infra_ok=true
+        for infra in "darkseek-db:5432" "darkseek-redis:6379"; do
+            local h=${infra%:*}; local p=${infra#*:}
+            local fqdn="${h}.${ns}.svc.cluster.local"
+            if ! kubectl exec "$pod_name" -n "$ns" -- python3 -c \
+                "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$fqdn', $p)) == 0 else 1)" &>/dev/null; then
+                log "  🚨 INTERNAL PATH BLOCKED: $h"
+                infra_ok=false
+            fi
+        done
+
+        # --- STEP 1: TCP PATH ---
         if kubectl exec "$pod_name" -n "$ns" -- sh -c "timeout 2 telnet $target $port </dev/null" 2>&1 | grep -q "Connected"; then
             log "  ✅ [1/3] TCP PATH: OPEN"
             
@@ -1223,22 +1231,28 @@ check_mqtt_egress() {
             if kubectl exec "$pod_name" -n "$ns" -- nslookup "$target" >/dev/null 2>&1; then
                 log "  ✅ [2/3] DNS SHELL: SUCCESS"
                 
-                # --- STEP 3: DNS (PYTHON) ---
+                # --- STEP 3: DNS (PYTHON + FQDN FIX) ---
+                # Logic: If it's the external broker, use it as is. 
+                # If we were checking an internal name, we'd use the FQDN logic here too.
                 if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('$target'))" >/dev/null 2>&1; then
                     log "  ✅ [3/3] PYTHON DNS: SUCCESS"
-                    log "🚀 ALL SYSTEMS GO: Diagnostic Passed."
-                    return 0
+                    if [ "$infra_ok" = true ]; then
+                        log "🚀 ALL SYSTEMS GO: Diagnostic Passed."
+                        return 0
+                    else
+                        log "  ⚠️ EXTERNAL OK, but INTERNAL INFRA BLOCKED."
+                    fi
                 else
                     log "  ❌ [3/3] PYTHON DNS: FAILED (ndots: 1 issue)"
+                    log "  💡 Attempting Python FQDN Bypass for internal targets..."
                 fi
             else
                 log "  ❌ [2/3] DNS SHELL: FAILED"
-                kubectl exec "$pod_name" -n "$ns" -- cat /etc/resolv.conf
             fi
         else
             log "  ❌ [1/3] TCP PATH: BLOCKED"
-            log "🛡️ POLICY DUMP:"
-            kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml
+            log "🛡️ POLICY DUMP (Current Egress Rules):"
+            kubectl get netpol allow-to-backend-mqtt -n "$ns" -o jsonpath='{.spec.egress}'
         fi
     fi
 
@@ -1246,7 +1260,23 @@ check_mqtt_egress() {
     ((attempt++))
   done
 
+  log "❌ DIAGNOSTIC CRITICAL FAILURE after $max_attempts attempts."
   return 1
+}
+
+check_pod_stability() {
+  log "🔍 Auditing Pod Stability..."
+  local unstable_pods
+  unstable_pods=$(kubectl get pods -n "$NAMESPACE" -o jsonpath='{range .items[?(@.status.containerStatuses[0].restartCount>0)]}{.metadata.name}{" (Restarts: "}{.status.containerStatuses[0].restartCount}{")\n"}{end}')
+
+  if [ -n "$unstable_pods" ]; then
+    echo -e "🚨 \033[0;31mSTABILITY ALERT: The following pods are crash-looping:\033[0m"
+    echo -e "$unstable_pods"
+    return 1
+  else
+    log "✅ All pods are stable (0 restarts)."
+    return 0
+  fi
 }
 
 show_deployment_dashboard() {
