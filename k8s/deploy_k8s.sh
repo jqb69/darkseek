@@ -235,48 +235,58 @@ check_manifest_files() {
 }
 
 run_policy_audit() {
-  log "🔍 === SURGICAL POLICY AUDIT ==="
+  log "🔍 === SURGICAL POLICY AUDIT (Zero-Trust) ==="
 
-  declare -A audit_map=(
-    ["darkseek-backend-mqtt"]="allow-backend-mqtt|allow-dns"
-    ["darkseek-backend-ws"]="allow-backend-ws|allow-db-access|allow-redis-access|allow-dns"
-    ["darkseek-redis"]="allow-redis-access|allow-to-redis"
-    ["darkseek-db"]="allow-db-access|allow-to-db"
-    ["darkseek-frontend"]="allow-frontend"
+  # Map of App -> Target Services it MUST be able to reach
+  declare -A egress_map=(
+    ["darkseek-backend-mqtt"]="darkseek-db:5432 darkseek-redis:6379"
+    ["darkseek-backend-ws"]="darkseek-db:5432 darkseek-redis:6379 darkseek-backend-mqtt:8885"
+    ["darkseek-frontend"]="darkseek-backend-ws:8000"
   )
 
   local failed_audit=0
 
-  for app in "${!audit_map[@]}"; do
+  for app in "${!egress_map[@]}"; do
     local pod_name
     pod_name=$(kubectl get pod -l "app=${app}" -n "$NAMESPACE" \
       --field-selector=status.phase=Running \
       -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 
     if [ -z "$pod_name" ]; then
-      log "⚠️ $app: No running pod found. Skipping audit."
+      log "⚠️ $app: No pod found. Skipping."
       continue
     fi
 
-    local policy_list
-    policy_list=$(kubectl describe pod "$pod_name" -n "$NAMESPACE" | \
-      sed -n '/Network Policies:/,/^  [A-Z]/p' | \
-      grep -E "allow-|dns" | xargs || echo "NONE")
-
-    if echo "$policy_list" | grep -qE "${audit_map[$app]}"; then
-      log "✅ $app: Attached -> [ $policy_list ]"
+    log "🔎 Checking Egress for $app ($pod_name)..."
+    
+    # Check DNS First (The foundation of all paths)
+    if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c "import socket; socket.gethostbyname('google.com')" >/dev/null 2>&1; then
+       log "  ✅ DNS Resolution: WORKING"
     else
-      log "🚨 $app: MISMATCH!"
-      log "   Expected: ${audit_map[$app]}"
-      log "   Found:    $policy_list"
-      failed_audit=$((failed_audit + 1))
+       log "  ❌ DNS Resolution: BLOCKED"
+       failed_audit=$((failed_audit + 1))
     fi
+
+    # Check each required target in the map
+    for target in ${egress_map[$app]}; do
+      local host=${target%:*}; local port=${target#*:}
+      
+      # Use Python socket (Removes false negatives from missing 'nc')
+      if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
+        "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$host', $port)) == 0 else 1)" >/dev/null 2>&1; then
+        log "  ✅ Path to $host:$port: OPEN"
+      else
+        log "  🚨 Path to $host:$port: BLOCKED"
+        failed_audit=$((failed_audit + 1))
+      fi
+    done
   done
 
   if [ $failed_audit -eq 0 ]; then
-    log "✨ ALL POLICIES VERIFIED ON KERNEL LEVEL"
+    log "✨ SURGICAL AUDIT: ALL PATHS VERIFIED"
   else
-    log "⚠️ AUDIT FINISHED: $failed_audit mismatch(es) found."
+    log "⚠️ AUDIT FINISHED: $failed_audit path failure(s) found."
+    return 1
   fi
 }
 
