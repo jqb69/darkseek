@@ -330,8 +330,12 @@ check_pods_in_background() {
 
     # Get the status of the newest pod for this deployment
     local pod_status
-    pod_status=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" --sort-by='.metadata.creationTimestamp' -o=jsonpath='{.items[-1:].status.phase}' 2>/dev/null || echo "NoPods")
+    pod_status=$(kubectl get pods -n "$NAMESPACE" -l "app=$dep" \
+    --sort-by='.metadata.creationTimestamp' \
+    -o jsonpath='{.items[-1].status.phase}' 2>/dev/null)
 
+    # Fallback if the variable is empty (no pods found)
+    pod_status=${pod_status:-"NoPods"}
     if [[ "$pod_status" == "Failed" || "$pod_status" == "Unknown" ]]; then
       log "[BG CHECK for $dep] Pod entered '$pod_status' state. Dumping logs and exiting."
       # The main wait function will handle the full diagnostic dump.
@@ -1193,37 +1197,45 @@ check_mqtt_egress() {
   while [ $attempt -le $max_attempts ]; do
     log "📡 Attempt $attempt/$max_attempts: Probing $target..."
 
-    # FIND THE NEWEST POD
-    local pod_name
+    # --- FIX LINE 333: Avoid Broken Pipe & grab newest pod status ---
+    local pod_name pod_status
     pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$ns" \
       --sort-by='.metadata.creationTimestamp' \
       -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null)
+    
+    # Securely fetch status without piping into echo to avoid "Broken Pipe"
+    pod_status=$(kubectl get pod "$pod_name" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null)
+    pod_status=${pod_status:-"NoPods"}
 
-    if [[ -z "$pod_name" ]]; then
+    if [[ "$pod_status" == "NoPods" ]]; then
         log "  ⚠️ Attempt $attempt: No pods found. Waiting..."
     else
-        local status=$(kubectl get pod "$pod_name" -n "$ns" -o jsonpath='{.status.phase}')
-        log "  🔎 Target Pod: $pod_name (Status: $status)"
+        log "  🔎 Target Pod: $pod_name (Status: $pod_status)"
 
-        if [[ "$status" != "Running" ]]; then
-            log "  ❌ POD IS NOT RUNNING (Status: $status)"
+        if [[ "$pod_status" != "Running" ]]; then
+            log "  ❌ POD IS NOT RUNNING (Status: $pod_status)"
+            # If it succeeded, it's a job/canary that finished; if failed, we need logs
+            [[ "$pod_status" == "Failed" ]] && kubectl logs "$pod_name" -n "$ns" --tail=10
             ((attempt++)); sleep 5; continue
         fi
 
-        # --- STEP 0: INTERNAL INFRA CHECK (The missing piece) ---
-        # We check DB and Redis using FQDN to bypass ndots: 1
+        # --- STEP 0: INTERNAL INFRA CHECK (The ndots Fix) ---
+        # We force FQDN (5 dots) so Python doesn't fail on ndots: 1
         local infra_ok=true
         for infra in "darkseek-db:5432" "darkseek-redis:6379"; do
             local h=${infra%:*}; local p=${infra#*:}
             local fqdn="${h}.${ns}.svc.cluster.local"
-            if ! kubectl exec "$pod_name" -n "$ns" -- python3 -c \
+            
+            if kubectl exec "$pod_name" -n "$ns" -- python3 -c \
                 "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$fqdn', $p)) == 0 else 1)" &>/dev/null; then
+                log "  ✅ INTERNAL PATH: $h OPEN"
+            else
                 log "  🚨 INTERNAL PATH BLOCKED: $h"
                 infra_ok=false
             fi
         done
 
-        # --- STEP 1: TCP PATH ---
+        # --- STEP 1: TCP PATH (External Broker) ---
         if kubectl exec "$pod_name" -n "$ns" -- sh -c "timeout 2 telnet $target $port </dev/null" 2>&1 | grep -q "Connected"; then
             log "  ✅ [1/3] TCP PATH: OPEN"
             
@@ -1231,28 +1243,26 @@ check_mqtt_egress() {
             if kubectl exec "$pod_name" -n "$ns" -- nslookup "$target" >/dev/null 2>&1; then
                 log "  ✅ [2/3] DNS SHELL: SUCCESS"
                 
-                # --- STEP 3: DNS (PYTHON + FQDN FIX) ---
-                # Logic: If it's the external broker, use it as is. 
-                # If we were checking an internal name, we'd use the FQDN logic here too.
-                if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('$target'))" >/dev/null 2>&1; then
+                # --- STEP 3: DNS (PYTHON) ---
+                # target has dots (test.mosquitto.org), so Python handles it even with ndots: 1
+                if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('$target')" >/dev/null 2>&1; then
                     log "  ✅ [3/3] PYTHON DNS: SUCCESS"
                     if [ "$infra_ok" = true ]; then
                         log "🚀 ALL SYSTEMS GO: Diagnostic Passed."
                         return 0
                     else
-                        log "  ⚠️ EXTERNAL OK, but INTERNAL INFRA BLOCKED."
+                        log "  ⚠️ EXTERNAL OK, but INTERNAL INFRA BLOCKED. Check NetworkPolicies."
                     fi
                 else
-                    log "  ❌ [3/3] PYTHON DNS: FAILED (ndots: 1 issue)"
-                    log "  💡 Attempting Python FQDN Bypass for internal targets..."
+                    log "  ❌ [3/3] PYTHON DNS: FAILED (Strict ndots: 1 check failed)"
                 fi
             else
                 log "  ❌ [2/3] DNS SHELL: FAILED"
             fi
         else
-            log "  ❌ [1/3] TCP PATH: BLOCKED"
-            log "🛡️ POLICY DUMP (Current Egress Rules):"
-            kubectl get netpol allow-to-backend-mqtt -n "$ns" -o jsonpath='{.spec.egress}'
+            log "  ❌ [1/3] TCP PATH: BLOCKED to $target"
+            log "🛡️ ACTIVE POLICY EGRESS:"
+            kubectl get netpol allow-to-backend-mqtt -n "$ns" -o jsonpath='{.spec.egress}' || echo "No Policy Found"
         fi
     fi
 
