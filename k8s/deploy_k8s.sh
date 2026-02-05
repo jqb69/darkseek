@@ -1258,38 +1258,66 @@ check_ws_egress() {
   local max_attempts=3
   local attempt=1
 
-  log "🧪 [DIAGNOSTIC] Starting WebSocket Egress Probe (Max Attempts: $max_attempts)"
+  log "🧪 [DIAGNOSTIC] Starting WebSocket Egress Probe (3 Attempts Max)..."
 
   while [ $attempt -le $max_attempts ]; do
-    # Target selection: Get the newest RUNNING WS pod
+    log "📡 Attempt $attempt/$max_attempts: Probing WS Stack Connectivity..."
+
+    # 1. Target selection: Always grab the newest RUNNING WS pod
     local pod_name
     pod_name=$(kubectl get pods -n "$ns" -l app=darkseek-backend-ws --field-selector=status.phase=Running -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null)
 
     if [[ -z "$pod_name" ]]; then
-      log "  ⚠️ Attempt $attempt: No Running WS pods found."
+      log "  ⚠️ Attempt $attempt: No Running WS pods found. Waiting..."
     else
-      local infra_failed=0
-      # Infrastructure targets from your YAML: Redis (6379) and DB (5432)
-      for target in "darkseek-redis:6379" "darkseek-db:5432"; do
-        local host=${target%:*}; local port=${target#*:}
+      log "  🔎 Auditing Pod: $pod_name"
+
+      local failures=0
+      # Infrastructure Targets from your 02-allow-backend-ws.yaml
+      # Format: "Label:Host:Port"
+      local targets=(
+        "REDIS:darkseek-redis:6379"
+        "DB:darkseek-db:5432"
+        "MQTT-INTERNAL:darkseek-backend-mqtt:8885"
+      )
+      
+      for entry in "${targets[@]}"; do
+        local label=${entry%%:*}; local h_p=${entry#*:}; 
+        local host=${h_p%:*}; local port=${h_p#*:}
         local fqdn="${host}.${ns}.svc.cluster.local"
 
+        log "   🧪 [PROBE] WS -> $label ($fqdn:$port)..."
+        
+        # Surgical TCP Handshake via Python
         if kubectl exec "$pod_name" -n "$ns" -- python3 -c \
           "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$fqdn', $port)) == 0 else 1)" &>/dev/null; then
-          log "      🟢 SUCCESS: WS -> $host is OPEN"
+          log "      🟢 SUCCESS"
         else
-          log "      🔴 FAILURE: WS -> $host is BLOCKED"
-          ((infra_failed++))
+          log "      🔴 BLOCKED"
+          ((failures++))
         fi
       done
 
-      if [ $infra_failed -eq 0 ]; then
-        log "🚀 WS STACK VERIFIED."
+      # 2. DNS Resolution Check (Crucial for the 'ndots' and 'placeholder' issue)
+      log "   🧪 [PROBE] WS -> DNS Resolution (google.com)..."
+      if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('google.com')" &>/dev/null; then
+        log "      🟢 SUCCESS"
+      else
+        log "      🔴 DNS FAILURE"
+        ((failures++))
+      fi
+
+      if [ $failures -eq 0 ]; then
+        log "🚀 ALL WS EGRESS PATHS VERIFIED."
         return 0
       fi
     fi
-    ((attempt++)); [ $attempt -le $max_attempts ] && sleep 5
+
+    [ $attempt -lt $max_attempts ] && log "  ⏳ Retrying in 5s..." && sleep 5
+    ((attempt++))
   done
+
+  log "❌ WS DIAGNOSTIC CRITICAL FAILURE: Paths are still blocked."
   return 1
 }
 
