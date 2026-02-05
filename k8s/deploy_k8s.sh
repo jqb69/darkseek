@@ -1058,33 +1058,34 @@ wait_for_mqtt_health() {
   log "⏳ Stability Watch: Waiting for External Broker Handshake..."
 
   for i in {1..30}; do
-    local pod_name=$(kubectl get pod -l app="$app_label" -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    # 1. Find the Pod
+    local pod_name=$(kubectl get pod -l app="$app_label" -n "$NAMESPACE" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     
     if [[ -z "$pod_name" ]]; then
-      log "⏳ Attempt $i/30: Pod not scheduled..."
+      log "⏳ Attempt $i/30: No Running Pod found..."
       sleep 5; continue
     fi
 
-    # LOGICAL PROOF: Check DNS first
-    if ! kubectl exec "$pod_name" -n "$NAMESPACE" -c backend-mqtt -- nslookup test.mosquitto.org > /dev/null 2>&1; then
-        log "❌ DNS BLOCKED: Even with Ingress rules, DNS resolution is failing."
+    # 2. SURGICAL DNS PROBE (Verify Egress Path)
+    # We use 'getent hosts' or 'python' because nslookup isn't always installed in lean images
+    if ! kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c "import socket; socket.gethostbyname('test.mosquitto.org')" > /dev/null 2>&1; then
+        log "❌ DNS FAILURE: Pod cannot resolve external host. Check EGRESS rules in MQTT NetPol."
+        # Don't return 1 yet, let it retry in case CNI is still warming up
+    else
+        log "📡 DNS OK: External resolution is working."
     fi
 
-    # THE TRUTH: Check for the Handshake File
-    if kubectl exec "$pod_name" -n "$NAMESPACE" -c backend-mqtt -- test -f "$health_file" 2>/dev/null; then
+    # 3. THE TRUTH: Check for the Handshake File (Verify Ingress/App Logic)
+    if kubectl exec "$pod_name" -n "$NAMESPACE" -- test -f "$health_file" 2>/dev/null; then
       log "✅ SUCCESS: Handshake completed. External Broker Ingress is WORKING."
       return 0
     fi
 
-    # HEARTBEAT FEEDBACK
-    if [[ $((i % 5)) -eq 0 ]]; then
-       log "⏳ Attempt $i/30: Still waiting for TLS handshake... (Check Broker Ingress rules)"
-    fi
-
+    [[ $((i % 5)) -eq 0 ]] && log "⏳ Attempt $i/30: Handshake file ($health_file) not found yet..."
     sleep 5
   done
 
-  log "❌ FATAL TIMEOUT: The Broker never finished the handshake. Ingress is still the prime suspect."
+  log "❌ FATAL TIMEOUT: Check if Broker Port 8883 is allowed in EGRESS and if Pod has 'app: $app_label' label."
   return 1
 }
 
