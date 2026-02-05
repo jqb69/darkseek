@@ -877,19 +877,25 @@ verify_dns_connectivity() {
 
 verify_internal_connectivity() {
   local pod_name
-  pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$NAMESPACE" -o name | head -1)
+  # Extract just the name (e.g., darkseek-backend-mqtt-xxxx) without the 'pod/' prefix
+  pod_name=$(kubectl get pod -l app=darkseek-backend-mqtt -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}')
 
-  log "🧪 Testing path: MQTT -> Postgres (via $pod_name)..."
+  if [ -z "$pod_name" ]; then
+    log "⚠️ No MQTT pod found. Skipping connectivity test."
+    return 1
+  fi
 
-  # Use the real pod to run the test. 
-  # If 'nc' is missing, we use 'timeout' with bash sockets as a backup
-  if kubectl exec "$pod_name" -n "$NAMESPACE" -- sh -c "nc -zv darkseek-db 5432" >/dev/null 2>&1; then
-    log "✅ Internal path OPEN."
+  log "🧪 Testing internal path: MQTT -> Postgres (via $pod_name)..."
+
+  # We use Python3 to attempt a TCP connection to the database service
+  # s.connect_ex returns 0 on success, anything else is a failure
+  if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
+    "import socket; s = socket.socket(); s.settimeout(5); exit(0 if s.connect_ex(('darkseek-db', 5432)) == 0 else 1)"; then
+    log "✅ Internal path OPEN (TCP 5432 Reachable)."
     return 0
   else
-    log "🚨 Internal path BLOCKED or 'nc' missing in image."
-    # Dump logs for the developer to see if it was a timeout or a missing command
-    kubectl exec "$pod_name" -n "$NAMESPACE" -- sh -c "nc -zv darkseek-db 5432" || true
+    log "❌ Internal path BLOCKED. MQTT cannot reach darkseek-db:5432."
+    log "💡 Check if the 'allow-to-backend-mqtt' NetworkPolicy permits egress to the database."
     return 1
   fi
 }
@@ -1367,9 +1373,8 @@ deploy_core() {
     apply_with_retry backend-mqtt-service.yaml
     apply_with_retry frontend-service.yaml
 
-    log "⏳ 30s: Service endpoints ready..."
-    sleep 30
-
+    log "⏳ 45s: Service endpoints ready..."
+    sleep 45
     # --- Connectivity Telemetry ---
     log "📡 Running egress diagnostic (Background)..."
     check_mqtt_egress || log "⚠️ Warning: Initial egress check failed. Probes might fail until CNI stabilizes."
