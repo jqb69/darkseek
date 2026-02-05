@@ -1,4 +1,3 @@
----
 # k8s/policies/03-allow-backend-mqtt.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -16,10 +15,21 @@ spec:
             matchLabels:
               app: darkseek-frontend
   egress:
-    # 1. DNS: Your sed script will target DNS_IP_PLACEHOLDER
+    # 1. DNS: Placeholder for your sed script
     - to:
         - ipBlock:
             cidr: DNS_IP_PLACEHOLDER/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # 1b. DNS: Tank version (FIXED INDENTATION HERE)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
       ports:
         - protocol: UDP
           port: 53
