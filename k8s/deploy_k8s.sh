@@ -1253,6 +1253,62 @@ check_mqtt_egress() {
   return 1
 }
 
+check_ws_egress() {
+  local ns="${NAMESPACE:-default}"
+  local max_attempts=3
+  local attempt=1
+
+  log "🧪 [DIAGNOSTIC] Starting WebSocket Egress Probe (Max Attempts: $max_attempts)"
+
+  while [ $attempt -le $max_attempts ]; do
+    log "📡 Attempt $attempt/$max_attempts: Probing WS Stack..."
+
+    # 1. Target selection: Get the newest RUNNING WS pod
+    local pod_name
+    pod_name=$(kubectl get pods -n "$ns" -l app=darkseek-backend-ws --field-selector=status.phase=Running -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null)
+
+    if [[ -z "$pod_name" ]]; then
+      log "  ⚠️ Attempt $attempt: No Running WS pods found. Waiting for scheduler..."
+    else
+      log "  🔎 Target Pod: $pod_name"
+
+      # 2. Path Verification Loop
+      local infra_failed=0
+      local targets=("darkseek-db:5432" "darkseek-redis:6379")
+      
+      for t in "${targets[@]}"; do
+        local host=${t%:*}
+        local port=${t#*:}
+        local fqdn="${host}.${ns}.svc.cluster.local"
+
+        log "   🧪 [PROBE] WS -> $host:$port ($fqdn)..."
+        
+        # Surgical Python check
+        if kubectl exec "$pod_name" -n "$ns" -- python3 -c \
+          "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$fqdn', $p)) == 0 else 1)" &>/dev/null; then
+          log "      🟢 SUCCESS: $host is REACHABLE"
+        else
+          log "      🔴 FAILURE: $host is BLOCKED"
+          ((infra_failed++))
+        fi
+      done
+
+      # 3. Final Evaluation of Attempt
+      if [ $infra_failed -eq 0 ]; then
+        log "🚀 WS STACK VERIFIED: All internal paths are open."
+        return 0
+      fi
+    fi
+
+    # Incremental wait between tries
+    [ $attempt -lt $max_attempts ] && log "  ⏳ Retrying in 5s..." && sleep 5
+    ((attempt++))
+  done
+
+  log "❌ WS DIAGNOSTIC CRITICAL FAILURE after $max_attempts attempts."
+  return 1
+}
+
 check_pod_stability() {
   log "🔍 Auditing Pod Stability..."
   local unstable_pods
@@ -1406,6 +1462,7 @@ deploy_core() {
     # --- Connectivity Telemetry ---
     log "📡 Running egress diagnostic (Background)..."
     check_mqtt_egress || log "⚠️ Warning: Initial egress check failed. Probes might fail until CNI stabilizes."
+    check_ws_egress || log "⚠️ Warning: Initial egress check failed. Probes might fail until CNI stabilizes."
 }
 
 # --- Function : The Final Verification (Phase 5) ---
