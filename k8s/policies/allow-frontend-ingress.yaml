@@ -1,3 +1,4 @@
+---
 # k8s/policies/allow-frontend-ingress.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -17,3 +18,5 @@ spec:
     ports:
     - protocol: TCP
       port: 8501
+    - protocol: TCP
+      port: 8443      
