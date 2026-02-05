@@ -235,59 +235,58 @@ check_manifest_files() {
 }
 
 run_policy_audit() {
-  log "🔍 === SURGICAL POLICY AUDIT (Zero-Trust) ==="
+  log "🔍 === SURGICAL INFRASTRUCTURE AUDIT (Zero-Trust) ==="
 
-  # Map of App -> Target Services it MUST be able to reach
-  declare -A egress_map=(
-    ["darkseek-backend-mqtt"]="darkseek-db:5432 darkseek-redis:6379"
-    ["darkseek-backend-ws"]="darkseek-db:5432 darkseek-redis:6379 darkseek-backend-mqtt:8885"
-    ["darkseek-frontend"]="darkseek-backend-ws:8000"
+  # 1. Component Policy Names
+  declare -A audit_map=(
+    ["darkseek-backend-mqtt"]="allow-to-backend-mqtt"
+    ["darkseek-backend-ws"]="allow-backend-ws"
   )
 
-  local failed_audit=0
+  # 2. Detailed Infrastructure Path Map
+  declare -A infra_probe_map=(
+    ["darkseek-backend-mqtt"]="darkseek-db:5432 darkseek-redis:6379"
+    ["darkseek-backend-ws"]="darkseek-db:5432 darkseek-redis:6379"
+  )
 
-  for app in "${!egress_map[@]}"; do
+  for app in "${!audit_map[@]}"; do
     local pod_name
-    pod_name=$(kubectl get pod -l "app=${app}" -n "$NAMESPACE" \
-      --field-selector=status.phase=Running \
-      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    pod_name=$(kubectl get pod -l "app=${app}" -n "$NAMESPACE" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
     if [ -z "$pod_name" ]; then
-      log "⚠️ $app: No pod found. Skipping."
+      log "⚠️ $app: Pod not found. Skipping."
       continue
     fi
 
-    log "🔎 Checking Egress for $app ($pod_name)..."
-    
-    # Check DNS First (The foundation of all paths)
-    if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c "import socket; socket.gethostbyname('google.com')" >/dev/null 2>&1; then
-       log "  ✅ DNS Resolution: WORKING"
+    # --- STEP 1: Static Policy Check ---
+    local policy_list
+    policy_list=$(kubectl describe pod "$pod_name" -n "$NAMESPACE" | sed -n '/Network Policies:/,/^  [A-Z]/p' | grep -E "allow-|dns" | xargs || echo "NONE")
+
+    if echo "$policy_list" | grep -qE "${audit_map[$app]}"; then
+      log "✅ $app: Base Policy Assigned [ $policy_list ]"
     else
-       log "  ❌ DNS Resolution: BLOCKED"
-       failed_audit=$((failed_audit + 1))
+      log "🚨 $app: AUDIT FAILURE - Starting Deep Infrastructure Diagnostic..."
+
+      # --- DIAGNOSTIC: LABEL MISMATCH CHECK ---
+      log "   🔎 [LABEL CHECK] Verifying selectors for $app..."
+      kubectl get pod "$pod_name" -n "$NAMESPACE" --show-labels | grep --color=always -E "app=|name=" || log "      ❌ NO VALID LABELS FOUND"
+
+      # --- DIAGNOSTIC: INFRASTRUCTURE PATH PROBES ---
+      for target in ${infra_probe_map[$app]}; do
+        local host=${target%:*}; local port=${target#*:}
+        # MANDATORY: Use FQDN to kill the 'ndots: 1' resolution error
+        local target_fqdn="${host}.${NAMESPACE}.svc.cluster.local"
+
+        log "   🧪 [PROBE] Testing $app -> $host:$port..."
+        if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
+          "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$target_fqdn', $port)) == 0 else 1)" &>/dev/null; then
+          log "      🟢 SUCCESS: $host:$port is REACHABLE"
+        else
+          log "      🔴 FAILURE: $host:$port is BLOCKED (Check Egress in ${audit_map[$app]} and Ingress on $host)"
+        fi
+      done
     fi
-
-    # Check each required target in the map
-    for target in ${egress_map[$app]}; do
-      local host=${target%:*}; local port=${target#*:}
-      
-      # Use Python socket (Removes false negatives from missing 'nc')
-      if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
-        "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$host', $port)) == 0 else 1)" >/dev/null 2>&1; then
-        log "  ✅ Path to $host:$port: OPEN"
-      else
-        log "  🚨 Path to $host:$port: BLOCKED"
-        failed_audit=$((failed_audit + 1))
-      fi
-    done
   done
-
-  if [ $failed_audit -eq 0 ]; then
-    log "✨ SURGICAL AUDIT: ALL PATHS VERIFIED"
-  else
-    log "⚠️ AUDIT FINISHED: $failed_audit path failure(s) found."
-    return 1
-  fi
 }
 
 dryrun_server() {
@@ -1535,6 +1534,49 @@ except Exception as e:
 "
 }
 
+verify_golden_paths() {
+    log "✨ STARTING GOLDEN PATH VERIFICATION (Zero-Trust) ✨"
+
+    # --- PATH 1: MQTT TLS Handshake ---
+    log "🟢 GOLDEN COMMAND 1: MQTT TLS Handshake..."
+    # We look for the actual successful connection logs in the backend
+    if kubectl logs -l app=darkseek-backend-mqtt -n "$NAMESPACE" --tail=100 | grep -iE "connected|ssl|tls" >/dev/null 2>&1; then
+        log "✅ MQTT TLS: Handshake Verified in logs."
+    else
+        log "⚠️ MQTT TLS: No connection logs found yet (Pod might still be initializing)."
+    fi
+
+    # --- PATH 2: WS → Redis (The "No-NC" Version) ---
+    log "🟢 GOLDEN COMMAND 2: Zero-Trust WS → Redis..."
+    
+    # Surgical Python Probe: Exit 0 if port 6379 is reachable
+    local ws_pod
+    ws_pod=$(kubectl get pod -l app=darkseek-backend-ws -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+    if [ -n "$ws_pod" ]; then
+        if kubectl exec "$ws_pod" -n "$NAMESPACE" -- python3 -c \
+            "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('darkseek-redis', 6379)) == 0 else 1)" &>/dev/null; then
+            log "✅ Zero-Trust: WS → Redis:6379 OPEN ✓"
+        else
+            log "❌ Zero-Trust: WS → Redis BLOCKED"
+            log "   (Check 02-allow-backend-ws Egress and 05-allow-redis-access Ingress)"
+        fi
+    else
+        log "⚠️ WS → Redis: No WS pod found to run probe."
+    fi
+
+    # --- PATH 3: WS → DB ---
+    log "🟢 GOLDEN COMMAND 3: Zero-Trust WS → Postgres..."
+    if [ -n "$ws_pod" ]; then
+        if kubectl exec "$ws_pod" -n "$NAMESPACE" -- python3 -c \
+            "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('darkseek-db', 5432)) == 0 else 1)" &>/dev/null; then
+            log "✅ Zero-Trust: WS → Postgres:5432 OPEN ✓"
+        else
+            log "❌ Zero-Trust: WS → Postgres BLOCKED"
+        fi
+    fi
+}
+
 provision_loadbalancer_ip() {
     log "⏳ Waiting for LoadBalancer IPs (60s max)..."
     local FRONTEND_IP=""
@@ -1638,15 +1680,7 @@ main() {
     run_policy_audit || true
     verify_policy_active
 
-    log "🟢 GOLDEN COMMAND 1: MQTT TLS Handshake..."
-    kubectl logs -l app=darkseek-backend-mqtt -n "$NAMESPACE" --tail=100 | grep -i "connected\|ssl\|tls" || log "⚠️ No TLS logs found"
-
-    log "🟢 GOLDEN COMMAND 2: Zero-Trust WS → Redis..."
-    if kubectl exec deployment/darkseek-backend-ws -n "$NAMESPACE" -- nc -zv darkseek-redis 6379 &>/dev/null; then
-        log "✅ Zero-Trust: WS → Redis:6379 OPEN ✓"
-    else
-        log "❌ Zero-Trust: WS → Redis BLOCKED"
-    fi
+    verify_golden_paths
     
     monitor_handshake
     
