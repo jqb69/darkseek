@@ -19,6 +19,10 @@ spec:
     - to:
         - ipBlock:
             cidr: DNS_IP_PLACEHOLDER/32
+        - ipBlock:
+            cidr: 169.254.20.10/32  # The actual IP the Pod is hitting
+        - ipBlock:
+            cidr: 10.0.0.0/8
       ports:
         - protocol: UDP
           port: 53
