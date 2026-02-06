@@ -15,7 +15,7 @@ spec:
             matchLabels:
               app: darkseek-frontend
   egress:
-    # 1. DNS: Placeholder for your sed script
+    # 1. DNS: Surgical IP Strike (Fails if sed isn't fixed for 34.x IP)
     - to:
         - ipBlock:
             cidr: DNS_IP_PLACEHOLDER/32
@@ -25,7 +25,7 @@ spec:
         - protocol: TCP
           port: 53
     
-    # 1b. DNS: Tank version (FIXED INDENTATION HERE)
+    # 1b. DNS: Tank version (FAIL-SAFE - FIXED INDENTATION)
     - to:
         - namespaceSelector:
             matchLabels:
