@@ -1197,34 +1197,58 @@ monitor_handshake() {
 run_mqtt_failure_trace() {
     local pod="$1"
     local ns="$2"
-    log "🕵️ [TRACE] AUDITING LIVE CLUSTER STATE (Post-Deletion)..."
-
-    # TRACE 1: Live Policy Audit
-    # Since the .tmp is gone, we check what the K8s API actually stored.
-    log "   🔍 TRACE 1: Checking Live CIDRs in 'allow-to-backend-mqtt'..."
-    local live_cidr=$(kubectl get netpol allow-to-backend-mqtt -n "$ns" -o jsonpath='{.spec.egress[*].to[*].ipBlock.cidr}')
-    log "      📍 Live CIDRs found: $live_cidr"
+    local target_pol="allow-to-backend-mqtt"
+    local dns_target="34.118.224.10"
     
-    if [[ "$live_cidr" == *"DNS_IP_PLACEHOLDER"* ]]; then
-        log "      🚨 CRITICAL: The sed script FAILED. The cluster still has the placeholder!"
+    log "🕵️ [TRACE] AUDITING LIVE CLUSTER STATE..."
+
+    # 1. CHECK POLICY INTEGRITY
+    log "    🔍 TRACE 1: Verifying NetworkPolicy '$target_pol'..."
+    local live_yaml=$(kubectl get netpol "$target_pol" -n "$ns" -o yaml 2>/dev/null)
+    
+    if [[ "$live_yaml" == *"DNS_IP_PLACEHOLDER"* ]]; then
+        log "      🚨 CRITICAL: The sed script FAILED. Placeholder still exists!"
     fi
 
-    # TRACE 2: DNS Fail-safe Alignment
-    log "   🔍 TRACE 2: Verifying Rule 1b (kube-system) Selector..."
-    if kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | grep -A 5 "namespaceSelector" | grep -q "kubernetes.io/metadata.name"; then
-        log "      ✅ Fail-safe (Rule 1b) is syntactically active."
+    # 2. CHECK RULE 1b (THE SILENT KILLER)
+    log "    🔍 TRACE 2: Auditing Namespace Labels for Rule 1b..."
+    if kubectl get ns kube-system --show-labels | grep -q "kubernetes.io/metadata.name=kube-system"; then
+        log "      ✅ kube-system is correctly labeled."
     else
-        log "      🚨 ERROR: Fail-safe is missing or misaligned (Check Indentation)."
+        log "      🚨 ERROR: kube-system MISSING 'kubernetes.io/metadata.name'. Rule 1b is INACTIVE."
     fi
 
-    # TRACE 3: Physical Connectivity
-    log "   🔍 TRACE 3: Probing raw UDP 53 to 34.118.224.10..."
+    # 3. CHECK POD DNS CONFIGURATION
+    log "    🔍 TRACE 3: Checking Pod's actual DNS target (/etc/resolv.conf)..."
+    local pod_dns=$(kubectl exec "$pod" -n "$ns" -- cat /etc/resolv.conf | grep nameserver | awk '{print $2}')
+    log "      📍 Pod is targeting DNS IP: $pod_dns"
+    
+    if [[ "$pod_dns" != "$dns_target" ]]; then
+        log "      ⚠️ WARNING: Pod DNS ($pod_dns) does NOT match Rule 1 CIDR ($dns_target)."
+    fi
+
+    # 4. PHYSICAL CONNECTIVITY PROBE (UDP vs TCP)
+    log "    🔍 TRACE 4: Probing UDP/TCP 53 to $dns_target..."
+    
+    # UDP Probe
     if kubectl exec "$pod" -n "$ns" -- python3 -c \
-        "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2); s.connect(('34.118.224.10', 53)); print('connected')" &>/dev/null; then
-        log "      ✅ PORT 53 REACHABLE (Infrastructure allows the packet)."
+        "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2); s.connect(('$dns_target', 53)); s.send(b'\x00'); print('ok')" &>/dev/null; then
+        log "      ✅ UDP 53 OPEN."
     else
-        log "      ❌ PORT 53 REJECTED (Policy is dropping packets)."
+        log "      ❌ UDP 53 REJECTED."
     fi
+
+    # TCP Probe
+    if kubectl exec "$pod" -n "$ns" -- python3 -c \
+        "import socket; s=socket.socket(); s.settimeout(2); s.connect(('$dns_target', 53))" &>/dev/null; then
+        log "      ✅ TCP 53 OPEN."
+    else
+        log "      ❌ TCP 53 REJECTED."
+    fi
+
+    echo "--- 🕵️ DEBUG: FINAL DUMP ---"
+    kubectl get netpol "$target_pol" -n "$ns" -o yaml
+    echo "----------------------------"
 }
 
 check_mqtt_egress() {
