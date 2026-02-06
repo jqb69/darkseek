@@ -15,7 +15,7 @@ spec:
             matchLabels:
               app: darkseek-frontend
   egress:
-    # 1. DNS: Surgical IP Strike (Fails if sed isn't fixed for 34.x IP)
+    # 1. DNS: Surgical IP Strike (Templated)
     - to:
         - ipBlock:
             cidr: DNS_IP_PLACEHOLDER/32
@@ -25,7 +25,7 @@ spec:
         - protocol: TCP
           port: 53
     
-    # 1b. DNS: Tank version (FAIL-SAFE - FIXED INDENTATION)
+    # 1b. DNS: Tank version (FAIL-SAFE)
     - to:
         - namespaceSelector:
             matchLabels:
@@ -36,7 +36,7 @@ spec:
         - protocol: TCP
           port: 53
 
-    # 2. External MQTT (Broker)
+    # 2. External MQTT (Broker) - Port 8883 & 1883
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -44,6 +44,8 @@ spec:
       ports:
         - protocol: TCP
           port: 8883
+        - protocol: TCP  
+          port: 1883
 
     # 3. Internal Database & Redis
     - to:
