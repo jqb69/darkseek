@@ -844,7 +844,7 @@ template_dns_policies() {
         fi
     done
 
-    log "✅ Templates prepared with DNS IP: $GKE_DNS"
+    log "✅ Templates prepared with DNS IP: $gkedns"
     return 0
 }
 
@@ -1035,10 +1035,7 @@ apply_networking() {
     fi
   done
 
-  # 6. CLEANUP
-  sleep 2
-  rm -f "$p_dir"/*.tmp
-  log "🧹 Temp files purged."
+  
 
   # 7. VERIFY (The Final Gate)
   if ! verify_dns_connectivity; then
@@ -1047,7 +1044,12 @@ apply_networking() {
     kubectl describe netpol allow-dns-global # Matching the name in your 00-allow-dns.yaml
     fatal "Deployment halted to avoid application isolation."
   fi
-
+  
+  # 6. CLEANUP
+  sleep 2
+  rm -f "$p_dir"/*.tmp
+  log "🧹 Temp files purged."
+    
   log "✅ Policies: DNS → DB → Redis → MQTT → WS → Frontend ✅"
 }
 
@@ -1192,67 +1194,84 @@ monitor_handshake() {
   fi
 }
 
-check_mqtt_egress() {
-  local ns="${NAMESPACE:-default}"
-  local target="$MQTT_BROKER_HOST"
-  local max_attempts=3
-  local attempt=1
+run_mqtt_failure_trace() {
+    local pod="$1"
+    local ns="$2"
+    log "🕵️ [TRACE] AUDITING LIVE CLUSTER STATE (Post-Deletion)..."
 
-  log "🧪 [DIAGNOSTIC] Starting Unified Egress Probe (Max Attempts: $max_attempts)"
-
-  while [ $attempt -le $max_attempts ]; do
-    log "📡 Attempt $attempt/$max_attempts: Probing $target..."
-
-    # 1. ROBUST POD SELECTION
-    # We grab the most recent 'Running' pod. We use -1 to get the latest if multiple exist.
-    local pod_name
-    pod_name=$(kubectl get pods -n "$ns" -l app=darkseek-backend-mqtt --field-selector=status.phase=Running -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null)
-
-    if [[ -z "$pod_name" ]]; then
-      log "  ⚠️ Attempt $attempt: No Running MQTT pods found. Checking CNI/Scheduling..."
-      ((attempt++)); sleep 5; continue
+    # TRACE 1: Live Policy Audit
+    # Since the .tmp is gone, we check what the K8s API actually stored.
+    log "   🔍 TRACE 1: Checking Live CIDRs in 'allow-to-backend-mqtt'..."
+    local live_cidr=$(kubectl get netpol allow-to-backend-mqtt -n "$ns" -o jsonpath='{.spec.egress[*].to[*].ipBlock.cidr}')
+    log "      📍 Live CIDRs found: $live_cidr"
+    
+    if [[ "$live_cidr" == *"DNS_IP_PLACEHOLDER"* ]]; then
+        log "      🚨 CRITICAL: The sed script FAILED. The cluster still has the placeholder!"
     fi
 
-    log "  🔎 Target Pod: $pod_name"
+    # TRACE 2: DNS Fail-safe Alignment
+    log "   🔍 TRACE 2: Verifying Rule 1b (kube-system) Selector..."
+    if kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | grep -A 5 "namespaceSelector" | grep -q "kubernetes.io/metadata.name"; then
+        log "      ✅ Fail-safe (Rule 1b) is syntactically active."
+    else
+        log "      🚨 ERROR: Fail-safe is missing or misaligned (Check Indentation)."
+    fi
 
-    # 2. PARALLEL INTERNAL PROBE (The ndots: 1 bypass)
-    local infra_failed=0
-    # Map internal services to verify FQDN resolution and port connectivity
-    for infra in "darkseek-db:5432" "darkseek-redis:6379"; do
-      local h=${infra%:*}; local p=${infra#*:}
-      local fqdn="${h}.${ns}.svc.cluster.local"
+    # TRACE 3: Physical Connectivity
+    log "   🔍 TRACE 3: Probing raw UDP 53 to 34.118.224.10..."
+    if kubectl exec "$pod" -n "$ns" -- python3 -c \
+        "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2); s.connect(('34.118.224.10', 53)); print('connected')" &>/dev/null; then
+        log "      ✅ PORT 53 REACHABLE (Infrastructure allows the packet)."
+    else
+        log "      ❌ PORT 53 REJECTED (Policy is dropping packets)."
+    fi
+}
 
-      # We use a single Python call for both DNS and TCP to reduce 'exec' overhead
-      if kubectl exec "$pod_name" -n "$ns" -- python3 -c \
-        "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$fqdn', $p)) == 0 else 1)" &>/dev/null; then
-        log "  ✅ INTERNAL PATH: $h ($fqdn) OPEN"
-      else
-        log "  🚨 INTERNAL PATH BLOCKED: $h"
-        ((infra_failed++))
-      fi
+check_mqtt_egress() {
+    local ns="${NAMESPACE:-default}"
+    local app_label="darkseek-backend-mqtt"
+    local health_file="/tmp/mqtt-healthy"
+    local max_attempts=3
+    
+    log "🧪 [DIAGNOSTIC] Starting Unified MQTT Egress Audit..."
+
+    for i in $(seq 1 $max_attempts); do
+        log "📡 Attempt $i/$max_attempts: Probing Stack..."
+        
+        # Get the latest running pod
+        local pod_name=$(kubectl get pods -n "$ns" -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null)
+        
+        if [[ -z "$pod_name" ]]; then
+            log "  ⏳ Pod not ready. Waiting 5s..."
+            sleep 5; continue
+        fi
+
+        # 1. THE LOGICAL PROOF: DNS Check
+        # This proves Rule 1 (IP) and Rule 1b (Namespace)
+        log "   🧪 [PROBE 1] DNS Resolution (test.mosquitto.org)..."
+        if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('test.mosquitto.org')" &>/dev/null; then
+            log "      🟢 DNS SUCCESS"
+            
+            # 2. THE HANDSHAKE: Verify Broker Path (8883)
+            # This proves Rule 2 (External Egress)
+            log "   🧪 [PROBE 2] Broker Handshake ($health_file)..."
+            if kubectl exec "$pod_name" -n "$ns" -- test -f "$health_file" 2>/dev/null; then
+                log "      🏆 SUCCESS: MQTT Stack Verified."
+                return 0
+            else
+                log "      🔴 HANDSHAKE MISSING: App hasn't finished TLS or 8883 is blocked."
+            fi
+        else
+            log "      🔴 DNS BLOCKED: Invoking Failure Trace..."
+            run_mqtt_failure_trace "$pod_name" "$ns"
+        fi
+        sleep 5
     done
 
-    # 3. EXTERNAL DNS & HANDSHAKE PROBE
-    # Combined check: First resolve DNS, then try a quick socket connection
-    if kubectl exec "$pod_name" -n "$ns" -- python3 -c \
-      "import socket; socket.gethostbyname('$target'); s=socket.socket(); s.settimeout(3); exit(0 if s.connect_ex(('$target', 8883)) == 0 else 1)" &>/dev/null; then
-      
-      log "  ✅ [3/3] EXTERNAL MQTT: DNS & TCP SUCCESS"
-      
-      if [ $infra_failed -eq 0 ]; then
-        log "🚀 ALL SYSTEMS GO: Diagnostic Passed."
-        return 0
-      fi
-    else
-      log "  ❌ [3/3] EXTERNAL MQTT: FAILED (Check Egress NetPol/DNS)"
-    fi
-
-    ((attempt++)); [ $attempt -le $max_attempts ] && sleep 5
-  done
-
-  log "❌ DIAGNOSTIC CRITICAL FAILURE after $max_attempts attempts."
-  return 1
+    log "❌ FATAL: MQTT Egress Diagnostic failed after $max_attempts attempts."
+    return 1
 }
+
 
 check_ws_egress() {
   local ns="${NAMESPACE:-default}"
