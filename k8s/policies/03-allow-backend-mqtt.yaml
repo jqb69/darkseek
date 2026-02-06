@@ -14,13 +14,31 @@ spec:
         - podSelector:
             matchLabels:
               app: darkseek-frontend
+        - podSelector:
+            matchLabels:
+              app: darkseek-backend-ws
   egress:
     # 1. DNS: Surgical IP Strike (Templated)
+    # Rule 1: Master DNS (Placeholder)
     - to:
         - ipBlock:
             cidr: DNS_IP_PLACEHOLDER/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Rule 2: NodeLocal DNS (The 169.254 one)
+    - to:
         - ipBlock:
-            cidr: 169.254.20.10/32  # The actual IP the Pod is hitting
+            cidr: 169.254.20.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Rule 3: Internal VPC
+    - to:
         - ipBlock:
             cidr: 10.0.0.0/8
       ports:
@@ -29,7 +47,7 @@ spec:
         - protocol: TCP
           port: 53
     
-    # 1b. DNS: Tank version (FAIL-SAFE)
+    # 1b. DNS: Tank version (FAIL-SAFE for kube-system)
     - to:
         - namespaceSelector:
             matchLabels:
@@ -48,7 +66,7 @@ spec:
       ports:
         - protocol: TCP
           port: 8883
-        - protocol: TCP  
+        - protocol: TCP
           port: 1883
 
     # 3. Internal Database & Redis
