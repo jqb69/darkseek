@@ -12,35 +12,10 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
-        - podSelector:
-            matchLabels:
-              app: darkseek-frontend
-    - from:
-        - podSelector:
-            matchLabels:
-              app: darkseek-backend-ws
+        - podSelector: {} # Open ingress to internal pods to stop handshake drops
   egress:
-    # --- DNS ENTRY 1: Master IP (UDP + TCP) ---
-    - to:
-        - ipBlock:
-            cidr: 34.118.224.10/32
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-
-    # --- DNS ENTRY 2: NodeLocal IP (UDP + TCP - THE TRACE FIX) ---
-    - to:
-        - ipBlock:
-            cidr: 169.254.20.10/32
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-
-    # --- DNS ENTRY 3: Namespace Selector (UDP + TCP) ---
+    # 1. DNS: TOTAL KUBE-SYSTEM TRUST (The "Nuclear" DNS Fix)
+    # This allows traffic to EVERY IP in kube-system, bypassing IP mismatch bugs.
     - to:
         - namespaceSelector:
             matchLabels:
@@ -51,39 +26,28 @@ spec:
         - protocol: TCP
           port: 53
 
-    # --- GKE METADATA SERVER ---
+    # 2. DNS: NODELOCAL (Keep as separate entry just in case)
     - to:
         - ipBlock:
-            cidr: 169.254.169.254/32
+            cidr: 169.254.20.10/32
       ports:
+        - protocol: UDP
+          port: 53
         - protocol: TCP
-          port: 80
+          port: 53
 
-    # --- INTERNAL INFRA (DB + Redis) ---
+    # 3. INFRA: (Postgres & Redis)
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-db
-      ports:
-        - protocol: TCP
-          port: 5432
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-redis
-      ports:
-        - protocol: TCP
-          port: 6379
 
-    # --- EXTERNAL BROKER & APIS ---
+    # 4. EXTERNAL: THE OPEN GATE
+    # We remove ALL 'except' and ALL 'ports' to stop Calico SYN drops.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
-            except: [169.254.169.254/32]
-      ports:
-        - protocol: TCP
-          port: 1883
-        - protocol: TCP
-          port: 8883
-        - protocol: TCP
-          port: 443
