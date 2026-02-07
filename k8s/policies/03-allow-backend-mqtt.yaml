@@ -14,12 +14,12 @@ spec:
         - podSelector:
             matchLabels:
               app: darkseek-frontend
+    - from:
         - podSelector:
             matchLabels:
               app: darkseek-backend-ws
   egress:
-    # 1. DNS: Surgical IP Strike (Templated)
-    # Rule 1: Master DNS (Placeholder)
+    # 1. DNS SURGICAL: Master IP (Templated)
     - to:
         - ipBlock:
             cidr: DNS_IP_PLACEHOLDER/32
@@ -28,37 +28,18 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Rule 2: NodeLocal DNS (The 169.254 one)
+
+    # 2. DNS WIDE: Open Gate (Fail-safe for Port 53)
     - to:
         - ipBlock:
-            cidr: 169.254.20.10/32
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    # Rule 3: Internal VPC
-    - to:
-        - ipBlock:
-            cidr: 10.0.0.0/8
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    
-    # 1b. DNS: Tank version (FAIL-SAFE for kube-system)
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
+            cidr: 0.0.0.0/0
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
 
-    # 2. External MQTT (Broker) - Port 8883 & 1883
+    # 3. EXTERNAL MQTT: Broker Traffic
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -69,7 +50,7 @@ spec:
         - protocol: TCP
           port: 1883
 
-    # 3. Internal Database & Redis
+    # 4. DATABASE: Surgical Entry
     - to:
         - podSelector:
             matchLabels:
@@ -77,6 +58,8 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+
+    # 5. REDIS: Surgical Entry
     - to:
         - podSelector:
             matchLabels:
@@ -84,3 +67,14 @@ spec:
       ports:
         - protocol: TCP
           port: 6379
+
+    # 6. INTERNAL MQTT: Self-Reference for ClusterIP Service
+    - to:
+        - podSelector:
+            matchLabels:
+              app: darkseek-backend-mqtt
+      ports:
+        - protocol: TCP
+          port: 1883
+        - protocol: TCP
+          port: 8883
