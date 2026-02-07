@@ -1,5 +1,4 @@
 ---
-# k8s/policies/03-allow-backend-mqtt.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -11,16 +10,40 @@ spec:
       app: darkseek-backend-mqtt
   policyTypes: [Ingress, Egress]
   ingress:
-    - from: # ALLOW ALL INBOUND (Kills Ingress Isolation)
-        - podSelector: {}
+    # --- FIXED INGRESS (Allow both WS and Frontend) ---
+    - from:
+        - podSelector:
+            matchLabels:
+              app: darkseek-frontend
+
+    - from:
+        - podSelector:
+            matchLabels:
+              app: darkseek-backend-ws
   egress:
-    # 1. DNS: The "Triple Nuke" (IPs + Namespace)
+    # 1. DNS: Master IP (Surgical Entry 1)
     - to:
         - ipBlock:
             cidr: 34.118.224.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # 2. DNS: NodeLocal IP (Surgical Entry 2 - THE FIX)
+    - to:
         - ipBlock:
             cidr: 169.254.20.10/32
-        - namespaceSelector: # This allows traffic to kube-dns pods directly
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # DNS RULE 3: Kube-DNS Namespace (The Label-based backup)
+    - to:
+        - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
       ports:
@@ -28,9 +51,18 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+ 
+    # 4. DNS: Fail-safe Open Gate (Port 53 to ALL)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
 
-    # 2. INTERNAL APPS: (Redis, Postgres, MQTT-Self)
-    # We use podSelector here because ipBlock often fails for internal IPs
+    # 4. INTERNAL: Database (Postgres)
     - to:
         - podSelector:
             matchLabels:
@@ -38,6 +70,8 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+
+    # 5. INTERNAL: Redis
     - to:
         - podSelector:
             matchLabels:
@@ -45,26 +79,12 @@ spec:
       ports:
         - protocol: TCP
           port: 6379
-    - to:
-        - podSelector:
-            matchLabels:
-              app: darkseek-backend-mqtt
-      ports:
-        - protocol: TCP
-          port: 1883
-        - protocol: TCP
-          port: 8883
 
-    # 3. EXTERNAL WORLD: (The Broker)
-    # This must be SEPARATE from internal rules
+    # 6. EXTERNAL: MQTT Broker (The Tank)
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
-            except:
-              - 169.254.169.254/32
-              - 10.0.0.0/8    # Exclude internal range to force use of podSelectors above
-              - 172.16.0.0/12
-              - 192.168.0.0/16
+            except: [169.254.169.254/32]
       ports:
         - protocol: TCP
           port: 1883
