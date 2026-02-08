@@ -12,10 +12,9 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
-        - podSelector: {} # Open ingress to internal pods to stop handshake drops
+        - podSelector: {} # Keep this open so Diagnostic/Frontend/WS can all talk to it
   egress:
-    # 1. DNS: TOTAL KUBE-SYSTEM TRUST (The "Nuclear" DNS Fix)
-    # This allows traffic to EVERY IP in kube-system, bypassing IP mismatch bugs.
+    # --- DNS ENTRY 1: Kube-System Namespace ---
     - to:
         - namespaceSelector:
             matchLabels:
@@ -26,7 +25,7 @@ spec:
         - protocol: TCP
           port: 53
 
-    # 2. DNS: NODELOCAL (Keep as separate entry just in case)
+    # --- DNS ENTRY 2: NodeLocal DNS (IP ANCHOR) ---
     - to:
         - ipBlock:
             cidr: 169.254.20.10/32
@@ -36,18 +35,33 @@ spec:
         - protocol: TCP
           port: 53
 
-    # 3. INFRA: (Postgres & Redis)
-    - to:
-        - podSelector:
-            matchLabels:
-              app: darkseek-db
+    # --- INTERNAL INFRA: Redis & DB (SPECIFIC PODS, ALL PORTS) ---
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: darkseek-db
 
-    # 4. EXTERNAL: THE OPEN GATE
-    # We remove ALL 'except' and ALL 'ports' to stop Calico SYN drops.
+    # --- GKE METADATA SERVER ---
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+
+    # --- EXTERNAL WORLD ---
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
+            except: [169.254.169.254/32]
+      ports:
+        - protocol: TCP
+          port: 1883
+        - protocol: TCP
+          port: 8883
+        - protocol: TCP
+          port: 443
