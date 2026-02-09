@@ -7,16 +7,22 @@ metadata:
   namespace: default 
 spec:
   podSelector:
-    matchExpressions:        
+    matchExpressions:         
     - key: app
       operator: In
       values: ["darkseek-db"]
   policyTypes: [Ingress]
   ingress:
+  # Entry 1: WebSocket Backend
   - from:
     - podSelector:
         matchLabels:
           app: darkseek-backend-ws
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Entry 2: MQTT Backend
+  - from:
     - podSelector:
         matchLabels:
           app: darkseek-backend-mqtt
