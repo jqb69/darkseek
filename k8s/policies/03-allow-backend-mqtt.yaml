@@ -13,48 +13,53 @@ spec:
     - Ingress
     - Egress
   ingress:
+    # Rule: Allow WebSocket pod to connect to MQTT internally
     - from:
         - podSelector:
             matchLabels:
               app: darkseek-backend-ws
+      ports:
+        - protocol: TCP
+          port: 1883  # Standard MQTT Internal
   egress:
-    # --- RULE 1: DNS (Fixed Placeholder) ---
+    # RULE 1: DNS (Fixed IPs from Trace)
     - to:
-        - ipBlock:
-            cidr: DNS_IP_PLACEHOLDER/32
-        - ipBlock:
-            cidr: 169.254.20.10/32
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
+        - ipBlock: {cidr: 169.254.20.10/32}
+        - ipBlock: {cidr: 34.118.224.10/32}
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
 
-    # --- RULE 2: INTERNAL DB (Phase 5.5 Check) ---
-    # The Auditor checks Rule #2 for the DB. It MUST be the 2nd item.
+    # RULE 2: DATABASE (Explicit Postgres Port)
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-db
+      ports:
+        - protocol: TCP
+          port: 5432
 
-    # --- RULE 3: EXTERNAL MQTT (Phase 5.5 Check) ---
-    # The Auditor checks Rule #3 for 0.0.0.0/0. It MUST be the 3rd item.
+    # RULE 3: EXTERNAL BROKER (Explicit TLS Port)
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
-            except:
-              - 169.254.169.254/32
+            except: [169.254.169.254/32]
+      ports:
+        - protocol: TCP
+          port: 8883
 
-    # --- RULE 4: REDIS ---
+    # RULE 4: REDIS (Explicit Redis Port)
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-redis
+      ports:
+        - protocol: TCP
+          port: 6379
 
-    # --- RULE 5: METADATA ---
+    # RULE 5: METADATA (Explicit HTTP Port)
     - to:
         - ipBlock:
             cidr: 169.254.169.254/32
