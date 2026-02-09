@@ -20,12 +20,14 @@ spec:
               app: darkseek-backend-ws
       ports:
         - protocol: TCP
+          port: 8885  
+        - protocol: TCP
           port: 1883  # Standard MQTT Internal
   egress:
     # RULE 1: DNS (Fixed IPs from Trace)
     - to:
-        - ipBlock: {cidr: 169.254.20.10/32}
-        - ipBlock: {cidr: 34.118.224.10/32}
+        - ipBlock: {cidr: 169.254.20.10/32}  # NodeLocal DNS IP from your trace
+        - ipBlock: {cidr: 34.118.224.10/32} # Master DNS IP
       ports:
         - protocol: UDP
           port: 53
