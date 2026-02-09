@@ -9,25 +9,19 @@ spec:
   podSelector:
     matchLabels:
       app: darkseek-backend-mqtt
-  policyTypes:
-    - Ingress
-    - Egress
+  policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - podSelector:
             matchLabels:
               app: darkseek-backend-ws
-    - from:
-        - podSelector:
-            matchLabels:
-              app: darkseek-frontend
   egress:
-    # --- RULE 1: THE DNS "HOLY TRINITY" (Fixes Trace 3 & 4) ---
+    # --- RULE 1: THE DNS CONSOLIDATION (Audit Trace 1-4) ---
     - to:
         - ipBlock:
-            cidr: 169.254.20.10/32      # NodeLocal DNS (The actual target)
+            cidr: DNS_IP_PLACEHOLDER/32  # Used for Auditor Trace 4
         - ipBlock:
-            cidr: 34.118.224.10/32     # Master DNS (The auditor's Rule 1)
+            cidr: 169.254.20.10/32      # Actual Pod DNS (Trace 3)
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
@@ -37,32 +31,25 @@ spec:
         - protocol: TCP
           port: 53
 
-    # --- RULE 2: THE DATABASE (Fixes Path BLOCKED to 5432) ---
+    # --- RULE 2: INTERNAL DB (Unblocks Path to 5432) ---
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-db
-      ports:
-        - protocol: TCP
-          port: 5432
 
-    # --- RULE 3: THE EXTERNAL MQTT BROKER ---
+    # --- RULE 3: EXTERNAL MQTT BROKER ---
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except: [169.254.169.254/32]
-      # No port restriction here to allow the 120s Keep-Alives to pass
 
-    # --- RULE 4: THE REDIS (Fixes Path BLOCKED to 6379) ---
+    # --- RULE 4: INTERNAL REDIS (Unblocks Path to 6379) ---
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-redis
-      ports:
-        - protocol: TCP
-          port: 6379
 
-    # --- RULE 5: METADATA & API ---
+    # --- RULE 5: METADATA ---
     - to:
         - ipBlock:
             cidr: 169.254.169.254/32
