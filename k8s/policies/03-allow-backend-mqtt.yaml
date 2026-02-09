@@ -9,9 +9,10 @@ spec:
   podSelector:
     matchLabels:
       app: darkseek-backend-mqtt
-  policyTypes: [Ingress, Egress]
+  policyTypes:
+    - Ingress
+    - Egress
   ingress:
-    # --- LOGICAL OR: Each pod gets its own dash to avoid the "AND" trap ---
     - from:
         - podSelector:
             matchLabels:
@@ -21,43 +22,47 @@ spec:
             matchLabels:
               app: darkseek-frontend
   egress:
-    # --- RULE 1: THE DNS CLUSTER (Must contain all DNS targets) ---
+    # --- RULE 1: THE DNS "HOLY TRINITY" (Fixes Trace 3 & 4) ---
     - to:
         - ipBlock:
-            cidr: 169.254.20.10/32  # Rule 1a: Matches Pod DNS
-        - namespaceSelector:        # Rule 1b: Matches kube-system audit
+            cidr: 169.254.20.10/32      # NodeLocal DNS (The actual target)
+        - ipBlock:
+            cidr: 34.118.224.10/32     # Master DNS (The auditor's Rule 1)
+        - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
-        - ipBlock:
-            cidr: 34.118.224.10/32  # Rule 1c: Master DNS for Trace 4
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
 
-    # --- RULE 2: DB EGRESS (Per Audit Phase 5.5) ---
+    # --- RULE 2: THE DATABASE (Fixes Path BLOCKED to 5432) ---
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-db
+      ports:
+        - protocol: TCP
+          port: 5432
 
-    # --- RULE 3: EXTERNAL MQTT (Per Audit Phase 5.5 - NO PORTS) ---
+    # --- RULE 3: THE EXTERNAL MQTT BROKER ---
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except: [169.254.169.254/32]
-      ports:
-        - protocol: TCP
-        - protocol: UDP
+      # No port restriction here to allow the 120s Keep-Alives to pass
 
-    # --- RULE 4: REDIS ---
+    # --- RULE 4: THE REDIS (Fixes Path BLOCKED to 6379) ---
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-redis
+      ports:
+        - protocol: TCP
+          port: 6379
 
-    # --- RULE 5: GKE METADATA ---
+    # --- RULE 5: METADATA & API ---
     - to:
         - ipBlock:
             cidr: 169.254.169.254/32
