@@ -1,5 +1,5 @@
 ---
-# k8s/policies/03-allow-backend-mqtt.yaml
+# 03-allow-to-backend-mqtt.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -9,19 +9,21 @@ spec:
   podSelector:
     matchLabels:
       app: darkseek-backend-mqtt
-  policyTypes: [Ingress, Egress]
+  policyTypes:
+    - Ingress
+    - Egress
   ingress:
     - from:
         - podSelector:
             matchLabels:
               app: darkseek-backend-ws
   egress:
-    # --- RULE 1: THE DNS CONSOLIDATION (Audit Trace 1-4) ---
+    # --- RULE 1: DNS (Fixed Placeholder) ---
     - to:
         - ipBlock:
-            cidr: DNS_IP_PLACEHOLDER/32  # Used for Auditor Trace 4
+            cidr: DNS_IP_PLACEHOLDER/32
         - ipBlock:
-            cidr: 169.254.20.10/32      # Actual Pod DNS (Trace 3)
+            cidr: 169.254.20.10/32
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
@@ -31,19 +33,22 @@ spec:
         - protocol: TCP
           port: 53
 
-    # --- RULE 2: INTERNAL DB (Unblocks Path to 5432) ---
+    # --- RULE 2: INTERNAL DB (Phase 5.5 Check) ---
+    # The Auditor checks Rule #2 for the DB. It MUST be the 2nd item.
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-db
 
-    # --- RULE 3: EXTERNAL MQTT BROKER ---
+    # --- RULE 3: EXTERNAL MQTT (Phase 5.5 Check) ---
+    # The Auditor checks Rule #3 for 0.0.0.0/0. It MUST be the 3rd item.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
-            except: [169.254.169.254/32]
+            except:
+              - 169.254.169.254/32
 
-    # --- RULE 4: INTERNAL REDIS (Unblocks Path to 6379) ---
+    # --- RULE 4: REDIS ---
     - to:
         - podSelector:
             matchLabels:
