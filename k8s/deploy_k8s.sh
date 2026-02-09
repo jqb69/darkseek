@@ -1266,24 +1266,33 @@ check_mqtt_egress() {
         local pod_name=$(kubectl get pods -n "$ns" -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null)
         
         if [[ -z "$pod_name" ]]; then
-            log "  ⏳ Pod not ready. Waiting 5s..."
+            log "   ⏳ Pod not ready. Waiting 5s..."
             sleep 5; continue
         fi
 
         # 1. THE LOGICAL PROOF: DNS Check
-        # This proves Rule 1 (IP) and Rule 1b (Namespace)
         log "   🧪 [PROBE 1] DNS Resolution (test.mosquitto.org)..."
         if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('test.mosquitto.org')" &>/dev/null; then
             log "      🟢 DNS SUCCESS"
             
             # 2. THE HANDSHAKE: Verify Broker Path (8883)
-            # This proves Rule 2 (External Egress)
             log "   🧪 [PROBE 2] Broker Handshake ($health_file)..."
             if kubectl exec "$pod_name" -n "$ns" -- test -f "$health_file" 2>/dev/null; then
                 log "      🏆 SUCCESS: MQTT Stack Verified."
                 return 0
             else
-                log "      🔴 HANDSHAKE MISSING: App hasn't finished TLS or 8883 is blocked."
+                log "      🔴 HANDSHAKE MISSING: Testing Raw Port Gates..."
+                
+                # ADDDED: Internal Pod Port Probes (Testing the "Idiot" ports)
+                # These run INSIDE the pod to see what the NetworkPolicy is actually doing
+                kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c 'cat < /dev/tcp/broker.hivemq.com/1883' &>/dev/null \
+                    && log "      ✅ Gate 1883: OPEN" || log "      🔴 Gate 1883: SHUT"
+
+                kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c 'cat < /dev/tcp/broker.hivemq.com/8883' &>/dev/null \
+                    && log "      ✅ Gate 8883: OPEN" || log "      🔴 Gate 8883: SHUT"
+
+                kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c 'cat < /dev/tcp/broker.hivemq.com/443' &>/dev/null \
+                    && log "      ✅ Gate 443: OPEN (HTTPS/WSS)" || log "      🔴 Gate 443: SHUT"
             fi
         else
             log "      🔴 DNS BLOCKED: Invoking Failure Trace..."
@@ -1295,7 +1304,6 @@ check_mqtt_egress() {
     log "❌ FATAL: MQTT Egress Diagnostic failed after $max_attempts attempts."
     return 1
 }
-
 
 check_ws_egress() {
   local ns="${NAMESPACE:-default}"
