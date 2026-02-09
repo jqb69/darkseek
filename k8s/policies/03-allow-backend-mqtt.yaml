@@ -11,7 +11,7 @@ spec:
       app: darkseek-backend-mqtt
   policyTypes: [Ingress, Egress]
   ingress:
-    # --- LOGICAL OR: Each pod type gets its own entry ---
+    # --- LOGICAL OR: Each pod gets its own dash to avoid the "AND" trap ---
     - from:
         - podSelector:
             matchLabels:
@@ -21,60 +21,43 @@ spec:
             matchLabels:
               app: darkseek-frontend
   egress:
-    # --- DNS 1: NodeLocal (UDP & TCP) ---
+    # --- RULE 1: THE DNS CLUSTER (Must contain all DNS targets) ---
     - to:
         - ipBlock:
-            cidr: 169.254.20.10/32
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    
-    # --- DNS 2: Master DNS (UDP & TCP) ---
-    - to:
-        - ipBlock:
-            cidr: 34.118.224.10/32
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-
-    # --- DNS 3: Kube-System (UDP & TCP) ---
-    - to:
-        - namespaceSelector:
+            cidr: 169.254.20.10/32  # Rule 1a: Matches Pod DNS
+        - namespaceSelector:        # Rule 1b: Matches kube-system audit
             matchLabels:
               kubernetes.io/metadata.name: kube-system
+        - ipBlock:
+            cidr: 34.118.224.10/32  # Rule 1c: Master DNS for Trace 4
       ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
 
-    # --- INTERNAL 1: Redis (ALL PORTS/PROTOCOLS) ---
-    - to:
-        - podSelector:
-            matchLabels:
-              app: darkseek-redis
-
-    # --- INTERNAL 2: DB (ALL PORTS/PROTOCOLS) ---
+    # --- RULE 2: DB EGRESS (Per Audit Phase 5.5) ---
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-db
 
-    # --- EXTERNAL: The Broker (ALL PORTS, BOTH UDP & TCP) ---
-    # Removed specific ports to stop the "Gate is SHUT" timeout
+    # --- RULE 3: EXTERNAL MQTT (Per Audit Phase 5.5 - NO PORTS) ---
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
             except: [169.254.169.254/32]
       ports:
-        - protocol: UDP
         - protocol: TCP
+        - protocol: UDP
 
-    # --- CLUSTER: GKE Metadata (Keep specific for security) ---
+    # --- RULE 4: REDIS ---
+    - to:
+        - podSelector:
+            matchLabels:
+              app: darkseek-redis
+
+    # --- RULE 5: GKE METADATA ---
     - to:
         - ipBlock:
             cidr: 169.254.169.254/32
