@@ -11,16 +11,37 @@ spec:
       app: darkseek-backend-mqtt
   policyTypes: [Ingress, Egress]
   ingress:
-    # --- FIX 1: Allow WS and Frontend to talk to MQTT ---
+    # --- LOGICAL OR: Each pod type gets its own entry ---
     - from:
         - podSelector:
             matchLabels:
               app: darkseek-backend-ws
+    - from:
         - podSelector:
             matchLabels:
               app: darkseek-frontend
   egress:
-    # --- FIX 2: DNS TRIPLE-STACK (Matches your Trace tool exactly) ---
+    # --- DNS 1: NodeLocal (UDP & TCP) ---
+    - to:
+        - ipBlock:
+            cidr: 169.254.20.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # --- DNS 2: Master DNS (UDP & TCP) ---
+    - to:
+        - ipBlock:
+            cidr: 34.118.224.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # --- DNS 3: Kube-System (UDP & TCP) ---
     - to:
         - namespaceSelector:
             matchLabels:
@@ -30,47 +51,30 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    - to:
-        - ipBlock:
-            cidr: 34.118.224.10/32 # Master DNS (Restored for Trace)
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-    - to:
-        - ipBlock:
-            cidr: 169.254.20.10/32 # NodeLocal DNS
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
 
-    # --- INTERNAL INFRA (All ports to stop handshaking drops) ---
+    # --- INTERNAL 1: Redis (ALL PORTS/PROTOCOLS) ---
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-redis
+
+    # --- INTERNAL 2: DB (ALL PORTS/PROTOCOLS) ---
     - to:
         - podSelector:
             matchLabels:
               app: darkseek-db
 
-    # --- THE EXTERNAL BROKER FIX (Gate is SHUT) ---
-    # We remove 'except' and restrict ONLY by ports to bypass Calico's subtraction bug
+    # --- EXTERNAL: The Broker (ALL PORTS, BOTH UDP & TCP) ---
+    # Removed specific ports to stop the "Gate is SHUT" timeout
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
+            except: [169.254.169.254/32]
       ports:
+        - protocol: UDP
         - protocol: TCP
-          port: 1883
-        - protocol: TCP
-          port: 8883
-        - protocol: TCP
-          port: 443
 
-    # --- METADATA SERVER ---
+    # --- CLUSTER: GKE Metadata (Keep specific for security) ---
     - to:
         - ipBlock:
             cidr: 169.254.169.254/32
