@@ -12,56 +12,70 @@ spec:
   policyTypes:
   - Ingress
   - Egress
-  
-  # ✅ INGRESS: Allow WebSocket Backend to reach MQTT
+
+  # ✅ INGRESS: Combined Pods (WS and Frontend can talk to MQTT)
   ingress:
   - from:
     - podSelector:
         matchLabels:
           app: darkseek-backend-ws
+    - podSelector:
+        matchLabels:
+          app: darkseek-frontend
     ports:
-    - protocol: TCP
-      port: 8885
     - protocol: TCP
       port: 1883
-  
+    - protocol: TCP
+      port: 8883
+    - protocol: TCP
+      port: 8443
+
+  # ✅ EGRESS: Explicit Split for Protocols
   egress:
-  # ---------------------------------------------------------
-  # 1. DNS ACCESS (Split UDP/TCP for Stability)
-  # ---------------------------------------------------------
+  # RULE 1: Metadata Service (DS) - CRITICAL for GKE Auth
   - to:
     - ipBlock:
-        cidr: 169.254.20.10/32
-    ports:
-    - protocol: UDP
-      port: 53
-  - to:
-    - ipBlock:
-        cidr: 169.254.20.10/32
+        cidr: 169.254.169.254/32
     ports:
     - protocol: TCP
-      port: 53
+      port: 80
+
+  # RULE 2: NodeLocal DNS (UDP)
   - to:
     - ipBlock:
-        cidr: 34.118.224.10/32
+        cidr: 169.254.20.10/32
     ports:
     - protocol: UDP
       port: 53
+
+  # RULE 3: NodeLocal DNS (TCP)
   - to:
     - ipBlock:
-        cidr: 34.118.224.10/32
+        cidr: 169.254.20.10/32
     ports:
     - protocol: TCP
       port: 53
 
-  # ---------------------------------------------------------
-  # 2. EXTERNAL BROKER (All Ports: 1883, 8883, 8885, 443)
-  # ---------------------------------------------------------
+  # RULE 4: Cluster DNS (UDP)
+  - to:
+    - ipBlock:
+        cidr: DNS_IP_PLACEHOLDER/32
+    ports:
+    - protocol: UDP
+      port: 53
+
+  # RULE 5: Cluster DNS (TCP)
+  - to:
+    - ipBlock:
+        cidr: DNS_IP_PLACEHOLDER/32
+    ports:
+    - protocol: TCP
+      port: 53
+
+  # RULE 6: EXTERNAL BROKER (Explicit Port List)
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
-        except:
-        - 169.254.169.254/32
     ports:
     - protocol: TCP
       port: 1883
@@ -72,9 +86,7 @@ spec:
     - protocol: TCP
       port: 443
 
-  # ---------------------------------------------------------
-  # 3. INTERNAL INFRASTRUCTURE (DB & Redis)
-  # ---------------------------------------------------------
+  # RULE 7: INTERNAL INFRA (DB & Redis)
   - to:
     - podSelector:
         matchLabels:
