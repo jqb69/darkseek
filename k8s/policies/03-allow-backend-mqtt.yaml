@@ -10,61 +10,82 @@ spec:
     matchLabels:
       app: darkseek-backend-mqtt
   policyTypes:
-    - Ingress
-    - Egress
+  - Ingress
+  - Egress
+  
+  # ✅ INGRESS: Allow WebSocket Backend to reach MQTT
   ingress:
-    # Rule: Allow WebSocket pod to connect to MQTT internally
-    - from:
-        - podSelector:
-            matchLabels:
-              app: darkseek-backend-ws
-      ports:
-        - protocol: TCP
-          port: 8885  
-        - protocol: TCP
-          port: 1883  # Standard MQTT Internal
+  - from:
+    - podSelector:
+        matchLabels:
+          app: darkseek-backend-ws
+    ports:
+    - protocol: TCP
+      port: 8885
+    - protocol: TCP
+      port: 1883
+  
   egress:
-    # RULE 1: DNS (Fixed IPs from Trace)
-    - to:
-        - ipBlock: {cidr: 169.254.20.10/32}  # NodeLocal DNS IP from your trace
-        - ipBlock: {cidr: 34.118.224.10/32} # Master DNS IP
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
+  # ---------------------------------------------------------
+  # 1. DNS ACCESS (Split UDP/TCP for Stability)
+  # ---------------------------------------------------------
+  - to:
+    - ipBlock:
+        cidr: 169.254.20.10/32
+    ports:
+    - protocol: UDP
+      port: 53
+  - to:
+    - ipBlock:
+        cidr: 169.254.20.10/32
+    ports:
+    - protocol: TCP
+      port: 53
+  - to:
+    - ipBlock:
+        cidr: 34.118.224.10/32
+    ports:
+    - protocol: UDP
+      port: 53
+  - to:
+    - ipBlock:
+        cidr: 34.118.224.10/32
+    ports:
+    - protocol: TCP
+      port: 53
 
-    # RULE 2: DATABASE (Explicit Postgres Port)
-    - to:
-        - podSelector:
-            matchLabels:
-              app: darkseek-db
-      ports:
-        - protocol: TCP
-          port: 5432
+  # ---------------------------------------------------------
+  # 2. EXTERNAL BROKER (All Ports: 1883, 8883, 8885, 443)
+  # ---------------------------------------------------------
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 169.254.169.254/32
+    ports:
+    - protocol: TCP
+      port: 1883
+    - protocol: TCP
+      port: 8883
+    - protocol: TCP
+      port: 8885
+    - protocol: TCP
+      port: 443
 
-    # RULE 3: EXTERNAL BROKER (Explicit TLS Port)
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except: [169.254.169.254/32]
-      ports:
-        - protocol: TCP
-          port: 8883
-
-    # RULE 4: REDIS (Explicit Redis Port)
-    - to:
-        - podSelector:
-            matchLabels:
-              app: darkseek-redis
-      ports:
-        - protocol: TCP
-          port: 6379
-
-    # RULE 5: METADATA (Explicit HTTP Port)
-    - to:
-        - ipBlock:
-            cidr: 169.254.169.254/32
-      ports:
-        - protocol: TCP
-          port: 80
+  # ---------------------------------------------------------
+  # 3. INTERNAL INFRASTRUCTURE (DB & Redis)
+  # ---------------------------------------------------------
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darkseek-db
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darkseek-redis
+    ports:
+    - protocol: TCP
+      port: 6379
