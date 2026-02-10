@@ -1252,11 +1252,11 @@ run_mqtt_failure_trace() {
 }
 
 check_dns_split() {
-    local target_pod="$1" # Argument 1: The unique Pod Name
-    local ns="$2"         # Argument 2: The Namespace (Crucial for Scope)
+    local target_pod="$1"
+    local ns="${NAMESPACE:-default}"
     local dns_ip="34.118.224.10"
 
-    # 1. IDENTITY LOCK: Must be Backend WS or MQTT
+    # 1. IDENTITY LOCK: Verify Pod belongs to the Backend Stack
     local pod_app=$(kubectl get pod "$target_pod" -n "$ns" -o jsonpath='{.metadata.labels.app}' 2>/dev/null)
     
     case "$pod_app" in
@@ -1264,46 +1264,17 @@ check_dns_split() {
             log "🛡️  IDENTITY VERIFIED: $target_pod ($pod_app)"
             ;;
         *)
-            log "❌ ILLEGAL POD: $target_pod is NOT a backend service. Aborting."
+            log "❌ ILLEGAL POD: $target_pod (App: $pod_app) is NOT authorized for this probe."
             return 1
             ;;
     esac
 
-    # 2. PROTOCOL SEPARATION: UDP (The Front Door)
+    # 2. PROTOCOL SEPARATION (UDP 53)
     log "   📡 Testing DNS via UDP..."
     kubectl exec "$target_pod" -n "$ns" -- timeout 1 sh -c "cat < /dev/udp/$dns_ip/53" &>/dev/null \
         && log "     ✅ UDP 53: OPEN" || log "     🔴 UDP 53: SHUT"
 
-    # 3. PROTOCOL SEPARATION: TCP (The Backup/Large Payload Door)
-    log "   📡 Testing DNS via TCP..."
-    kubectl exec "$target_pod" -n "$ns" -- timeout 1 sh -c "cat < /dev/tcp/$dns_ip/53" &>/dev/null \
-        && log "     ✅ TCP 53: OPEN" || log "     🔴 TCP 53: SHUT"
-}
-
-check_dns_split() {
-    local target_pod="$1" # Argument 1: The unique Pod Name
-    local ns="$2"         # Argument 2: The Namespace (Crucial for Scope)
-    local dns_ip="34.118.224.10"
-
-    # 1. IDENTITY LOCK: Must be Backend WS or MQTT
-    local pod_app=$(kubectl get pod "$target_pod" -n "$ns" -o jsonpath='{.metadata.labels.app}' 2>/dev/null)
-    
-    case "$pod_app" in
-        "darkseek-backend-ws"|"darkseek-backend-mqtt")
-            log "🛡️  IDENTITY VERIFIED: $target_pod ($pod_app)"
-            ;;
-        *)
-            log "❌ ILLEGAL POD: $target_pod is NOT a backend service. Aborting."
-            return 1
-            ;;
-    esac
-
-    # 2. PROTOCOL SEPARATION: UDP (The Front Door)
-    log "   📡 Testing DNS via UDP..."
-    kubectl exec "$target_pod" -n "$ns" -- timeout 1 sh -c "cat < /dev/udp/$dns_ip/53" &>/dev/null \
-        && log "     ✅ UDP 53: OPEN" || log "     🔴 UDP 53: SHUT"
-
-    # 3. PROTOCOL SEPARATION: TCP (The Backup/Large Payload Door)
+    # 3. PROTOCOL SEPARATION (TCP 53) - NEVER COMBINE
     log "   📡 Testing DNS via TCP..."
     kubectl exec "$target_pod" -n "$ns" -- timeout 1 sh -c "cat < /dev/tcp/$dns_ip/53" &>/dev/null \
         && log "     ✅ TCP 53: OPEN" || log "     🔴 TCP 53: SHUT"
@@ -1312,10 +1283,10 @@ check_dns_split() {
 check_mqtt_egress() {
     local ns="${NAMESPACE:-default}"
     local app_label="darkseek-backend-mqtt" 
+    local max_retries=3
     
     log "🧪 [DIAGNOSTIC] Starting Unified MQTT Egress Audit..."
 
-    # Capture the REAL Pod Name
     local pod_name=$(kubectl get pods -n "$ns" -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     
     if [[ -z "$pod_name" ]]; then
@@ -1323,48 +1294,47 @@ check_mqtt_egress() {
         return 1
     fi
 
-    # 🚀 EXECUTION: Pass Name and Namespace to ensure Scope Integrity
-    check_dns_split "$pod_name" "$ns"
-
-    # 1. THE EXTERNAL GATE AUDIT (1883, 8883, 8885, 443)
-    log "   🧪 [PROBE 2] External Broker Gates..."
-    for p in 1883 8883 8885 443; do
-        kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "cat < /dev/tcp/test.mosquitto.org/$p" &>/dev/null \
-            && log "      ✅ Port $p: OPEN" || log "      🔴 Port $p: SHUT"
+    # 1. DNS PROBE (3 TRIES)
+    local dns_success=false
+    for ((i=1; i<=max_retries; i++)); do
+        log "📡 DNS Attempt $i/$max_retries..."
+        check_dns_split "$pod_name" "$ns"
+        if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('test.mosquitto.org')" &>/dev/null; then
+            log "   🟢 DNS SUCCESS"
+            dns_success=true
+            break
+        fi
+        sleep 1
     done
-}
 
-check_mqtt_egress() {
-    local ns="${NAMESPACE:-default}"
-    # This label determines which "Identity" we are auditing
-    local app_label="darkseek-backend-mqtt" 
-    
-    log "🧪 [DIAGNOSTIC] Starting Unified MQTT Egress Audit..."
-
-    # Get the actual pod name (e.g., darkseek-backend-mqtt-6d8b945f9c-abcde)
-    local pod_name=$(kubectl get pods -n "$ns" -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    
-    if [[ -z "$pod_name" ]]; then
-        log "❌ FATAL: No running pod found for label: $app_label"
-        return 1
-    fi
-
-    # ✅ FIXED: Pass the pod_name variable, NOT the label string
-    check_dns_split "$pod_name" "$ns"
-
-    # 1. THE LOGICAL PROOF: DNS Resolution
-    log "   🧪 [PROBE 1] DNS Resolution (test.mosquitto.org)..."
-    if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('test.mosquitto.org')" &>/dev/null; then
-        log "      🟢 DNS SUCCESS"
-        
-        # 2. THE GATE AUDIT
-        log "   🧪 [PROBE 2] External Broker Gates..."
-        for p in 1883 8883 8885 443; do
-            kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "cat < /dev/tcp/test.mosquitto.org/$p" &>/dev/null \
-                && log "      ✅ Port $p: OPEN" || log "      🔴 Port $p: SHUT"
+    # 2. GATE PROBE (3 TRIES PER PORT)
+    local any_gate_failed=false
+    log "🧪 [PROBE 2] External Broker Gates..."
+    for p in 1883 8883 8885 443; do
+        local port_open=false
+        for ((i=1; i<=max_retries; i++)); do
+            if kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "cat < /dev/tcp/test.mosquitto.org/$p" &>/dev/null; then
+                log "   ✅ Port $p: OPEN (Attempt $i)"
+                port_open=true
+                break
+            fi
+            log "   ⚠️  Port $p: Retry $i/$max_retries..."
+            sleep 1
         done
-    else
-        log "      🔴 DNS RESOLUTION FAILED: Host unreachable."
+        
+        if [[ "$port_open" == false ]]; then
+            log "   🔴 Port $p: SHUT after $max_retries attempts"
+            any_gate_failed=true
+        fi
+    done
+
+    # 3. AUTO-POLICY DUMP IF FAILURE
+    if [[ "$dns_success" == false ]] || [[ "$any_gate_failed" == true ]]; then
+        log "❌ AUDIT FAILED. DUMPING ACTIVE POLICIES FOR $app_label..."
+        echo "--------------------------------------------------------"
+        kubectl get netpol -n "$ns" -o yaml | grep -A 50 "app: $app_label"
+        echo "--------------------------------------------------------"
+        log "💡 Tip: Check if Metadata Service (169.254.169.254) or DNS_IP_PLACEHOLDER is correct."
     fi
 }
 
