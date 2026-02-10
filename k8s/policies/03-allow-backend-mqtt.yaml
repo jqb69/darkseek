@@ -19,16 +19,13 @@ spec:
     - podSelector:
         matchLabels:
           app: darkseek-backend-ws
-    - podSelector:
-        matchLabels:
-          app: darkseek-frontend
     ports:
     - protocol: TCP
       port: 1883
     - protocol: TCP
       port: 8883
     - protocol: TCP
-      port: 8443
+      port: 8885
 
   # ✅ EGRESS: Explicit Split for Protocols
   egress:
