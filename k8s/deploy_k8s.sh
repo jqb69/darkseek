@@ -1328,13 +1328,14 @@ check_mqtt_egress() {
         fi
     done
 
-    # 3. AUTO-POLICY DUMP IF FAILURE
+   # 3. SURGICAL POLICY DUMP IF FAILURE
     if [[ "$dns_success" == false ]] || [[ "$any_gate_failed" == true ]]; then
-        log "❌ AUDIT FAILED. DUMPING ACTIVE POLICIES FOR $app_label..."
+        log "❌ AUDIT FAILED. DUMPING EXACT POLICY: allow-to-backend-mqtt"
         echo "--------------------------------------------------------"
-        kubectl get netpol -n "$ns" -o yaml | grep -A 50 "app: $app_label"
+        # Directly target the specific policy name to avoid junk
+        kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml
         echo "--------------------------------------------------------"
-        log "💡 Tip: Check if Metadata Service (169.254.169.254) or DNS_IP_PLACEHOLDER is correct."
+        log "💡 Tip: If ports 1883/8883 are missing above, Rule 4 is GONE."
     fi
 }
 
