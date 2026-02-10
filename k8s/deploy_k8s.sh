@@ -1294,25 +1294,31 @@ check_mqtt_egress() {
         return 1
     fi
 
-    # 1. DNS PROBE (3 TRIES)
+    # 1. DNS PROBE (Integrated Split-Check)
     local dns_success=false
+    log "🔎 Checking DNS via Split-Audit..."
+    
+    # This calls your diagnostic function to check UDP vs TCP on port 53
+    check_dns_split "$pod_name" "$ns"
+
     for ((i=1; i<=max_retries; i++)); do
-        log "📡 DNS Attempt $i/$max_retries..."
-        check_dns_split "$pod_name" "$ns"
+        log "📡 DNS Resolve Attempt $i/$max_retries..."
         if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('test.mosquitto.org')" &>/dev/null; then
-            log "   🟢 DNS SUCCESS"
+            log "   🟢 DNS SUCCESS (Python Resolver)"
             dns_success=true
             break
         fi
+        log "   ⚠️  DNS FAIL (Attempt $i)..."
         sleep 1
     done
 
-    # 2. GATE PROBE (3 TRIES PER PORT)
+    # 2. GATE PROBE (External Broker)
     local any_gate_failed=false
     log "🧪 [PROBE 2] External Broker Gates..."
-    for p in 1883 8883 8885 443; do
+    for p in 1883 8883 443; do
         local port_open=false
         for ((i=1; i<=max_retries; i++)); do
+            # Using timeout 2 to ensure we don't hang if the packet is dropped (SILENT DROP)
             if kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "cat < /dev/tcp/test.mosquitto.org/$p" &>/dev/null; then
                 log "   ✅ Port $p: OPEN (Attempt $i)"
                 port_open=true
@@ -1328,14 +1334,16 @@ check_mqtt_egress() {
         fi
     done
 
-   # 3. SURGICAL POLICY DUMP IF FAILURE
+   # 3. SURGICAL POLICY DUMP
     if [[ "$dns_success" == false ]] || [[ "$any_gate_failed" == true ]]; then
         log "❌ AUDIT FAILED. DUMPING EXACT POLICY: allow-to-backend-mqtt"
         echo "--------------------------------------------------------"
-        # Directly target the specific policy name to avoid junk
         kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml
         echo "--------------------------------------------------------"
-        log "💡 Tip: If ports 1883/8883 are missing above, Rule 4 is GONE."
+        
+        # Check if the Broker IP is being blocked by an 'except' block
+        local broker_ip=$(kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('test.mosquitto.org'))" 2>/dev/null)
+        log "💡 Current Broker IP: $broker_ip (Ensure this isn't in your 'except' ranges)"
     fi
 }
 
