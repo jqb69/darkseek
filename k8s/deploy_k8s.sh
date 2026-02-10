@@ -1252,11 +1252,11 @@ run_mqtt_failure_trace() {
 }
 
 check_dns_split() {
-    local target_pod="$1"
-    local ns="${NAMESPACE:-default}"
+    local target_pod="$1" # Argument 1: The unique Pod Name
+    local ns="$2"         # Argument 2: The Namespace (Crucial for Scope)
     local dns_ip="34.118.224.10"
 
-    # 1. IDENTITY LOCK: Verify Pod belongs to the Backend Stack
+    # 1. IDENTITY LOCK: Must be Backend WS or MQTT
     local pod_app=$(kubectl get pod "$target_pod" -n "$ns" -o jsonpath='{.metadata.labels.app}' 2>/dev/null)
     
     case "$pod_app" in
@@ -1264,20 +1264,74 @@ check_dns_split() {
             log "🛡️  IDENTITY VERIFIED: $target_pod ($pod_app)"
             ;;
         *)
-            log "❌ ILLEGAL POD: $target_pod (App: $pod_app) is NOT authorized for this probe."
+            log "❌ ILLEGAL POD: $target_pod is NOT a backend service. Aborting."
             return 1
             ;;
     esac
 
-    # 2. PROTOCOL SEPARATION (UDP 53)
+    # 2. PROTOCOL SEPARATION: UDP (The Front Door)
     log "   📡 Testing DNS via UDP..."
     kubectl exec "$target_pod" -n "$ns" -- timeout 1 sh -c "cat < /dev/udp/$dns_ip/53" &>/dev/null \
         && log "     ✅ UDP 53: OPEN" || log "     🔴 UDP 53: SHUT"
 
-    # 3. PROTOCOL SEPARATION (TCP 53) - NEVER COMBINE
+    # 3. PROTOCOL SEPARATION: TCP (The Backup/Large Payload Door)
     log "   📡 Testing DNS via TCP..."
     kubectl exec "$target_pod" -n "$ns" -- timeout 1 sh -c "cat < /dev/tcp/$dns_ip/53" &>/dev/null \
         && log "     ✅ TCP 53: OPEN" || log "     🔴 TCP 53: SHUT"
+}
+
+check_dns_split() {
+    local target_pod="$1" # Argument 1: The unique Pod Name
+    local ns="$2"         # Argument 2: The Namespace (Crucial for Scope)
+    local dns_ip="34.118.224.10"
+
+    # 1. IDENTITY LOCK: Must be Backend WS or MQTT
+    local pod_app=$(kubectl get pod "$target_pod" -n "$ns" -o jsonpath='{.metadata.labels.app}' 2>/dev/null)
+    
+    case "$pod_app" in
+        "darkseek-backend-ws"|"darkseek-backend-mqtt")
+            log "🛡️  IDENTITY VERIFIED: $target_pod ($pod_app)"
+            ;;
+        *)
+            log "❌ ILLEGAL POD: $target_pod is NOT a backend service. Aborting."
+            return 1
+            ;;
+    esac
+
+    # 2. PROTOCOL SEPARATION: UDP (The Front Door)
+    log "   📡 Testing DNS via UDP..."
+    kubectl exec "$target_pod" -n "$ns" -- timeout 1 sh -c "cat < /dev/udp/$dns_ip/53" &>/dev/null \
+        && log "     ✅ UDP 53: OPEN" || log "     🔴 UDP 53: SHUT"
+
+    # 3. PROTOCOL SEPARATION: TCP (The Backup/Large Payload Door)
+    log "   📡 Testing DNS via TCP..."
+    kubectl exec "$target_pod" -n "$ns" -- timeout 1 sh -c "cat < /dev/tcp/$dns_ip/53" &>/dev/null \
+        && log "     ✅ TCP 53: OPEN" || log "     🔴 TCP 53: SHUT"
+}
+
+check_mqtt_egress() {
+    local ns="${NAMESPACE:-default}"
+    local app_label="darkseek-backend-mqtt" 
+    
+    log "🧪 [DIAGNOSTIC] Starting Unified MQTT Egress Audit..."
+
+    # Capture the REAL Pod Name
+    local pod_name=$(kubectl get pods -n "$ns" -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    
+    if [[ -z "$pod_name" ]]; then
+        log "❌ FATAL: No running pod found for label: $app_label"
+        return 1
+    fi
+
+    # 🚀 EXECUTION: Pass Name and Namespace to ensure Scope Integrity
+    check_dns_split "$pod_name" "$ns"
+
+    # 1. THE EXTERNAL GATE AUDIT (1883, 8883, 8885, 443)
+    log "   🧪 [PROBE 2] External Broker Gates..."
+    for p in 1883 8883 8885 443; do
+        kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "cat < /dev/tcp/test.mosquitto.org/$p" &>/dev/null \
+            && log "      ✅ Port $p: OPEN" || log "      🔴 Port $p: SHUT"
+    done
 }
 
 check_mqtt_egress() {
