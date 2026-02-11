@@ -54,7 +54,11 @@ spec:
             app: darkseek-backend-mqtt
       ports:
       - protocol: TCP
-        port: 8885
+        port: 1883
+      - protocol: TCP
+        port: 8883
+      - protocol: TCP
+        port: 8885    
     - to:
       - podSelector:
           matchLabels:
