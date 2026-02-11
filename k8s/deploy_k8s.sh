@@ -1194,60 +1194,62 @@ monitor_handshake() {
   fi
 }
 
-run_mqtt_failure_trace() {
-    local pod="$1"
-    local ns="$2"
-    local target_pol="allow-to-backend-mqtt"
-    local dns_target="34.118.224.10"
+run_pod_trace() {
+    local app_label="$1"
+    local target_pol="$2"
+    local ns="${NAMESPACE:-default}"
     
-    log "🕵️ [TRACE] AUDITING LIVE CLUSTER STATE..."
+    # ✅ ASSIGN LOCAL TO GLOBAL OR DEFAULT
+    local dns_target="${GKE_DNS:-34.118.224.10}"
+    
+    log "🕵️ [TRACE] AUDITING LIVE STATE FOR: $app_label"
+    
+    local pod_name=$(kubectl get pods -n "$ns" -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    
+    if [[ -z "$pod_name" ]]; then
+        log "   🚨 FATAL: No running pod found for $app_label. Cannot trace."
+        return 1
+    fi
 
-    # 1. CHECK POLICY INTEGRITY
+    # 1. POLICY & NAMESPACE INTEGRITY
     log "    🔍 TRACE 1: Verifying NetworkPolicy '$target_pol'..."
     local live_yaml=$(kubectl get netpol "$target_pol" -n "$ns" -o yaml 2>/dev/null)
-    
-    if [[ "$live_yaml" == *"DNS_IP_PLACEHOLDER"* ]]; then
-        log "      🚨 CRITICAL: The sed script FAILED. Placeholder still exists!"
-    fi
+    [[ "$live_yaml" == *"DNS_IP_PLACEHOLDER"* ]] && log "      🚨 CRITICAL: Placeholder still exists in $target_pol!"
 
-    # 2. CHECK RULE 1b (THE SILENT KILLER)
-    log "    🔍 TRACE 2: Auditing Namespace Labels for Rule 1b..."
-    if kubectl get ns kube-system --show-labels | grep -q "kubernetes.io/metadata.name=kube-system"; then
-        log "      ✅ kube-system is correctly labeled."
+    log "    🔍 TRACE 2: Checking kube-system labels..."
+    kubectl get ns kube-system --show-labels | grep -q "kubernetes.io/metadata.name=kube-system" || log "      🚨 ERROR: kube-system missing metadata label!"
+
+    # 2. DNS CONFIG & CONNECTIVITY
+    local pod_dns=$(kubectl exec "$pod_name" -n "$ns" -- cat /etc/resolv.conf | grep nameserver | awk '{print $2}' | head -n 1)
+    log "    🔍 TRACE 3: Pod targets DNS IP: $pod_dns"
+
+    log "    🔍 TRACE 4: Probing Port 53 to $dns_target..."
+    # Python-based UDP/TCP probes for pipeline stability
+    kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2); s.connect(('$dns_target', 53)); s.send(b'\x00')" &>/dev/null \
+        && log "      ✅ UDP 53 OPEN" || log "      ❌ UDP 53 REJECTED"
+
+    # 3. DYNAMIC INTERNAL REJECTION TRACE
+    log "    🔍 TRACE 5: Testing Internal Handshakes..."
+    local targets=""
+    if [[ "$app_label" == *"backend-ws"* ]]; then
+        targets="darkseek-backend-mqtt:1883 darkseek-backend-mqtt:8883"
     else
-        log "      🚨 ERROR: kube-system MISSING 'kubernetes.io/metadata.name'. Rule 1b is INACTIVE."
+        targets="darkseek-db:5432 darkseek-redis:6379"
     fi
 
-    # 3. CHECK POD DNS CONFIGURATION
-    log "    🔍 TRACE 3: Checking Pod's actual DNS target (/etc/resolv.conf)..."
-    local pod_dns=$(kubectl exec "$pod" -n "$ns" -- cat /etc/resolv.conf | grep nameserver | awk '{print $2}')
-    log "      📍 Pod is targeting DNS IP: $pod_dns"
-    
-    if [[ "$pod_dns" != "$dns_target" ]]; then
-        log "      ⚠️ WARNING: Pod DNS ($pod_dns) does NOT match Rule 1 CIDR ($dns_target)."
-    fi
+    for target in $targets; do
+        local host=${target%:*}
+        local port=${target#*:}
+        local res=$(kubectl exec "$pod_name" -n "$ns" -- python3 -c \
+            "import socket; s=socket.socket(); s.settimeout(2); \
+            try: s.connect(('$host', $port)); print('SUCCESS') \
+            except ConnectionRefusedError: print('REJECTED') \
+            except: print('TIMEOUT')" 2>/dev/null)
+        log "      📍 $host:$port -> $res"
+    done
 
-    # 4. PHYSICAL CONNECTIVITY PROBE (UDP vs TCP)
-    log "    🔍 TRACE 4: Probing UDP/TCP 53 to $dns_target..."
-    
-    # UDP Probe
-    if kubectl exec "$pod" -n "$ns" -- python3 -c \
-        "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2); s.connect(('$dns_target', 53)); s.send(b'\x00'); print('ok')" &>/dev/null; then
-        log "      ✅ UDP 53 OPEN."
-    else
-        log "      ❌ UDP 53 REJECTED."
-    fi
-
-    # TCP Probe
-    if kubectl exec "$pod" -n "$ns" -- python3 -c \
-        "import socket; s=socket.socket(); s.settimeout(2); s.connect(('$dns_target', 53))" &>/dev/null; then
-        log "      ✅ TCP 53 OPEN."
-    else
-        log "      ❌ TCP 53 REJECTED."
-    fi
-
-    echo "--- 🕵️ DEBUG: FINAL DUMP ---"
-    kubectl get netpol "$target_pol" -n "$ns" -o yaml
+    echo "--- 🕵️ DEBUG: $target_pol DUMP ---"
+    echo "$live_yaml"
     echo "----------------------------"
 }
 
@@ -1284,9 +1286,10 @@ check_mqtt_egress() {
     local ns="${NAMESPACE:-default}"
     local app_label="darkseek-backend-mqtt" 
     local max_retries=3
+    local dns_success=false
+    local any_gate_failed=false
     
     log "🧪 [DIAGNOSTIC] Starting Unified MQTT Egress Audit..."
-
     local pod_name=$(kubectl get pods -n "$ns" -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     
     if [[ -z "$pod_name" ]]; then
@@ -1294,32 +1297,23 @@ check_mqtt_egress() {
         return 1
     fi
 
-    # 1. DNS PROBE (Integrated Split-Check)
-    local dns_success=false
-    log "🔎 Checking DNS via Split-Audit..."
-    
-    # This calls your diagnostic function to check UDP vs TCP on port 53
+    # 1. DNS PROBE (34.118.224.10 + 169.254.20.10)
+    # Assuming check_dns_split is defined elsewhere; we check resolution here
+    log "📡 DNS Split Check..."
     check_dns_split "$pod_name" "$ns"
+    if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('test.mosquitto.org')" &>/dev/null; then
+        log "   🟢 DNS SUCCESS"
+        dns_success=true
+    else
+        log "   🔴 DNS FAILURE"
+    fi
 
-    for ((i=1; i<=max_retries; i++)); do
-        log "📡 DNS Resolve Attempt $i/$max_retries..."
-        if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('test.mosquitto.org')" &>/dev/null; then
-            log "   🟢 DNS SUCCESS (Python Resolver)"
-            dns_success=true
-            break
-        fi
-        log "   ⚠️  DNS FAIL (Attempt $i)..."
-        sleep 1
-    done
-
-    # 2. GATE PROBE (External Broker)
-    local any_gate_failed=false
-    log "🧪 [PROBE 2] External Broker Gates..."
+    # 2. EXTERNAL BROKER GATES (3 TRIES PER PORT)
+    log "🧪 [PROBE] External Broker Gates..."
     for p in 1883 8883 443; do
         local port_open=false
         for ((i=1; i<=max_retries; i++)); do
-            # Using timeout 2 to ensure we don't hang if the packet is dropped (SILENT DROP)
-            if kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "cat < /dev/tcp/test.mosquitto.org/$p" &>/dev/null; then
+            if kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "echo > /dev/tcp/test.mosquitto.org/$p" &>/dev/null; then
                 log "   ✅ Port $p: OPEN (Attempt $i)"
                 port_open=true
                 break
@@ -1327,25 +1321,58 @@ check_mqtt_egress() {
             log "   ⚠️  Port $p: Retry $i/$max_retries..."
             sleep 1
         done
-        
         if [[ "$port_open" == false ]]; then
             log "   🔴 Port $p: SHUT after $max_retries attempts"
             any_gate_failed=true
         fi
     done
 
-   # 3. SURGICAL POLICY DUMP
+    # 3. TRACE TO EXTERNAL BROKER
+    log "📡 [TRACE] Path to External Broker (test.mosquitto.org:1883)..."
+    kubectl exec "$pod_name" -n "$ns" -- sh -c "
+        if command -v tracepath >/dev/null; then
+            tracepath -n -p 1883 test.mosquitto.org
+        else
+            echo 'Tracepath missing - handshaking via /dev/tcp'
+            (timeout 2 sh -c 'echo > /dev/tcp/test.mosquitto.org/1883') 2>/dev/null && echo 'Handshake: OK' || echo 'Handshake: REJECTED/TIMEOUT'
+        fi
+    "
+
+    # 4. INTERNAL INFRASTRUCTURE TRACE (DB & REDIS)
+    log "🧪 [PROBE] Internal Infrastructure Trace..."
+    for target in "darkseek-db:5432" "darkseek-redis:6379"; do
+        local host=${target%:*}
+        local port=${target#*:}
+        local infra_open=false
+        
+        for ((i=1; i<=max_retries; i++)); do
+            log "📡 Tracing $host on $port (Attempt $i)..."
+            if kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "echo > /dev/tcp/$host/$port" &>/dev/null; then
+                log "   🟢 SUCCESS: Path to $host is OPEN"
+                infra_open=true
+                break
+            fi
+            sleep 1
+        done
+        
+        if [[ "$infra_open" == false ]]; then
+            log "   🔴 REJECTED: $host is refusing connection or dropping packets."
+            any_gate_failed=true
+        fi
+    done
+    
+    # 5. SURGICAL POLICY DUMP
     if [[ "$dns_success" == false ]] || [[ "$any_gate_failed" == true ]]; then
         log "❌ AUDIT FAILED. DUMPING EXACT POLICY: allow-to-backend-mqtt"
         echo "--------------------------------------------------------"
         kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml
         echo "--------------------------------------------------------"
         
-        # Check if the Broker IP is being blocked by an 'except' block
         local broker_ip=$(kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; print(socket.gethostbyname('test.mosquitto.org'))" 2>/dev/null)
         log "💡 Current Broker IP: $broker_ip (Ensure this isn't in your 'except' ranges)"
     fi
 }
+   
 
 check_ws_egress() {
   local ns="${NAMESPACE:-default}"
@@ -1567,8 +1594,19 @@ deploy_core() {
     sleep 45
     # --- Connectivity Telemetry ---
     log "📡 Running egress diagnostic (Background)..."
-    check_mqtt_egress || log "⚠️ Warning: Initial egress check failed. Probes might fail until CNI stabilizes."
-    check_ws_egress || log "⚠️ Warning: Initial egress check failed. Probes might fail until CNI stabilizes."
+    # Run the audit first
+    # 1. Check MQTT Stack
+    if ! check_mqtt_egress; then
+        log "❌ MQTT AUDIT FAILED. Triggering Trace..."
+        run_pod_trace "darkseek-backend-mqtt" "allow-to-backend-mqtt"
+    fi
+    
+    # 2. Check WebSocket Stack
+    if ! check_ws_egress; then
+        log "❌ WS AUDIT FAILED. Triggering Trace..."
+        # Policy name adjusted to your 02-allow-backend-ws.yaml metadata
+        run_pod_trace "darkseek-backend-ws" "allow-backend-ws"
+    fi
 }
 
 # --- Function : The Final Verification (Phase 5) ---
