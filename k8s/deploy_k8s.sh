@@ -1198,8 +1198,6 @@ run_pod_trace() {
     local app_label="$1"
     local target_pol="$2"
     local ns="${NAMESPACE:-default}"
-    
-    # ✅ ASSIGN LOCAL TO GLOBAL OR DEFAULT
     local dns_target="${GKE_DNS:-34.118.224.10}"
     
     log "🕵️ [TRACE] AUDITING LIVE STATE FOR: $app_label"
@@ -1207,32 +1205,24 @@ run_pod_trace() {
     local pod_name=$(kubectl get pods -n "$ns" -l app="$app_label" --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     
     if [[ -z "$pod_name" ]]; then
-        log "   🚨 FATAL: No running pod found for $app_label. Cannot trace."
+        log "   🚨 FATAL: No running pod found for $app_label. Trace aborted."
         return 1
     fi
 
-    # 1. POLICY & NAMESPACE INTEGRITY
-    log "    🔍 TRACE 1: Verifying NetworkPolicy '$target_pol'..."
+    # 1. LIVE POLICY DUMP (The Truth Teller)
+    log "    🔍 TRACE 1: Dumping Live NetPol '$target_pol'..."
     local live_yaml=$(kubectl get netpol "$target_pol" -n "$ns" -o yaml 2>/dev/null)
-    [[ "$live_yaml" == *"DNS_IP_PLACEHOLDER"* ]] && log "      🚨 CRITICAL: Placeholder still exists in $target_pol!"
-
-    log "    🔍 TRACE 2: Checking kube-system labels..."
-    kubectl get ns kube-system --show-labels | grep -q "kubernetes.io/metadata.name=kube-system" || log "      🚨 ERROR: kube-system missing metadata label!"
-
-    # 2. DNS CONFIG & CONNECTIVITY
-    local pod_dns=$(kubectl exec "$pod_name" -n "$ns" -- cat /etc/resolv.conf | grep nameserver | awk '{print $2}' | head -n 1)
-    log "    🔍 TRACE 3: Pod targets DNS IP: $pod_dns"
-
-    log "    🔍 TRACE 4: Probing Port 53 to $dns_target..."
-    # Python-based UDP/TCP probes for pipeline stability
+    
+    # 2. DNS & METADATA CHECKS
+    log "    🔍 TRACE 2: Metadata/DNS Readiness..."
     kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(2); s.connect(('$dns_target', 53)); s.send(b'\x00')" &>/dev/null \
-        && log "      ✅ UDP 53 OPEN" || log "      ❌ UDP 53 REJECTED"
+        && log "      ✅ DNS PATH OPEN" || log "      ❌ DNS PATH BLOCKED"
 
-    # 3. DYNAMIC INTERNAL REJECTION TRACE
-    log "    🔍 TRACE 5: Testing Internal Handshakes..."
+    # 3. DYNAMIC INTERNAL HANDSHAKE (REJECTED vs TIMEOUT)
+    log "    🔍 TRACE 3: Testing Internal Handshakes..."
     local targets=""
     if [[ "$app_label" == *"backend-ws"* ]]; then
-        targets="darkseek-backend-mqtt:1883 darkseek-backend-mqtt:8883"
+        targets="darkseek-backend-mqtt:1883 darkseek-backend-mqtt:8883 darkseek-backend-mqtt:8885"
     else
         targets="darkseek-db:5432 darkseek-redis:6379"
     fi
@@ -1240,15 +1230,33 @@ run_pod_trace() {
     for target in $targets; do
         local host=${target%:*}
         local port=${target#*:}
-        local res=$(kubectl exec "$pod_name" -n "$ns" -- python3 -c \
-            "import socket; s=socket.socket(); s.settimeout(2); \
-            try: s.connect(('$host', $port)); print('SUCCESS') \
-            except ConnectionRefusedError: print('REJECTED') \
-            except: print('TIMEOUT')" 2>/dev/null)
-        log "      📍 $host:$port -> $res"
+        
+        local res=$(kubectl exec "$pod_name" -n "$ns" -- python3 -c "
+import socket
+try:
+    s=socket.socket()
+    s.settimeout(2)
+    s.connect(('$host', $port))
+    print('SUCCESS')
+except ConnectionRefusedError:
+    print('REJECTED')
+except Exception:
+    print('TIMEOUT')
+" 2>/dev/null)
+        
+        case "$res" in
+            "SUCCESS")  log "      📍 $host:$port -> 🟢 SUCCESS" ;;
+            "REJECTED") log "      📍 $host:$port -> 🔴 REJECTED (Target app/policy active, but refused connection)" ;;
+            "TIMEOUT")  log "      📍 $host:$port -> 🟡 TIMEOUT (Egress Policy drop)" ;;
+            *)          log "      📍 $host:$port -> ❌ ERROR: $res" ;;
+        esac
     done
 
-    echo "--- 🕵️ DEBUG: $target_pol DUMP ---"
+    # 4. IDENTITY AUDIT (Check for typos)
+    log "    🔍 TRACE 4: Verifying Pod Labels..."
+    kubectl get pod "$pod_name" -n "$ns" --show-labels | awk '{print "      🏷️  " $0}'
+
+    log "--- 🕵️ DEBUG: $target_pol DUMP ---"
     echo "$live_yaml"
     echo "----------------------------"
 }
