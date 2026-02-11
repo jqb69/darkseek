@@ -12,8 +12,6 @@ spec:
   policyTypes:
   - Ingress
   - Egress
-
-  # ✅ INGRESS: ONLY WS Pod can talk to MQTT
   ingress:
   - from:
     - podSelector:
@@ -26,71 +24,8 @@ spec:
       port: 8883
     - protocol: TCP
       port: 8885
-
-  # ✅ EGRESS: Explicit Split for Protocols
   egress:
-  # RULE 1: Metadata Service (GKE Auth/Identity)
-  - to:
-    - ipBlock:
-        cidr: 169.254.169.254/32
-    ports:
-    - protocol: TCP
-      port: 80
-
-  # RULE 2 & 3: NodeLocal DNS (Split UDP/TCP)
-  - to:
-    - ipBlock:
-        cidr: 169.254.20.10/32
-    ports:
-    - protocol: UDP
-      port: 53
-  - to:
-    - ipBlock:
-        cidr: 169.254.20.10/32
-    ports:
-    - protocol: TCP
-      port: 53
-
-  # RULE 4 & 5: Cluster DNS (Split UDP/TCP for SED replacement)
-  - to:
-    - ipBlock:
-        cidr: DNS_IP_PLACEHOLDER/32
-    ports:
-    - protocol: UDP
-      port: 53
-  - to:
-    - ipBlock:
-        cidr: DNS_IP_PLACEHOLDER/32
-    ports:
-    - protocol: TCP
-      port: 53
-
-  # RULE 5.5: Kube-DNS via Namespace Selector
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: kube-system
-    ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
-
-  # RULE 6: EXTERNAL BROKER (Internet Egress)
-  - to:
-    - ipBlock:
-        cidr: 0.0.0.0/0
-    ports:
-    - protocol: TCP
-      port: 1883
-    - protocol: TCP
-      port: 8883
-    - protocol: TCP
-      port: 8885
-    - protocol: TCP
-      port: 443
-
-  # RULE 7: INTERNAL INFRA (DB & Redis)
+  # --- TOP PRIORITY: DB & REDIS ---
   - to:
     - podSelector:
         matchLabels:
@@ -105,3 +40,48 @@ spec:
     ports:
     - protocol: TCP
       port: 6379
+  # --- SECOND PRIORITY: EXTERNAL BROKER ---
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 1883
+    - protocol: TCP
+      port: 8883
+    - protocol: TCP
+      port: 8885
+  # --- THIRD PRIORITY: DNS & METADATA ---
+  - to:
+    - ipBlock:
+        cidr: 169.254.20.10/32
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - ipBlock:
+        cidr: DNS_IP_PLACEHOLDER/32
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - ipBlock:
+        cidr: 169.254.169.254/32
+    ports:
+    - protocol: TCP
+      port: 80
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
