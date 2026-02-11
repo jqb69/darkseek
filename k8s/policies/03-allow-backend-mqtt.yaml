@@ -1,5 +1,3 @@
----
-# 03-allow-to-backend-mqtt.yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -13,7 +11,7 @@ spec:
   - Ingress
   - Egress
 
-  # ✅ INGRESS: Combined Pods (WS and Frontend can talk to MQTT)
+  # ✅ INGRESS: ONLY WS Pod can talk to MQTT
   ingress:
   - from:
     - podSelector:
@@ -29,7 +27,7 @@ spec:
 
   # ✅ EGRESS: Explicit Split for Protocols
   egress:
-  # RULE 1: Metadata Service (DS) - CRITICAL for GKE Auth
+  # RULE 1: Metadata Service (GKE Auth/Identity)
   - to:
     - ipBlock:
         cidr: 169.254.169.254/32
@@ -37,15 +35,13 @@ spec:
     - protocol: TCP
       port: 80
 
-  # RULE 2: NodeLocal DNS (UDP)
+  # RULE 2 & 3: NodeLocal DNS (Split UDP/TCP)
   - to:
     - ipBlock:
         cidr: 169.254.20.10/32
     ports:
     - protocol: UDP
       port: 53
-
-  # RULE 3: NodeLocal DNS (TCP)
   - to:
     - ipBlock:
         cidr: 169.254.20.10/32
@@ -53,15 +49,13 @@ spec:
     - protocol: TCP
       port: 53
 
-  # RULE 4: Cluster DNS (UDP)
+  # RULE 4 & 5: Cluster DNS (Split UDP/TCP for SED replacement)
   - to:
     - ipBlock:
         cidr: DNS_IP_PLACEHOLDER/32
     ports:
     - protocol: UDP
       port: 53
-
-  # RULE 5: Cluster DNS (TCP)
   - to:
     - ipBlock:
         cidr: DNS_IP_PLACEHOLDER/32
@@ -69,7 +63,18 @@ spec:
     - protocol: TCP
       port: 53
 
-  # RULE 6: EXTERNAL BROKER (Explicit Port List)
+  # RULE 5.5: Kube-DNS via Namespace Selector
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+  # RULE 6: EXTERNAL BROKER (Internet Egress)
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
