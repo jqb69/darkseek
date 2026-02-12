@@ -1305,40 +1305,42 @@ check_mqtt_egress() {
         return 1
     fi
 
-   # --- 1. NETWORK POLICY DETECTION & PATCH ---
-    log "🔍 Scanning NetworkPolicy for '***'..."
-    # Use -F to treat *** as a literal string, not a wildcard
-    # Use YAML output for detection since it's more human-readable/consistent for grep
-    NETPOL_CORRUPT=$(kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | grep -F "***" | wc -l)
-    
-    if [ "$NETPOL_CORRUPT" -gt 0 ]; then
-        log "⚠️  NETPOL CORRUPTED ($NETPOL_CORRUPT hits): Patching..."
+   # 1. INITIALIZE VARIABLES (Default null/empty)
+    local NETPOL_CORRUPT=""
+    local SVC_CORRUPT=""
+
+    # 2. IDENTIFY CORRUPTION (Search for the good value; if missing, it's corrupt)
+    if ! kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | grep -q "8885"; then
+        NETPOL_CORRUPT="true"
+    fi
+
+    if ! kubectl get svc "$app_label" -n "$ns" -o yaml | grep -q "8885"; then
+        SVC_CORRUPT="true"
+    fi
+
+    # 3. SELECTIVE PATCHING
+    if [[ -n "$NETPOL_CORRUPT" ]]; then
+        log "⚠️  NETPOL CORRUPT: Port 8885 missing. Patching via anchor 8883..."
         kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | \
-            sed "s/port: '\*\*\*'/port: 8885/g" | \
-            sed "s/port: \*\*\*/port: 8885/g" | \
+            sed '/port: 8883/{n;s/port: .*/        - port: 8885/}' | \
             kubectl apply -f -
     else
-        log "🟢 NetworkPolicy ports look clean."
+        log "🟢 NetPol: OK (8885 found)"
     fi
 
-    # --- 2. SERVICE DETECTION & PATCH ---
-    log "🔍 Scanning Service for '***'..."
-    SVC_CORRUPT=$(kubectl get svc "$app_label" -n "$ns" -o yaml | grep -F "***" | wc -l)
-    
-    if [ "$SVC_CORRUPT" -gt 0 ]; then
-        log "⚠️  SERVICE CORRUPTED ($SVC_CORRUPT hits): Patching..."
+    if [[ -n "$SVC_CORRUPT" ]]; then
+        log "⚠️  SVC CORRUPT: Port 8885 missing. Patching via anchor 8001..."
         kubectl get svc "$app_label" -n "$ns" -o yaml | \
-            sed "s/port: '\*\*\*'/port: 8885/g" | \
-            sed "s/port: \*\*\*/port: 8885/g" | \
+            sed '/port: 8001/{n;s/port: .*/  - port: 8885/}' | \
             kubectl apply -f -
     else
-        log "🟢 Service ports look clean."
+        log "🟢 Service: OK (8885 found)"
     fi
 
-    # --- 3. COOL DOWN & VERIFY ---
-    if [ "$NETPOL_CORRUPT" -gt 0 ] || [ "$SVC_CORRUPT" -gt 0 ]; then
-        log "⏳ Waiting 5s for CNI/Controller sync..."
-        sleep 5
+    # 4. SYNC & PROBE
+    if [[ -n "$NETPOL_CORRUPT" || -n "$SVC_CORRUPT" ]]; then
+        log "⏳ Cool-down (10s) for CNI rule recovery..."
+        sleep 10
     fi
 
     # NEW: Your Verification Gate
