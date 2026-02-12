@@ -1309,34 +1309,7 @@ check_mqtt_egress() {
     local NETPOL_CORRUPT=""
     local SVC_CORRUPT=""
 
-    # 2. IDENTIFY CORRUPTION (Search for the good value; if missing, it's corrupt)
-    if ! kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | grep -q "8885"; then
-        NETPOL_CORRUPT="true"
-    fi
-
-    if ! kubectl get svc "$app_label" -n "$ns" -o yaml | grep -q "8885"; then
-        SVC_CORRUPT="true"
-    fi
-
-    # 3. SELECTIVE PATCHING
-    if [[ -n "$NETPOL_CORRUPT" ]]; then
-        log "⚠️  NETPOL CORRUPT: Port 8885 missing. Patching via anchor 8883..."
-        kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | \
-            sed '/port: 8883/{n;s/port: .*/        - port: 8885/}' | \
-            kubectl apply -f -
-    else
-        log "🟢 NetPol: OK (8885 found)"
-    fi
-
-    if [[ -n "$SVC_CORRUPT" ]]; then
-        log "⚠️  SVC CORRUPT: Port 8885 missing. Patching via anchor 8001..."
-        kubectl get svc "$app_label" -n "$ns" -o yaml | \
-            sed '/port: 8001/{n;s/port: .*/  - port: 8885/}' | \
-            kubectl apply -f -
-    else
-        log "🟢 Service: OK (8885 found)"
-    fi
-
+    
     # 4. SYNC & PROBE
     if [[ -n "$NETPOL_CORRUPT" || -n "$SVC_CORRUPT" ]]; then
         log "⏳ Cool-down (10s) for CNI rule recovery..."
