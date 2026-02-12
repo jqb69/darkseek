@@ -1305,6 +1305,59 @@ check_mqtt_egress() {
         return 1
     fi
 
+    # --- 1. NETWORK POLICY DETECTION & PATCH ---
+    log "🔍 Scanning NetworkPolicy for '***'..."
+    NETPOL_CORRUPT=$(kubectl get netpol allow-to-backend-mqtt -n "$ns" -o json | grep -c "\*\*\*")
+    
+    if [ "$NETPOL_CORRUPT" -gt 0 ]; then
+        log "⚠️  NETPOL CORRUPTED: CI masked ports. Patching NetworkPolicy..."
+        kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | \
+            sed 's/port: \*\*\*/port: 8885/g' | \
+            sed "s/port: '\*\*\*'/port: 8885/g" | \
+            kubectl apply -f -
+    else
+        log "🟢 NetworkPolicy ports look clean."
+    fi
+
+    # --- 2. SERVICE DETECTION & PATCH ---
+    log "🔍 Scanning Service for '***'..."
+    SVC_CORRUPT=$(kubectl get svc "$app_label" -n "$ns" -o json | grep -c "\*\*\*")
+    
+    if [ "$SVC_CORRUPT" -gt 0 ]; then
+        log "⚠️  SERVICE CORRUPTED: CI masked ports. Patching Service..."
+        kubectl get svc "$app_label" -n "$ns" -o yaml | \
+            sed 's/port: \*\*\*/port: 8885/g' | \
+            sed "s/port: '\*\*\*'/port: 8885/g" | \
+            kubectl apply -f -
+    else
+        log "🟢 Service ports look clean."
+    fi
+
+    # --- 3. COOL DOWN & VERIFY ---
+    if [ "$NETPOL_CORRUPT" -gt 0 ] || [ "$SVC_CORRUPT" -gt 0 ]; then
+        log "⏳ Waiting 5s for CNI/Controller sync..."
+        sleep 5
+    fi
+
+    # NEW: Your Verification Gate
+    if kubectl get netpol allow-to-backend-mqtt -n "$ns" -o json | grep -q "\*\*\*"; then 
+        log "❌ PATCH FAILED - *** still present in NetworkPolicy"
+        # Optional: return 1 here if you want to abort the rest of the probes
+    else 
+        log "🟢 PATCH SUCCESS - No *** found"
+        log "📊 Current Policy Port Map:"
+        # This greps for port lines and the line immediately after to show the protocol
+        kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | grep -B 1 "port:" | grep -v "\-\-"
+    fi
+
+    echo "--- Live Service Ports ---"
+    kubectl get svc "$app_label" -n "$ns" -o jsonpath='{.spec.ports[*].port}'
+    
+    echo -e "\n--- Live NetworkPolicy Egress Ports ---"
+    kubectl get netpol allow-to-backend-mqtt -n "$ns" -o jsonpath='{.spec.egress[*].ports[*].port}'
+    echo -e "\n--------------------------"
+
+    
     # 1. DNS PROBE (34.118.224.10 + 169.254.20.10)
     # Assuming check_dns_split is defined elsewhere; we check resolution here
     log "📡 DNS Split Check..."
@@ -1318,7 +1371,7 @@ check_mqtt_egress() {
 
     # 2. EXTERNAL BROKER GATES (3 TRIES PER PORT)
     log "🧪 [PROBE] External Broker Gates..."
-    for p in 1883 8883 443; do
+    for p in 1883 8883 443 8885; do
         local port_open=false
         for ((i=1; i<=max_retries; i++)); do
             if kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "echo > /dev/tcp/test.mosquitto.org/$p" &>/dev/null; then
