@@ -1305,15 +1305,17 @@ check_mqtt_egress() {
         return 1
     fi
 
-    # --- 1. NETWORK POLICY DETECTION & PATCH ---
+   # --- 1. NETWORK POLICY DETECTION & PATCH ---
     log "🔍 Scanning NetworkPolicy for '***'..."
-    NETPOL_CORRUPT=$(kubectl get netpol allow-to-backend-mqtt -n "$ns" -o json | grep -c "\*\*\*")
+    # Use -F to treat *** as a literal string, not a wildcard
+    # Use YAML output for detection since it's more human-readable/consistent for grep
+    NETPOL_CORRUPT=$(kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | grep -F "***" | wc -l)
     
     if [ "$NETPOL_CORRUPT" -gt 0 ]; then
-        log "⚠️  NETPOL CORRUPTED: CI masked ports. Patching NetworkPolicy..."
+        log "⚠️  NETPOL CORRUPTED ($NETPOL_CORRUPT hits): Patching..."
         kubectl get netpol allow-to-backend-mqtt -n "$ns" -o yaml | \
-            sed 's/port: \*\*\*/port: 8885/g' | \
             sed "s/port: '\*\*\*'/port: 8885/g" | \
+            sed "s/port: \*\*\*/port: 8885/g" | \
             kubectl apply -f -
     else
         log "🟢 NetworkPolicy ports look clean."
@@ -1321,13 +1323,13 @@ check_mqtt_egress() {
 
     # --- 2. SERVICE DETECTION & PATCH ---
     log "🔍 Scanning Service for '***'..."
-    SVC_CORRUPT=$(kubectl get svc "$app_label" -n "$ns" -o json | grep -c "\*\*\*")
+    SVC_CORRUPT=$(kubectl get svc "$app_label" -n "$ns" -o yaml | grep -F "***" | wc -l)
     
     if [ "$SVC_CORRUPT" -gt 0 ]; then
-        log "⚠️  SERVICE CORRUPTED: CI masked ports. Patching Service..."
+        log "⚠️  SERVICE CORRUPTED ($SVC_CORRUPT hits): Patching..."
         kubectl get svc "$app_label" -n "$ns" -o yaml | \
-            sed 's/port: \*\*\*/port: 8885/g' | \
             sed "s/port: '\*\*\*'/port: 8885/g" | \
+            sed "s/port: \*\*\*/port: 8885/g" | \
             kubectl apply -f -
     else
         log "🟢 Service ports look clean."
