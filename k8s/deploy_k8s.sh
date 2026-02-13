@@ -1351,8 +1351,9 @@ check_mqtt_egress() {
     for p in 1883 8883 443 8885; do
         local port_open=false
         for ((i=1; i<=max_retries; i++)); do
-            if kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "echo > /dev/tcp/test.mosquitto.org/$p" &>/dev/null; then
-                log "   ✅ Port $p: OPEN (Attempt $i)"
+            # Replace your loop's probe with this:
+            if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; s=socket.socket(); s.settimeout(2); exit(s.connect_ex(('test.mosquitto.org', $p)))"; then
+                log "   ✅ Port $p: OPEN"
                 port_open=true
                 break
             fi
@@ -1372,7 +1373,9 @@ check_mqtt_egress() {
             tracepath -n -p 1883 test.mosquitto.org
         else
             echo 'Tracepath missing - handshaking via /dev/tcp'
-            (timeout 2 sh -c 'echo > /dev/tcp/test.mosquitto.org/1883') 2>/dev/null && echo 'Handshake: OK' || echo 'Handshake: REJECTED/TIMEOUT'
+            # Replace the Handshake line with this:
+            (kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; s=socket.socket(); s.settimeout(2); exit(s.connect_ex(('test.mosquitto.org', 1883)))") && echo 'Handshake: OK' || echo 'Handshake: REJECTED/TIMEOUT'
+          
         fi
     "
 
@@ -1385,7 +1388,8 @@ check_mqtt_egress() {
         
         for ((i=1; i<=max_retries; i++)); do
             log "📡 Tracing $host on $port (Attempt $i)..."
-            if kubectl exec "$pod_name" -n "$ns" -- timeout 2 sh -c "echo > /dev/tcp/$host/$port" &>/dev/null; then
+            # Replace the 'if kubectl exec' line in your loop with this:
+            if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; s=socket.socket(); s.settimeout(2); exit(s.connect_ex(('$host', $port)))"; then
                 log "   🟢 SUCCESS: Path to $host is OPEN"
                 infra_open=true
                 break
@@ -1398,8 +1402,7 @@ check_mqtt_egress() {
             any_gate_failed=true
         fi
     done
-    
-    # 5. SURGICAL POLICY DUMP
+   # 5. SURGICAL POLICY DUMP
     if [[ "$dns_success" == false ]] || [[ "$any_gate_failed" == true ]]; then
         log "❌ AUDIT FAILED. DUMPING EXACT POLICY: allow-to-backend-mqtt"
         echo "--------------------------------------------------------"
