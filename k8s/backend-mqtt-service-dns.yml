@@ -1,3 +1,4 @@
+# backend-mqtt-service.yaml
 apiVersion: v1
 kind: Service
 metadata:
@@ -10,8 +11,4 @@ spec:
     port: 8001
     targetPort: 8001
     protocol: TCP
-  - name: mqtt
-    port: 8885
-    targetPort: 8885
-    protocol: TCP
-  type: ClusterIP
+  type: ClusterIP  # Change to ClusterIP if only internal pods need to hit the health check
