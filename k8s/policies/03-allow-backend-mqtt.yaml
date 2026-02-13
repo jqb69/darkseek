@@ -22,7 +22,8 @@ spec:
       port: 1883
     - protocol: TCP
       port: 8883
-
+    - protocol: TCP
+      port: 8885
   egress:
   # --- TOP PRIORITY: DB & REDIS ---
   - to:
@@ -50,7 +51,8 @@ spec:
       port: 1883
     - protocol: TCP
       port: 8883
-   
+    - protocol: TCP
+      port: 8885
   # --- THIRD PRIORITY: DNS & METADATA ---
   - to:
     - ipBlock:
