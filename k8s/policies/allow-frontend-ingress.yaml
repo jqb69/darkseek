@@ -11,6 +11,7 @@ spec:
       app: darkseek-frontend
   policyTypes:
   - Ingress
+  - Egress
   ingress:
   - from:
     - ipBlock:
@@ -20,3 +21,25 @@ spec:
       port: 8501
     - protocol: TCP
       port: 8443      
+  egress:
+  # 1. Internal Backend Only
+  - to:
+    - podSelector:
+        matchLabels:
+          app: darkseek-backend-ws
+    ports:
+    - protocol: TCP
+      port: 8000
+    - protocol: TCP
+      port: 8443
+
+  # 2. DNS (The "Never-Fail" Version)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53  # Standard queries
+    - protocol: TCP
+      port: 53  # Large queries & Zone transfers
