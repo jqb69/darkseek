@@ -274,41 +274,57 @@ run_policy_audit() {
     if [[ "$pod_app_label" != "$app" ]]; then
         log "🚨 WARNING: Identity Mismatch! Pod label ($pod_app_label) != Expected ($app)"
     fi
-    # --- STEP 2: Functional Connectivity Probes (3-Try Resilience) ---
+    # --- STEP 2: Functional Connectivity Probes (3-Try Resilience + Deep Diag) ---
     for target in ${infra_probe_map[$app]}; do
       local host=${target%:*}; local port=${target#*:}
       local success=false
       local max_tries=3
-      # Add this inside the for app in ... loop to be 100% sure
-
 
       log "   🧪 [PROBE] $app -> $host:$port..."
 
       for ((i=1; i<=max_tries; i++)); do
-        # Try to connect using Python (Short Name)
         if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
           "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$host', $port)) == 0 else 1)" &>/dev/null; then
           success=true
           break
         fi
-        
-        # If we failed, wait 1 second before retrying (except on last try)
-        if [ $i -lt $max_tries ]; then
-          log "      ⚠️ Attempt $i failed. Retrying..."
-          sleep 1
-        fi
+        [ $i -lt $max_tries ] && sleep 1
       done
 
       if [ "$success" = true ]; then
-        log "      🟢 SUCCESS: Connection Verified after $i attempt(s)"
+        log "      🟢 SUCCESS: Connection Verified."
       else
-        log "      🔴 FAILURE: Path is BLOCKED after $max_tries tries"
+        log "      🔴 FAILURE: Path is BLOCKED. Starting Deep Diagnostic..."
+
+        # --- DEEP DIAGNOSTIC BLOCK ---
         
-        # FINAL DIAGNOSTIC: Is it DNS or Firewall?
-        local target_ip=$(kubectl get svc "$host" -n "$NAMESPACE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-        if [ -n "$target_ip" ] && kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
-          "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$target_ip', $port)) == 0 else 1)" &>/dev/null; then
-          log "      💡 DIAGNOSIS: Firewall is OPEN, but DNS resolution failed for '$host'."
+        # 1. Check Service Endpoints (The "Is anyone home?" test)
+        local endpoints=$(kubectl get endpoints "$host" -n "$NAMESPACE" -o jsonpath='{.subsets[*].addresses[*].ip}')
+        if [ -z "$endpoints" ]; then
+          log "      🚨 DIAGNOSIS: SERVICE HAS NO ENDPOINTS! The Backend pod is likely not ready or labels are mismatched."
+        else
+          log "      🔍 INFO: Service has active Endpoints: $endpoints"
+          
+          # 2. Check App Listening State (The "Is the door locked from inside?" test)
+          local target_pod=$(kubectl get pods -n "$NAMESPACE" -l "app=$host" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          if [ -n "$target_pod" ]; then
+            log "      🔍 INFO: Interrogating Backend Pod: $target_pod"
+            local listener=$(kubectl exec "$target_pod" -n "$NAMESPACE" -- python3 -c \
+              "import socket; s=socket.socket(); s.connect(('0.0.0.0', $port)); print('LISTENING')" 2>/dev/null)
+            
+            if [[ "$listener" != "LISTENING" ]]; then
+              log "      🚨 DIAGNOSIS: APP IS NOT LISTENING on port $port inside the container. Check your code's bind address (0.0.0.0 vs 127.0.0.1)."
+            fi
+          fi
+
+          # 3. Direct Pod-to-Pod Bypass (The "Is it the Service's fault?" test)
+          local first_ip=$(echo $endpoints | awk '{print $1}')
+          if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
+            "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$first_ip', $port)) == 0 else 1)" &>/dev/null; then
+            log "      💡 DIAGNOSIS: DIRECT POD CONNECTION WORKED. The issue is Kubernetes Service Routing or Port Translation (8443 vs 8000)."
+          else
+            log "      💡 DIAGNOSIS: HARD NETWORK POLICY DROP. Even direct IP connection failed. Re-verify Ingress on '$host'."
+          fi
         fi
       fi
     done
@@ -1125,28 +1141,35 @@ verify_policy_active() {
     return 1
   fi
 
-  # 1. Verify Egress Rule 1 (The 0.0.0.0/0 Port 53 fix)
-  echo "🔎 Checking DNS Hole-Punch..."
-  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 8.8.8.8 53 2>&1 | grep -q "open"; then
-    echo "✅ DNS Egress: OPEN (0.0.0.0/0 rule is working)"
+  # 1. Verify Internal GKE DNS (The real test)
+  echo "🔎 Checking Cluster DNS Connectivity..."
+  
+  # Get the actual ClusterIP for DNS
+  DNS_CLUSTER_IP=$(kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}')
+  
+  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 "$DNS_CLUSTER_IP" 53 2>&1 | grep -q "open"; then
+    echo "✅ DNS Egress: OPEN (GKE Internal DNS is reachable)"
   else
-    echo "⚠️  DNS Egress: Restricted (Normal if only GKE DNS is reachable)"
+    echo "❌ DNS Egress: BLOCKED (The pod cannot even reach CoreDNS!)"
   fi
 
-  # 2. Verify External MQTT (Port 8883)
-  echo "🔎 Checking External MQTT Path..."
-  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 test.mosquitto.org 8883 2>&1 | grep -q "open"; then
-    echo "✅ MQTT Egress: OPEN (Port 8883 is reachable)"
+  # Corrected Egress Check in verify_policy_active()
+  echo "🔎 Checking External MQTT Path (Port 8885)..."
+  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 test.mosquitto.org 8885 2>&1 | grep -q "open"; then
+    echo "✅ MQTT Egress: OPEN (Port 8885 is reachable)"
   else
-    echo "❌ MQTT Egress: BLOCKED (Check Rule #3 in your YAML)"
+    echo "❌ MQTT Egress: BLOCKED (Check Rule #3 in your YAML for Port 8885)"
   fi
 
   # 3. Verify Internal Database (Port 5432)
   echo "🔎 Checking Internal DB Path..."
-  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 darkseek-db 5432 2>&1 | grep -q "open"; then
-    echo "✅ DB Egress: OPEN (Internal Rule #2 is working)"
+  # Get the DB ClusterIP manually to bypass DNS
+  DB_IP=$(kubectl get svc darkseek-db -n "$NAMESPACE" -o jsonpath='{.spec.clusterIP}')
+  echo "🔎 Testing Raw IP Bypass (Target: $DB_IP)..."
+  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 "$DB_IP" 5432 2>&1 | grep -q "open"; then
+   echo "✅ Result: DNS IS THE PROBLEM. Direct IP connection worked."
   else
-    echo "❌ DB Egress: BLOCKED (Check Rule #2 in your YAML)"
+   echo "❌ Result: HARD DROP. The platform or NetworkPolicy is actively killing the packet."
   fi
   echo "-------------------------------------------------------"
 }
