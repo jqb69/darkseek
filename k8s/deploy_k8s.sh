@@ -270,24 +270,45 @@ run_policy_audit() {
     else
       log "   🚨 Policy Missing: $policy_name (Check your YAML names!)"
     fi
-
-    # --- STEP 2: Functional Connectivity Probes ---
+    pod_app_label=$(kubectl get pod "$pod_name" -n "$NAMESPACE" -o jsonpath='{.metadata.labels.app}')
+    if [[ "$pod_app_label" != "$app" ]]; then
+        log "🚨 WARNING: Identity Mismatch! Pod label ($pod_app_label) != Expected ($app)"
+    fi
+    # --- STEP 2: Functional Connectivity Probes (3-Try Resilience) ---
     for target in ${infra_probe_map[$app]}; do
       local host=${target%:*}; local port=${target#*:}
-      local fqdn="${host}.${NAMESPACE}.svc.cluster.local"
+      local success=false
+      local max_tries=3
+      # Add this inside the for app in ... loop to be 100% sure
+
 
       log "   🧪 [PROBE] $app -> $host:$port..."
-      
-      # Surgical Python TCP check (Handles ndots: 1 via FQDN)
-      if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
-        "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$fqdn', $port)) == 0 else 1)" &>/dev/null; then
-        log "      🟢 SUCCESS: Connection Handshake Verified"
-      else
-        log "      🔴 FAILURE: Path is BLOCKED"
+
+      for ((i=1; i<=max_tries; i++)); do
+        # Try to connect using Python (Short Name)
+        if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
+          "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$host', $port)) == 0 else 1)" &>/dev/null; then
+          success=true
+          break
+        fi
         
-        # Specific troubleshooting for the Frontend -> Backend link
-        if [[ "$app" == "darkseek-frontend" ]]; then
-           log "      💡 Tip: Check if 'allow-backend-ws' allows Ingress from 'app: darkseek-frontend'"
+        # If we failed, wait 1 second before retrying (except on last try)
+        if [ $i -lt $max_tries ]; then
+          log "      ⚠️ Attempt $i failed. Retrying..."
+          sleep 1
+        fi
+      done
+
+      if [ "$success" = true ]; then
+        log "      🟢 SUCCESS: Connection Verified after $i attempt(s)"
+      else
+        log "      🔴 FAILURE: Path is BLOCKED after $max_tries tries"
+        
+        # FINAL DIAGNOSTIC: Is it DNS or Firewall?
+        local target_ip=$(kubectl get svc "$host" -n "$NAMESPACE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+        if [ -n "$target_ip" ] && kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
+          "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$target_ip', $port)) == 0 else 1)" &>/dev/null; then
+          log "      💡 DIAGNOSIS: Firewall is OPEN, but DNS resolution failed for '$host'."
         fi
       fi
     done
