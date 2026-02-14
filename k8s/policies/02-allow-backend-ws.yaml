@@ -58,7 +58,7 @@ spec:
       - protocol: TCP
         port: 8883
       - protocol: TCP
-        port: 8885    
+        port: 8001    
     - to:
       - podSelector:
           matchLabels:
