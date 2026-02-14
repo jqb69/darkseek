@@ -1265,7 +1265,7 @@ run_pod_trace() {
     log "    🔍 TRACE 3: Testing Internal Handshakes..."
     local targets=""
     if [[ "$app_label" == *"backend-ws"* ]]; then
-        targets="darkseek-backend-mqtt:1883 darkseek-backend-mqtt:8883 darkseek-backend-mqtt:8885"
+        targets="darkseek-backend-mqtt:1883 darkseek-backend-mqtt:8883 darkseek-backend-mqtt:8001"
     else
         targets="darkseek-db:5432 darkseek-redis:6379"
     fi
