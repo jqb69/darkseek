@@ -1141,16 +1141,15 @@ verify_policy_active() {
     return 1
   fi
 
-  # 1. Verify Internal GKE DNS (The real test)
-  echo "🔎 Checking Cluster DNS Connectivity..."
+  # 1. Verify Internal GKE DNS
+  echo "🔎 Checking GKE Cluster DNS..."
+  # This finds the actual internal IP of your DNS server
+  DNS_IP=$(kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}')
   
-  # Get the actual ClusterIP for DNS
-  DNS_CLUSTER_IP=$(kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}')
-  
-  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 "$DNS_CLUSTER_IP" 53 2>&1 | grep -q "open"; then
-    echo "✅ DNS Egress: OPEN (GKE Internal DNS is reachable)"
+  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 "$DNS_IP" 53 2>&1 | grep -q "open"; then
+    echo "✅ DNS Egress: OPEN (Internal Cluster DNS is reachable)"
   else
-    echo "❌ DNS Egress: BLOCKED (The pod cannot even reach CoreDNS!)"
+    echo "❌ DNS Egress: BLOCKED (The pod cannot reach CoreDNS!)"
   fi
 
   # Corrected Egress Check in verify_policy_active()
@@ -1471,7 +1470,6 @@ check_mqtt_egress() {
     fi
 }
    
-
 check_ws_egress() {
   local ns="${NAMESPACE:-default}"
   local max_attempts=3
@@ -1492,12 +1490,12 @@ check_ws_egress() {
       log "  🔎 Auditing Pod: $pod_name"
 
       local failures=0
-      # Infrastructure Targets from your 02-allow-backend-ws.yaml
-      # Format: "Label:Host:Port"
+      # Infrastructure Targets aligned with 02-allow-backend-ws.yaml
+      # UPDATED: MQTT-INTERNAL now probes 8001 (Management/Bridge) instead of 8885 (External)
       local targets=(
         "REDIS:darkseek-redis:6379"
         "DB:darkseek-db:5432"
-        "MQTT-INTERNAL:darkseek-backend-mqtt:8885"
+        "MQTT-INTERNAL:darkseek-backend-mqtt:8001"
       )
       
       for entry in "${targets[@]}"; do
@@ -1517,7 +1515,7 @@ check_ws_egress() {
         fi
       done
 
-      # 2. DNS Resolution Check (Crucial for the 'ndots' and 'placeholder' issue)
+      # 2. DNS Resolution Check
       log "   🧪 [PROBE] WS -> DNS Resolution (google.com)..."
       if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('google.com')" &>/dev/null; then
         log "      🟢 SUCCESS"
