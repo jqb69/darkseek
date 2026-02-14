@@ -87,18 +87,21 @@ class AsyncMQTTServer:
             while True:
                 try:
                     logger.info(f"Connecting to {MQTT_BROKER_URI}:{MQTT_PORT}...")
-                    
+                    pod_id = socket.gethostname().split('-')[-1] # Grabs just the last 5 chars (e.g., 'rmjv9')
+                    client_id = f"ds-bk-{pod_id}" # Total ~12 characters
                     # === Corrected block in AsyncMQTTServer.start ===
                     async with aiomqtt.Client(
                         hostname=MQTT_BROKER_URI,
                         port=MQTT_PORT,
                         timeout=60,
+                        keepalive=30,
                         tls_params=self.tls_params,
+                        identifier=client_id, # Safely under the 23-char limit
                     ) as client:
                         self.client = client
                         self._connected = True
                         logger.info("✅ MQTT connected via TLS")
-                        
+ 
                         # 1. SUBSCRIBE FIRST
                         await client.subscribe("chat/#")
                         
@@ -111,7 +114,7 @@ class AsyncMQTTServer:
                         # 3. LISTEN (Aligned exactly with the lines above)
                         async for message in client.messages:
                             await self.on_message(client, message)
-                                
+   
                 except (aiomqtt.MqttError, Exception) as e:
                     self._connected = False
                     # Remove health file immediately so K8s stops routing
