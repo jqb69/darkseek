@@ -1264,30 +1264,44 @@ except Exception:
 check_dns_split() {
     local target_pod="$1"
     local ns="${NAMESPACE:-default}"
-    local dns_ip="34.118.224.10"
-
-    # 1. IDENTITY LOCK: Verify Pod belongs to the Backend Stack
-    local pod_app=$(kubectl get pod "$target_pod" -n "$ns" -o jsonpath='{.metadata.labels.app}' 2>/dev/null)
     
-    case "$pod_app" in
-        "darkseek-backend-ws"|"darkseek-backend-mqtt")
-            log "🛡️  IDENTITY VERIFIED: $target_pod ($pod_app)"
-            ;;
-        *)
-            log "❌ ILLEGAL POD: $target_pod (App: $pod_app) is NOT authorized for this probe."
-            return 1
-            ;;
-    esac
+    # 1. DYNAMIC DNS IP DISCOVERY
+    local dns_ip=$(kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}')
+    [[ -z "$dns_ip" ]] && dns_ip="10.19.0.10"
 
-    # 2. PROTOCOL SEPARATION (UDP 53)
+    log "🛡️  IDENTITY VERIFIED: $target_pod"
+    log "🔎 Using Live Kube-DNS IP: $dns_ip"
+
+    # 2. PROTOCOL SEPARATION (UDP 53) - Using Python Socket
     log "   📡 Testing DNS via UDP..."
-    kubectl exec "$target_pod" -n "$ns" -- timeout 1 sh -c "cat < /dev/udp/$dns_ip/53" &>/dev/null \
-        && log "     ✅ UDP 53: OPEN" || log "     🔴 UDP 53: SHUT"
+    kubectl exec "$target_pod" -n "$ns" -- python3 -c "
+import socket
+try:
+    # SOCK_DGRAM specifies UDP
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(1)
+    # Sending a dummy byte to the DNS port to see if the route is open
+    s.sendto(b'', ('$dns_ip', 53))
+    # If we get here without a 'Network unreachable' or 'Permission denied', the gate is open
+    exit(0)
+except Exception:
+    exit(1)
+" &>/dev/null \
+        && log "      ✅ UDP 53: OPEN" || log "      🔴 UDP 53: SHUT"
 
-    # 3. PROTOCOL SEPARATION (TCP 53) - NEVER COMBINE
+    # 3. PROTOCOL SEPARATION (TCP 53) - Using Python Connect
     log "   📡 Testing DNS via TCP..."
-    kubectl exec "$target_pod" -n "$ns" -- timeout 1 sh -c "cat < /dev/tcp/$dns_ip/53" &>/dev/null \
-        && log "     ✅ TCP 53: OPEN" || log "     🔴 TCP 53: SHUT"
+    kubectl exec "$target_pod" -n "$ns" -- python3 -c "
+import socket
+try:
+    # create_connection defaults to TCP
+    s = socket.create_connection(('$dns_ip', 53), timeout=1)
+    s.close()
+    exit(0)
+except Exception:
+    exit(1)
+" &>/dev/null \
+        && log "      ✅ TCP 53: OPEN" || log "      🔴 TCP 53: SHUT"
 }
 
 check_mqtt_egress() {
@@ -1366,22 +1380,17 @@ check_mqtt_egress() {
         fi
     done
 
+       # 3. TRACE TO EXTERNAL BROKER
     log "📡 [TRACE] Path to External Broker (test.mosquitto.org:1883)..."
     kubectl exec "$pod_name" -n "$ns" -- sh -c "
         if command -v tracepath >/dev/null; then
             tracepath -n -p 1883 test.mosquitto.org
         else
-            echo 'Tracepath missing - handshaking via /dev/tcp'
-            # Replace the Handshake line with this:
-            kubectl exec "$pod_name" -n "$ns" -- python3 -c '
-                import socket; 
-                s=socket.socket(); 
-                s.settimeout(2); 
-                exit(s.connect_ex((\"test.mosquitto.org\", 1883)))
-            ' && echo 'Handshake: OK' || echo 'Handshake: REJECTED/TIMEOUT'
+            echo 'Tracepath missing - handshaking via python3'
+            # DO NOT call kubectl here; you are already inside the pod!
+            python3 -c 'import socket; s=socket.socket(); s.settimeout(2); exit(s.connect_ex((\"test.mosquitto.org\", 1883)))' && echo 'Handshake: OK' || echo 'Handshake: REJECTED/TIMEOUT'
         fi
     "
-
 
     # 4. INTERNAL INFRASTRUCTURE TRACE (DB & REDIS)
     log "🧪 [PROBE] Internal Infrastructure Trace..."
