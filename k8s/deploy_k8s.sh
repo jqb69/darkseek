@@ -1366,7 +1366,6 @@ check_mqtt_egress() {
         fi
     done
 
-    # 3. TRACE TO EXTERNAL BROKER
     log "📡 [TRACE] Path to External Broker (test.mosquitto.org:1883)..."
     kubectl exec "$pod_name" -n "$ns" -- sh -c "
         if command -v tracepath >/dev/null; then
@@ -1374,10 +1373,15 @@ check_mqtt_egress() {
         else
             echo 'Tracepath missing - handshaking via /dev/tcp'
             # Replace the Handshake line with this:
-            (kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; s=socket.socket(); s.settimeout(2); exit(s.connect_ex(('test.mosquitto.org', 1883)))") && echo 'Handshake: OK' || echo 'Handshake: REJECTED/TIMEOUT'
-          
+            kubectl exec "$pod_name" -n "$ns" -- python3 -c '
+                import socket; 
+                s=socket.socket(); 
+                s.settimeout(2); 
+                exit(s.connect_ex((\"test.mosquitto.org\", 1883)))
+            ' && echo 'Handshake: OK' || echo 'Handshake: REJECTED/TIMEOUT'
         fi
     "
+
 
     # 4. INTERNAL INFRASTRUCTURE TRACE (DB & REDIS)
     log "🧪 [PROBE] Internal Infrastructure Trace..."
