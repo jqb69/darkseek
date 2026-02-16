@@ -9,7 +9,8 @@ spec:
   podSelector:
     matchLabels:              
       app: darkseek-redis
-  policyTypes: [Ingress]
+  policyTypes:
+  - Ingress
   ingress:
   - from:
     - podSelector:
@@ -18,7 +19,7 @@ spec:
     - podSelector:
         matchLabels:
           app: darkseek-backend-mqtt
-    - podSelector:              # ← THIS WAS MISSING
+    - podSelector:
         matchLabels:
           app: debug-mqtt
     ports:
