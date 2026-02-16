@@ -235,6 +235,7 @@ check_manifest_files() {
 }
 
 # === SURGICAL DIAGNOSTIC FUNCTION ===
+# === SURGICAL DIAGNOSTIC FUNCTION ===
 deep_diag_internal() {
     local pod_name=$1
     local host=$2
@@ -243,35 +244,38 @@ deep_diag_internal() {
 
     log "    🔍 [DEEP DIAG] Starting Surgical bypass for $host:$port..."
 
+    # 1. Check via Service ClusterIP
     local cluster_ip=$(kubectl get svc "$host" -n "$namespace" -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-    if [ -z "$cluster_ip" ]; then
-        log "      🚨 ERROR: Could not find ClusterIP for $host."
-        return 1
+    if [ -n "$cluster_ip" ]; then
+        log "      📡 [STEP A] Testing ClusterIP $cluster_ip via Bash Socket..."
+        kubectl exec "$pod_name" -n "$namespace" -- bash -c "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/$cluster_ip/$port'" &>/dev/null
+        local svc_res=$?
     fi
 
-    log "      📡 Testing raw TCP to $cluster_ip via Bash Socket..."
-    
-    # Try to open a connection using Bash built-ins
-    # 0 = Success, 1 = Refused, 124 = Timeout
-    kubectl exec "$pod_name" -n "$namespace" -- bash -c "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/$cluster_ip/$port'" &>/dev/null
-    local result=$?
+    # 2. Check via Direct Pod IP (The "Truth" Probe)
+    local pod_ip=$(kubectl get pod -n "$namespace" -l "app=$host" -o jsonpath='{.items[0].status.podIP}' 2>/dev/null)
+    if [ -n "$pod_ip" ]; then
+        log "      📡 [STEP B] Testing Direct PodIP $pod_ip via Bash Socket..."
+        kubectl exec "$pod_name" -n "$namespace" -- bash -c "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/$pod_ip/$port'" &>/dev/null
+        local pod_res=$?
+    else
+        log "      ⚠️ Could not find a backend Pod IP for $host."
+        pod_res=999
+    fi
 
-    case "$result" in
-        0)
-            log "      🟢 SURGICAL RESULT: SUCCESS. The path is OPEN."
-            ;;
-        124)
-            log "      🔴 SURGICAL RESULT: TIMEOUT (110). NetworkPolicy is BLOCKING the packet."
-            
-            ;;
-        1)
-            log "      🟡 SURGICAL RESULT: REFUSED (111). Path is OPEN, but the app is NOT listening on 0.0.0.0."
-            
-            ;;
-        *)
-            log "      ❓ SURGICAL RESULT: ERROR $result. Shell might not support /dev/tcp."
-            ;;
-    esac
+    # === ANALYSIS LOGIC ===
+    if [ "$svc_res" -eq 0 ] || [ "$pod_res" -eq 0 ]; then
+        log "      🟢 SURGICAL RESULT: SUCCESS. Path is open via $([ "$pod_res" -eq 0 ] && echo "Direct Pod IP" || echo "Service IP")."
+    elif [ "$pod_res" -eq 1 ]; then
+        log "      🟡 SURGICAL RESULT: REFUSED (111). Target pod $pod_ip REJECTED the connection."
+        log "      💡 FIX: App is likely bound to 127.0.0.1. WS pod works because it's likely a sidecar or in-pod."
+        
+    elif [ "$pod_res" -eq 124 ]; then
+        log "      🔴 SURGICAL RESULT: TIMEOUT (110). A NetworkPolicy is DROPPING packets to $pod_ip."
+        
+    else
+        log "      ❓ SURGICAL RESULT: UNKNOWN ERROR (Svc:$svc_res, Pod:$pod_res)."
+    fi
 }
 
 run_policy_audit() {
