@@ -7,11 +7,8 @@ metadata:
   namespace: default 
 spec:
   podSelector:
-    matchExpressions:         
-    - key: app
-      operator: In
-      values: 
-      - darkseek-db
+    matchLabels:
+      app: darkseek-db
   policyTypes:
   - Ingress
   ingress:
