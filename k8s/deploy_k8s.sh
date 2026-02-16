@@ -241,46 +241,38 @@ deep_diag_internal() {
     local port=$3
     local namespace=$4
 
-    log "   🔍 [DEEP DIAG] Starting Surgical bypass for $host:$port..."
+    log "    🔍 [DEEP DIAG] Starting Surgical bypass for $host:$port..."
 
-    # 1. Resolve ClusterIP to bypass DNS bullshit
     local cluster_ip=$(kubectl get svc "$host" -n "$namespace" -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
     if [ -z "$cluster_ip" ]; then
-        log "      🚨 ERROR: Could not find ClusterIP for $host. Service might be missing."
+        log "      🚨 ERROR: Could not find ClusterIP for $host."
         return 1
     fi
 
-    # 2. Execute Python connect_ex to get the raw Errno
-    log "      📡 Testing raw TCP to $cluster_ip (Bypassing DNS)..."
-        # Refined capture logic to prevent 'UNKNOWN'
-    local cmd="import socket; s=socket.socket(); s.settimeout(3); print(s.connect_ex(('$cluster_ip', $port)))"
-    local errno=$(kubectl exec "$pod_name" -n "$namespace" -- python3 -c "$cmd" 2>&1 | tr -d '\r')
+    log "      📡 Testing raw TCP to $cluster_ip via Bash Socket..."
     
-    # If errno contains 'not found' or 'executable', then Python is actually missing
-    if [[ "$errno" == *"not found"* ]]; then
-        log "      🚨 CONFIRMED: Python3 is actually missing from this pod."
-    else
-        log "      📡 RAW TCP RESULT: $errno"
-    fi
-    # 3. Interpret the Kernel's response
-    case "$errno" in
-        "0")
-            log "      🟢 SURGICAL RESULT: 0 (SUCCESS). The network path is PHYSICALLY OPEN. Your issue is 100% DNS resolution."
+    # Try to open a connection using Bash built-ins
+    # 0 = Success, 1 = Refused, 124 = Timeout
+    kubectl exec "$pod_name" -n "$namespace" -- bash -c "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/$cluster_ip/$port'" &>/dev/null
+    local result=$?
+
+    case "$result" in
+        0)
+            log "      🟢 SURGICAL RESULT: SUCCESS. The path is OPEN."
             ;;
-        "11"|"110")
-            log "      🔴 SURGICAL RESULT: $errno (TIMEOUT). This is a HARD POLICY DROP. The firewall/NetworkPolicy is deleting your packets."
+        124)
+            log "      🔴 SURGICAL RESULT: TIMEOUT (110). NetworkPolicy is BLOCKING the packet."
             
             ;;
-        "111")
-            log "      🟡 SURGICAL RESULT: 111 (REFUSED). The network is OPEN, but the target APP rejected the connection. It's likely not listening or bound to 127.0.0.1."
+        1)
+            log "      🟡 SURGICAL RESULT: REFUSED (111). Path is OPEN, but the app is NOT listening on 0.0.0.0."
             
             ;;
         *)
-            log "      ❓ SURGICAL RESULT: $errno (UNKNOWN). Ensure python3 is installed in the source pod."
+            log "      ❓ SURGICAL RESULT: ERROR $result. Shell might not support /dev/tcp."
             ;;
     esac
 }
-
 
 run_policy_audit() {
   log "🔍 === SURGICAL INFRASTRUCTURE AUDIT (Zero-Trust) ==="
