@@ -234,6 +234,47 @@ check_manifest_files() {
   log "All manifest files present."
 }
 
+# === SURGICAL DIAGNOSTIC FUNCTION ===
+deep_diag_internal() {
+    local pod_name=$1
+    local host=$2
+    local port=$3
+    local namespace=$4
+
+    log "   🔍 [DEEP DIAG] Starting Surgical bypass for $host:$port..."
+
+    # 1. Resolve ClusterIP to bypass DNS bullshit
+    local cluster_ip=$(kubectl get svc "$host" -n "$namespace" -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+    if [ -z "$cluster_ip" ]; then
+        log "      🚨 ERROR: Could not find ClusterIP for $host. Service might be missing."
+        return 1
+    fi
+
+    # 2. Execute Python connect_ex to get the raw Errno
+    log "      📡 Testing raw TCP to $cluster_ip (Bypassing DNS)..."
+    local errno=$(kubectl exec "$pod_name" -n "$namespace" -- python3 -c \
+        "import socket; s=socket.socket(); s.settimeout(3); print(s.connect_ex(('$cluster_ip', $port)))" 2>/dev/null | tr -d '\r')
+
+    # 3. Interpret the Kernel's response
+    case "$errno" in
+        "0")
+            log "      🟢 SURGICAL RESULT: 0 (SUCCESS). The network path is PHYSICALLY OPEN. Your issue is 100% DNS resolution."
+            ;;
+        "11"|"110")
+            log "      🔴 SURGICAL RESULT: $errno (TIMEOUT). This is a HARD POLICY DROP. The firewall/NetworkPolicy is deleting your packets."
+            
+            ;;
+        "111")
+            log "      🟡 SURGICAL RESULT: 111 (REFUSED). The network is OPEN, but the target APP rejected the connection. It's likely not listening or bound to 127.0.0.1."
+            
+            ;;
+        *)
+            log "      ❓ SURGICAL RESULT: $errno (UNKNOWN). Ensure python3 is installed in the source pod."
+            ;;
+    esac
+}
+
+
 run_policy_audit() {
   log "🔍 === SURGICAL INFRASTRUCTURE AUDIT (Zero-Trust) ==="
 
@@ -248,7 +289,7 @@ run_policy_audit() {
   declare -A infra_probe_map=(
     ["darkseek-backend-mqtt"]="darkseek-db:5432 darkseek-redis:6379"
     ["darkseek-backend-ws"]="darkseek-db:5432 darkseek-redis:6379"
-    ["darkseek-frontend"]="darkseek-backend-ws:8443"
+    ["darkseek-frontend"]="darkseek-backend-ws:8000"
   )
 
   # Use a fixed order to ensure the Frontend is audited first
@@ -310,7 +351,7 @@ run_policy_audit() {
           if [ -n "$target_pod" ]; then
             log "      🔍 INFO: Interrogating Backend Pod: $target_pod"
             local listener=$(kubectl exec "$target_pod" -n "$NAMESPACE" -- python3 -c \
-              "import socket; s=socket.socket(); s.connect(('0.0.0.0', $port)); print('LISTENING')" 2>/dev/null)
+              "import socket; s=socket.socket(); s.connect(('127.0.0.1', $port)); print('LISTENING')" 2>/dev/null)
             
             if [[ "$listener" != "LISTENING" ]]; then
               log "      🚨 DIAGNOSIS: APP IS NOT LISTENING on port $port inside the container. Check your code's bind address (0.0.0.0 vs 127.0.0.1)."
@@ -319,12 +360,8 @@ run_policy_audit() {
 
           # 3. Direct Pod-to-Pod Bypass (The "Is it the Service's fault?" test)
           local first_ip=$(echo $endpoints | awk '{print $1}')
-          if kubectl exec "$pod_name" -n "$NAMESPACE" -- python3 -c \
-            "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$first_ip', $port)) == 0 else 1)" &>/dev/null; then
-            log "      💡 DIAGNOSIS: DIRECT POD CONNECTION WORKED. The issue is Kubernetes Service Routing or Port Translation (8443 vs 8000)."
-          else
-            log "      💡 DIAGNOSIS: HARD NETWORK POLICY DROP. Even direct IP connection failed. Re-verify Ingress on '$host'."
-          fi
+          
+          deep_diag_internal "$pod_name" "$host" "$port" "$NAMESPACE"
         fi
       fi
     done
