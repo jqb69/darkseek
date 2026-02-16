@@ -252,9 +252,16 @@ deep_diag_internal() {
 
     # 2. Execute Python connect_ex to get the raw Errno
     log "      📡 Testing raw TCP to $cluster_ip (Bypassing DNS)..."
-    local errno=$(kubectl exec "$pod_name" -n "$namespace" -- python3 -c \
-        "import socket; s=socket.socket(); s.settimeout(3); print(s.connect_ex(('$cluster_ip', $port)))" 2>/dev/null | tr -d '\r')
-
+        # Refined capture logic to prevent 'UNKNOWN'
+    local cmd="import socket; s=socket.socket(); s.settimeout(3); print(s.connect_ex(('$cluster_ip', $port)))"
+    local errno=$(kubectl exec "$pod_name" -n "$namespace" -- python3 -c "$cmd" 2>&1 | tr -d '\r')
+    
+    # If errno contains 'not found' or 'executable', then Python is actually missing
+    if [[ "$errno" == *"not found"* ]]; then
+        log "      🚨 CONFIRMED: Python3 is actually missing from this pod."
+    else
+        log "      📡 RAW TCP RESULT: $errno"
+    fi
     # 3. Interpret the Kernel's response
     case "$errno" in
         "0")
