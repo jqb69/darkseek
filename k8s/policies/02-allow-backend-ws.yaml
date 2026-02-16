@@ -21,6 +21,8 @@ spec:
       - podSelector:
           matchLabels:
             app: darkseek-frontend
+      - ipBlock:
+          cidr: 0.0.0.0/0  # Allows the browser/LB to hit the socket
       ports:
       - protocol: TCP
         port: 8000
