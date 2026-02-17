@@ -1174,45 +1174,56 @@ verify_policy_active() {
   local pod_name=$(kubectl get pods -l app=darkseek-backend-mqtt -n "$NAMESPACE" -o jsonpath='{..metadata.name}' | awk '{print $1}')
   
   echo "-------------------------------------------------------"
-  echo "🛡️  SECURITY AUDIT: allow-to-backend-mqtt"
+  echo "🛡️  SECURITY AUDIT: darkseek-backend-mqtt (Universal Mode)"
   
   if [ -z "$pod_name" ]; then
     echo "❌ ERROR: No MQTT Pod found to audit."
     return 1
   fi
 
+  # Helper function to check connection without needing nc installed
+  check_conn() {
+    local host=$1
+    local port=$2
+    # Tries nc first, then falls back to bash /dev/tcp
+    kubectl exec "$pod_name" -n "$NAMESPACE" -- bash -c "nc -zv -w 2 $host $port || timeout 2 bash -c 'cat < /dev/null > /dev/tcp/$host/$port'" 2>/dev/null
+  }
+
   # 1. Verify Internal GKE DNS
   echo "🔎 Checking GKE Cluster DNS..."
-  # This finds the actual internal IP of your DNS server
   DNS_IP=$(kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}')
-  
-  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 "$DNS_IP" 53 2>&1 | grep -q "open"; then
-    echo "✅ DNS Egress: OPEN (Internal Cluster DNS is reachable)"
+  if check_conn "$DNS_IP" 53; then
+    echo "✅ DNS Egress: OPEN (Cluster DNS reachable at $DNS_IP)"
   else
-    echo "❌ DNS Egress: BLOCKED (The pod cannot reach CoreDNS!)"
+    echo "❌ DNS Egress: BLOCKED (Check Policy Rule #3: kube-system access)"
   fi
 
-  # Corrected Egress Check in verify_policy_active()
-  echo "🔎 Checking External MQTT Path (Port 8885)..."
-  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 test.mosquitto.org 8885 2>&1 | grep -q "open"; then
-    echo "✅ MQTT Egress: OPEN (Port 8885 is reachable)"
+  # 2. Verify External MQTT (Port 8885)
+  echo "🔎 Checking External MQTT Path (test.mosquitto.org:8885)..."
+  if check_conn "test.mosquitto.org" 8885; then
+    echo "✅ MQTT Egress: OPEN (External Port 8885 reachable)"
   else
-    echo "❌ MQTT Egress: BLOCKED (Check Rule #3 in your YAML for Port 8885)"
+    echo "❌ MQTT Egress: BLOCKED (Check Policy Rule #2: ipBlock 0.0.0.0/0)"
   fi
 
   # 3. Verify Internal Database (Port 5432)
   echo "🔎 Checking Internal DB Path..."
-  # Get the DB ClusterIP manually to bypass DNS
-  DB_IP=$(kubectl get svc darkseek-db -n "$NAMESPACE" -o jsonpath='{.spec.clusterIP}')
-  echo "🔎 Testing Raw IP Bypass (Target: $DB_IP)..."
-  if kubectl exec "$pod_name" -n "$NAMESPACE" -- nc -zv -w 2 "$DB_IP" 5432 2>&1 | grep -q "open"; then
-   echo "✅ Result: DNS IS THE PROBLEM. Direct IP connection worked."
+  if check_conn "darkseek-db" 5432; then
+    echo "✅ DB Egress: OPEN"
   else
-   echo "❌ Result: HARD DROP. The platform or NetworkPolicy is actively killing the packet."
+    echo "❌ DB Egress: BLOCKED (Check Policy Rule #1: darkseek-db podSelector)"
   fi
+
+  # 4. NEW: Verify Connection TO the new SSL WebSocket Pod (Port 8443)
+  echo "🔎 Checking Internal Path to WebSocket Pod (Port 8443)..."
+  if check_conn "darkseek-backend-ws" 8443; then
+    echo "✅ WS Egress: OPEN (Port 8443 reachable)"
+  else
+    echo "❌ WS Egress: BLOCKED (You must add 8443 to the Egress of MQTT policy!)"
+  fi
+
   echo "-------------------------------------------------------"
 }
-
 
 # After ANY policy apply/delete (surgical OR nuclear)
 wait_for_policy_propagation() {
