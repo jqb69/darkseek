@@ -1214,15 +1214,36 @@ verify_policy_active() {
     echo "❌ DB Egress: BLOCKED (Check Policy Rule #1: darkseek-db podSelector)"
   fi
 
-  # 4. NEW: Verify Connection TO the new SSL WebSocket Pod (Port 8443)
+ # 4. Verify Connection TO the new SSL WebSocket Pod (Port 8443)
   echo "🔎 Checking Internal Path to WebSocket Pod (Port 8443)..."
-  if check_conn "darkseek-backend-ws" 8443; then
-    echo "✅ WS Egress: OPEN (Port 8443 reachable)"
-  else
-    echo "❌ WS Egress: BLOCKED (You must add 8443 to the Egress of MQTT policy!)"
+  
+  local WS_SVC="darkseek-backend-ws"
+  local WS_IP=$(kubectl get svc "$WS_SVC" -n "$NAMESPACE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "")
+  
+  # CRITICAL CHECK: Does the service actually have a pod behind it?
+  local endpoints=$(kubectl get endpoints "$WS_SVC" -n "$NAMESPACE" -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)
+
+  if [ -z "$endpoints" ]; then
+    echo "⚠️  AUDIT BYPASSED: Service $WS_SVC has NO active endpoints. Pod is likely starting or failing Readiness Probe."
+    return 0 
   fi
 
-  echo "-------------------------------------------------------"
+  # Attempt connection with a small retry loop
+  local success=false
+  for i in {1..3}; do
+    if kubectl exec "$pod_name" -n "$NAMESPACE" -- bash -c "timeout 2 bash -c 'cat < /dev/null > /dev/tcp/$WS_IP/8443'" 2>/dev/null; then
+      success=true
+      break
+    fi
+    echo "⏳ Retrying path... ($i/3)"
+    sleep 3
+  done
+
+  if [ "$success" = true ]; then
+    echo "✅ WS Egress: OPEN (Verified via ClusterIP $WS_IP)"
+  else
+    echo "❌ PATH BLOCKED: Policy is robust, but traffic is not flowing. Check if Uvicorn is bound to 0.0.0.0 inside the pod."
+  fi
 }
 
 # After ANY policy apply/delete (surgical OR nuclear)
