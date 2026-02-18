@@ -11,6 +11,10 @@ APPLY_SLEEP=3
 MAX_RETRIES=10
 RETRY_INTERVAL=10
 
+# Configuration
+CERT_DIR="./certs"
+SECRET_NAME="darkseek-ws-ssl"
+
 log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
 fatal() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -887,6 +891,42 @@ force_delete_pods() {
   sleep 15
   log "✅ Cleanup for [$selector] complete."
 }
+
+
+generate_certs_if_missing() {
+   # Configuration
+    #CERT_DIR="k8s/certs"  # already declared above
+    #SCRET_NAME="darkseek-ws-ssl"
+    
+    # 1. Verify Directory Existence
+    if [[ ! -d "$CERT_DIR" ]]; then
+        echo "📂 Creating missing directory: $CERT_DIR"
+        mkdir -p "$CERT_DIR"
+    fi
+    export CERT_DIR
+    # 2. Check GKE for existing Secret
+    if kubectl get secret "$SECRET_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
+        echo "✅ SSL Secret '$SECRET_NAME' already exists. Skipping generation."
+    else
+        echo "🔐 Generating SSL Certificates..."
+    
+       # Generate certs locally in the k8s/certs folder
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout "$CERT_DIR/tls.key" \
+            -out "$CERT_DIR/tls.crt" \
+            -subj "/CN=darkseek-backend-ws.default.svc.cluster.local"
+    
+        # Upload to K8s as a TLS secret
+        kubectl create secret tls "$SECRET_NAME" \
+            --cert="$CERT_DIR/tls.crt" \
+            --key="$CERT_DIR/tls.key" \
+            -n "$NAMESPACE"
+        
+        echo "🚀 SSL Secret created and uploaded to GKE."
+    fi
+}
+
+
 
 template_dns_policies() {
     # 1. VALIDATE OR SET DEFAULT
