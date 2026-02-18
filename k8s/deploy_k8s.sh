@@ -894,32 +894,32 @@ force_delete_pods() {
 
 
 generate_certs_if_missing() {
-   # Configuration
-    #CERT_DIR="k8s/certs"  # already declared above
-    #SCRET_NAME="darkseek-ws-ssl"
+    # Configuration
+    local certdir="$CERT_DIR"  # Assign global CERT_DIR to local variable
+    local secretname="${SECRET_NAME:-darkseek-ws-ssl}"
     
     # 1. Verify Directory Existence
-    if [[ ! -d "$CERT_DIR" ]]; then
-        echo "📂 Creating missing directory: $CERT_DIR"
-        mkdir -p "$CERT_DIR"
+    if [[ ! -d "$certdir" ]]; then
+        echo "📂 Creating missing directory: $certdir"
+        mkdir -p "$certdir"
     fi
     export CERT_DIR
     # 2. Check GKE for existing Secret
-    if kubectl get secret "$SECRET_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
-        echo "✅ SSL Secret '$SECRET_NAME' already exists. Skipping generation."
+    if kubectl get secret "$secretname" -n "$NAMESPACE" >/dev/null 2>&1; then
+        echo "✅ SSL Secret '$secretname' already exists. Skipping generation."
     else
         echo "🔐 Generating SSL Certificates..."
-    
-       # Generate certs locally in the k8s/certs folder
+        
+        # Generate certs locally in the k8s/certs folder
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-            -keyout "$CERT_DIR/tls.key" \
-            -out "$CERT_DIR/tls.crt" \
+            -keyout "$certdir/tls.key" \
+            -out "$certdir/tls.crt" \
             -subj "/CN=darkseek-backend-ws.default.svc.cluster.local"
-    
+        
         # Upload to K8s as a TLS secret
-        kubectl create secret tls "$SECRET_NAME" \
-            --cert="$CERT_DIR/tls.crt" \
-            --key="$CERT_DIR/tls.key" \
+        kubectl create secret tls "$secretname" \
+            --cert="$certdir/tls.crt" \
+            --key="$certdir/tls.key" \
             -n "$NAMESPACE"
         
         echo "🚀 SSL Secret created and uploaded to GKE."
@@ -2064,7 +2064,7 @@ main() {
     [ ! -d "$K8S_DIR" ] && fatal "Missing $K8S_DIR"
     cd "$K8S_DIR"
     log "📂 Working directory shifted to: $(pwd)"
-
+    generate_certs_if_missing
     # --- PHASE 1: SANITIZATION & PREP ---
     # Handles Secrets, PVC finalizers, and Nuke logic
     sanitize_and_prepare_env
