@@ -1168,7 +1168,23 @@ wait_for_mqtt_health() {
   return 1
 }
 
+check_conn() {
+  local host=$1
+  local port=$2
+  
+  # Probe the connection
+  local result=$(kubectl exec "$pod_name" -n "$NAMESPACE" -- bash -c "timeout 2 bash -c 'cat < /dev/null > /dev/tcp/$host/$port'" 2>&1)
+  local exit_code=$?
 
+  if [ $exit_code -eq 0 ]; then
+    echo "🟢 SUCCESS"
+  elif [[ "$result" == *"Connection refused"* ]]; then
+    # This means the Policy is OPEN, but the app is just not listening/ready
+    echo "🟡 APP REFUSED (Policy is OPEN, check App Bind Address)"
+  else
+    echo "🔴 BLOCKED (Policy is dropping packets/Timeout)"
+  fi
+}
 
 verify_policy_active() {
   local pod_name=$(kubectl get pods -l app=darkseek-backend-mqtt -n "$NAMESPACE" -o jsonpath='{..metadata.name}' | awk '{print $1}')
@@ -1181,14 +1197,7 @@ verify_policy_active() {
     return 1
   fi
 
-  # Helper function to check connection without needing nc installed
-  check_conn() {
-    local host=$1
-    local port=$2
-    # Tries nc first, then falls back to bash /dev/tcp
-    kubectl exec "$pod_name" -n "$NAMESPACE" -- bash -c "nc -zv -w 2 $host $port || timeout 2 bash -c 'cat < /dev/null > /dev/tcp/$host/$port'" 2>/dev/null
-  }
-
+  
   # 1. Verify Internal GKE DNS
   echo "🔎 Checking GKE Cluster DNS..."
   DNS_IP=$(kubectl get svc -n kube-system kube-dns -o jsonpath='{.spec.clusterIP}')
