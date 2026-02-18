@@ -7,7 +7,12 @@ spec:
   selector:
     app: darkseek-backend-ws
   ports:
-  - port: 8000
-    targetPort: 8000
-    protocol: TCP
+    - name: http-legacy
+      protocol: TCP
+      port: 8000       # Port the Service listens on
+      targetPort: 8000 # Port the Pod is currently listening on
+    - name: https-ssl
+      protocol: TCP
+      port: 8443       # The port your audit is probing
+      targetPort: 8443 # The port Uvicorn will listen on with certs
   type: LoadBalancer  # Exposes externally; use ClusterIP if internal only
