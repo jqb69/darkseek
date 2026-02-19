@@ -19,26 +19,19 @@ spec:
         image: us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/darkseek/darkseek-backend-ws:latest
         imagePullPolicy: Always
         ports:
-          - containerPort: 8000
+        - containerPort: 8000
+        - containerPort: 8443
+        volumeMounts:
+        - name: ssl-certs
+          mountPath: "/app/certs"
+          readOnly: true
         envFrom:
-          - configMapRef:
-              name: darkseek-config
-          - secretRef:
-              name: darkseek-secrets
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 90
-          periodSeconds: 20
-          timeoutSeconds: 10
-          failureThreshold: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 90
-          periodSeconds: 20
+        - configMapRef:
+            name: darkseek-config
+        - secretRef:
+            name: darkseek-secrets
+        
+        # --- RESOURCES MOVE BACK INSIDE CONTAINER ---
         resources:
           requests:
             cpu: "100m"
@@ -46,3 +39,25 @@ spec:
           limits:
             cpu: "500m"
             memory: "512Mi"
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8443
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 20
+          timeoutSeconds: 10
+          failureThreshold: 10
+        readinessProbe:
+          tcpSocket:
+            port: 8443
+          initialDelaySeconds: 15
+          periodSeconds: 10
+
+      # --- VOLUMES ARE SIBLINGS TO CONTAINERS ---
+      volumes:
+      - name: ssl-certs
+        secret:
+          secretName: darkseek-ws-ssl
+          optional: true
