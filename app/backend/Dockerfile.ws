@@ -8,13 +8,15 @@ RUN pip install --no-cache-dir --upgrade pip virtualenv
 RUN python -m virtualenv /app/venv
 ENV PATH="/app/venv/bin:$PATH"
 
-# Copy backend/ into arbitrary root
+# Copy everything from local app/backend to the container path
+# This includes main.py AND runws.py,darkseek dir arbitrary root
 COPY app/backend/ /app/darkseek/app/backend/
 
-# Install
-RUN pip install --no-cache-dir --no-cache -r /app/darkseek/app/backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/darkseek/app/backend/requirements.txt
 
 ENV PYTHONPATH=/app/darkseek
-
 EXPOSE 8000
-CMD ["uvicorn", "app.backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8443
+
+# Start the modular runner using the path where it was copied
+CMD ["python", "darkseek/app/backend/runws.py"]
