@@ -296,7 +296,7 @@ run_policy_audit() {
   declare -A infra_probe_map=(
     ["darkseek-backend-mqtt"]="darkseek-db:5432 darkseek-redis:6379"
     ["darkseek-backend-ws"]="darkseek-db:5432 darkseek-redis:6379"
-    ["darkseek-frontend"]="darkseek-backend-ws:8443"
+    ["darkseek-frontend"]="darkseek-backend-ws:8000"
   )
 
   # Use a fixed order to ensure the Frontend is audited first
