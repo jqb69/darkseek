@@ -31,7 +31,7 @@ spec:
             exec:
               command: ["cat", "/tmp/mqtt-healthy"]
             initialDelaySeconds: 30
-            failureThreshold: 40
+            failureThreshold: 90
             periodSeconds: 10
           livenessProbe:
             exec:
