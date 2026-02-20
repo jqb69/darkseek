@@ -1592,71 +1592,105 @@ check_mqtt_egress() {
 }
    
 check_ws_egress() {
-  local ns="${NAMESPACE:-default}"
-  local max_attempts=3
-  local attempt=1
+    # Keep the shell strict but localized
+    local ns="${NAMESPACE:-default}"
+    local max_attempts=3
+    local attempt=1
 
-  log "🧪 [DIAGNOSTIC] Starting WebSocket Egress Probe (3 Attempts Max)..."
+    log "🧪 [DIAGNOSTIC] Starting WebSocket Egress Probe (Zero-Trust Edition)..."
 
-  while [ $attempt -le $max_attempts ]; do
-    log "📡 Attempt $attempt/$max_attempts: Probing WS Stack Connectivity..."
+    while [ $attempt -le $max_attempts ]; do
+        log "📡 Attempt $attempt/$max_attempts: Probing WS Stack Connectivity..."
 
-    # 1. Target selection: Always grab the newest RUNNING WS pod
-    local pod_name
-    pod_name=$(kubectl get pods -n "$ns" -l app=darkseek-backend-ws --field-selector=status.phase=Running -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null)
+        # Select the newest RUNNING pod, explicitly excluding those marked for deletion
+        local pod_name
+        pod_name=$(kubectl get pods -n "$ns" -l app=darkseek-backend-ws \
+            --field-selector=status.phase=Running \
+            -o jsonpath='{.items[?(@.metadata.deletionTimestamp=="")].metadata.name}' \
+            | tr ' ' '\n' | tail -n 1)
 
-    if [[ -z "$pod_name" ]]; then
-      log "  ⚠️ Attempt $attempt: No Running WS pods found. Waiting..."
-    else
-      log "  🔎 Auditing Pod: $pod_name"
-
-      local failures=0
-      # Infrastructure Targets aligned with 02-allow-backend-ws.yaml
-      # UPDATED: MQTT-INTERNAL now probes 8001 (Management/Bridge) instead of 8885 (External)
-      local targets=(
-        "REDIS:darkseek-redis:6379"
-        "DB:darkseek-db:5432"
-        "MQTT-INTERNAL:darkseek-backend-mqtt:8001"
-      )
-      
-      for entry in "${targets[@]}"; do
-        local label=${entry%%:*}; local h_p=${entry#*:}; 
-        local host=${h_p%:*}; local port=${h_p#*:}
-        local fqdn="${host}.${ns}.svc.cluster.local"
-
-        log "   🧪 [PROBE] WS -> $label ($fqdn:$port)..."
-        
-        # Surgical TCP Handshake via Python
-        if kubectl exec "$pod_name" -n "$ns" -- python3 -c \
-          "import socket; s=socket.socket(); s.settimeout(2); exit(0 if s.connect_ex(('$fqdn', $port)) == 0 else 1)" &>/dev/null; then
-          log "      🟢 SUCCESS"
+        if [[ -z "$pod_name" ]]; then
+            log "  ⚠️ Attempt $attempt: No stable Running WS pods found. Waiting..."
         else
-          log "      🔴 BLOCKED"
-          ((failures++))
+            log "  🔎 Auditing Pod: $pod_name"
+            local failures=0
+
+            # Infrastructure Targets
+            local targets=(
+                "REDIS:darkseek-redis:6379"
+                "DB:darkseek-db:5432"
+                "MQTT-INTERNAL:darkseek-backend-mqtt:8001"
+                "EXTERNAL-SSL:google.com:443"
+            )
+
+            for entry in "${targets[@]}"; do
+                local label="${entry%%:*}"
+                local h_p="${entry#*:}"
+                local host="${h_p%:*}"
+                local port="${h_p#*:}"
+
+                local target_addr="$host"
+                [[ "$label" != "EXTERNAL-SSL" ]] && target_addr="${host}.${ns}.svc.cluster.local"
+
+                log "   🧪 [PROBE] WS -> $label ($target_addr:$port)..."
+
+                # Python probe - capturing errno: 0=Success, 111=Refused, 110=Timeout
+                local probe_result
+                probe_result=$(kubectl exec "$pod_name" -n "$ns" -- python3 -c \
+                    "import socket; s=socket.socket(); s.settimeout(3); \
+                    err=s.connect_ex(('$target_addr', $port)); \
+                    print(err)" 2>/dev/null || echo "999")
+                
+                # Cleanup carriage returns from kubectl output
+                probe_result=$(echo "$probe_result" | tr -d '\r')
+
+                case "$probe_result" in
+                    "0")
+                        log "      🟢 SUCCESS: Connection Established."
+                        ;;
+                    "111")
+                        log "      🟡 REFUSED: Port open, but App NOT listening (Check 0.0.0.0 bind)."
+                        
+                        ((failures++))
+                        ;;
+                    "110" | "115")
+                        log "      🔴 TIMEOUT: Packet dropped (Check NetworkPolicy/Firewall)."
+                        
+                        ((failures++))
+                        ;;
+                    "999")
+                        log "      ☢️  EXEC FAILURE: Could not run probe (Is the pod crashing?)"
+                        ((failures++))
+                        ;;
+                    *)
+                        log "      📡 Python code $probe_result. Falling back to nc..."
+                        if kubectl exec "$pod_name" -n "$ns" -- command -v nc >/dev/null 2>&1; then
+                            if kubectl exec "$pod_name" -n "$ns" -- nc -zv -w 2 "$target_addr" "$port" &>/dev/null; then
+                                log "      🟢 SUCCESS (via nc)"
+                            else
+                                log "      🔴 FAILED (via nc)"
+                                ((failures++))
+                            fi
+                        else
+                            log "      ⚠️ nc not found in pod. Marking as failure."
+                            ((failures++))
+                        fi
+                        ;;
+                esac
+            done
+
+            if [ $failures -eq 0 ]; then
+                log "🚀 ALL WS EGRESS PATHS VERIFIED."
+                return 0
+            fi
         fi
-      done
 
-      # 2. DNS Resolution Check
-      log "   🧪 [PROBE] WS -> DNS Resolution (google.com)..."
-      if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; socket.gethostbyname('google.com')" &>/dev/null; then
-        log "      🟢 SUCCESS"
-      else
-        log "      🔴 DNS FAILURE"
-        ((failures++))
-      fi
+        [ $attempt -lt $max_attempts ] && log "  ⏳ Retrying in 5s..." && sleep 5
+        ((attempt++))
+    done
 
-      if [ $failures -eq 0 ]; then
-        log "🚀 ALL WS EGRESS PATHS VERIFIED."
-        return 0
-      fi
-    fi
-
-    [ $attempt -lt $max_attempts ] && log "  ⏳ Retrying in 5s..." && sleep 5
-    ((attempt++))
-  done
-
-  log "❌ WS DIAGNOSTIC CRITICAL FAILURE: Paths are still blocked."
-  return 1
+    log "❌ WS DIAGNOSTIC CRITICAL FAILURE: Internal paths are inconsistent."
+    return 1
 }
 
 check_pod_stability() {
