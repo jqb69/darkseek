@@ -1597,115 +1597,98 @@ check_ws_egress() {
     local max_attempts=3
     local attempt=1
 
-    log "🧪 [DIAGNOSTIC] Starting WebSocket Egress Probe (Zero-Trust Edition)..."
+    log "🧪 [DIAGNOSTIC] WebSocket Egress Audit (Timestamp: $(date -u))"
 
     while [ $attempt -le $max_attempts ]; do
-        log "📡 Attempt $attempt/$max_attempts: Probing WS Stack Connectivity..."
+        # 1. Resolve Pods (Filtering out terminating/non-running pods)
+        local ws_pod fe_pod
+        ws_pod=$(kubectl get pods -n "$ns" -l app=darkseek-backend-ws --field-selector=status.phase=Running -o jsonpath='{.items[?(@.metadata.deletionTimestamp=="")].metadata.name}' | awk '{print $1}')
+        fe_pod=$(kubectl get pods -n "$ns" -l app=darkseek-frontend --field-selector=status.phase=Running -o jsonpath='{.items[?(@.metadata.deletionTimestamp=="")].metadata.name}' | awk '{print $1}')
 
-        # Select the newest RUNNING pod, explicitly excluding those marked for deletion
-        local pod_name
-        pod_name=$(kubectl get pods -n "$ns" -l app=darkseek-backend-ws \
-            --field-selector=status.phase=Running \
-            -o jsonpath='{.items[?(@.metadata.deletionTimestamp=="")].metadata.name}' \
-            | tr ' ' '\n' | tail -n 1)
-
-        if [[ -z "$pod_name" ]]; then
-            log "  ⚠️ Attempt $attempt: No stable Running WS pods found. Waiting..."
-        else
-            log "  🔎 Auditing Pod: $pod_name"
-            local failures=0
-            
-            # 1. Grab the host from the pod's own environment with fallback
-            local broker_host
-            broker_host=$(kubectl exec "$pod_name" -n "$ns" -- printenv MQTT_BROKER_HOST 2>/dev/null || echo "")
-            broker_host="${broker_host:-test.mosquitto.org}"
-            
-            log "📡 Probing with Broker: $broker_host"
-        
-            # 2. Define targets
-            local targets=(
-                "LOCAL-HTTP:127.0.0.1:8000"
-                "LOCAL-HTTPS:127.0.0.1:8443"
-                "DB:darkseek-db:5432"
-                "REDIS:darkseek-redis:6379"
-                "RELAY:darkseek-backend-mqtt:8001"
-                "EXTERNAL-BROKER:$broker_host:8885"
-            )
-
-            for entry in "${targets[@]}"; do
-                local label="${entry%%:*}"
-                local h_p="${entry#*:}"
-                local host="${h_p%:*}"
-                local port="${h_p#*:}"
-
-                # LOGIC: Don't append .svc for EXTERNAL or LOCAL probes
-                local target_addr="$host"
-                if [[ "$label" != EXTERNAL* && "$label" != LOCAL* ]]; then
-                    target_addr="${host}.${ns}.svc.cluster.local"
-                fi
-
-                log "   🧪 [PROBE] WS -> $label ($target_addr:$port)..."
-
-                # Python probe - capturing errno: 0=Success, 111=Refused, 110=Timeout
-                local probe_result
-                probe_result=$(kubectl exec "$pod_name" -n "$ns" -- python3 -c \
-                    "import socket; s=socket.socket(); s.settimeout(3); \
-                    err=s.connect_ex(('$target_addr', $port)); \
-                    print(err)" 2>/dev/null | tr -d '\r' || echo "999")
-
-                case "$probe_result" in
-                    "0")
-                        log "      🟢 SUCCESS: Connection Established."
-                        # Explicit TLS check if port is 8443
-                        if [[ "$port" == "8443" ]]; then
-                            if ! kubectl exec "$pod_name" -n "$ns" -- curl -ksf https://127.0.0.1:8443/health >/dev/null 2>&1; then
-                                log "      ⚠️  TLS HANDSHAKE FAILED: Process is up, but SSL is rejecting."
-                                ((failures++))
-                            else
-                                log "      🔒 TLS HANDSHAKE: OK"
-                            fi
-                        fi
-                        ;;
-                    "111")
-                        log "      🟡 REFUSED: Port open, but App NOT listening (Check 0.0.0.0 bind)."
-                        ((failures++))
-                        ;;
-                    "110" | "115")
-                        log "      🔴 TIMEOUT: Packet dropped (Check NetworkPolicy/Firewall)."
-                        ((failures++))
-                        ;;
-                    "999")
-                        log "      ☢️  EXEC FAILURE: Could not run probe (Is the pod crashing?)"
-                        ((failures++))
-                        ;;
-                    *)
-                        log "      📡 Python code $probe_result. Falling back to nc..."
-                        if kubectl exec "$pod_name" -n "$ns" -- command -v nc >/dev/null 2>&1; then
-                            if kubectl exec "$pod_name" -n "$ns" -- nc -zv -w 2 "$target_addr" "$port" &>/dev/null; then
-                                log "      🟢 SUCCESS (via nc)"
-                            else
-                                log "      🔴 FAILED (via nc)"
-                                ((failures++))
-                            fi
-                        else
-                            log "      ⚠️ nc not found. Marking failure."
-                            ((failures++))
-                        fi
-                        ;;
-                esac
-            done
-
-            if [ $failures -eq 0 ]; then
-                log "🚀 ALL WS EGRESS PATHS VERIFIED."
-                return 0
-            fi
+        if [[ -z "$ws_pod" || -z "$fe_pod" ]]; then
+            log "  ⚠️ Attempt $attempt: Pods not ready. WS: ${ws_pod:-MISSING}, FE: ${fe_pod:-MISSING}. Waiting 5s..."
+            sleep 5; ((attempt++)); continue
         fi
 
-        [ $attempt -lt $max_attempts ] && log "  ⏳ Retrying in 5s..." && sleep 5
-        ((attempt++))
+        log "🔎 Auditing Pod: $ws_pod"
+        local failures=0
+        
+        # 2. Dynamic Config Extraction
+        local broker_host
+        broker_host=$(kubectl exec "$ws_pod" -n "$ns" -- printenv MQTT_BROKER_HOST 2>/dev/null || echo "test.mosquitto.org")
+
+        local targets=(
+            "LOCAL-HTTPS:127.0.0.1:8443"
+            "DB:darkseek-db:5432"
+            "REDIS:darkseek-redis:6379"
+            "RELAY:darkseek-backend-mqtt:8001"
+            "EXTERNAL-BROKER:$broker_host:8885"
+        )
+
+        for entry in "${targets[@]}"; do
+            local label="${entry%%:*}"
+            local h_p="${entry#*:}"
+            local host="${h_p%:*}"
+            local port="${h_p#*:}"
+            local target_addr="$host"
+
+            # Logic: Handle DNS suffixes for cluster internal services
+            if [[ "$label" != EXTERNAL* && "$label" != LOCAL* ]]; then
+                target_addr="${host}.${ns}.svc.cluster.local"
+                
+                # Pre-flight check: Does the service even have endpoints?
+                if ! kubectl get endpoints "$host" -n "$ns" -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; then
+                    log "   ⚠️  [SKIP] $label: No active endpoints. Pod likely failing probes."
+                    ((failures++)); continue
+                fi
+            fi
+
+            log "   🧪 [PROBE] WS -> $label ($target_addr:$port)..."
+
+            # 3. The Surgical Case Breakdown
+            local probe_result
+            probe_result=$(kubectl exec "$ws_pod" -n "$ns" -- python3 -c \
+                "import socket; s=socket.socket(); s.settimeout(3); \
+                err=s.connect_ex(('$target_addr', $port)); \
+                print(err)" 2>/dev/null | tr -d '\r' || echo "999")
+
+            case "$probe_result" in
+                "0")
+                    log "      🟢 SUCCESS."
+                    # Deep TLS Audit for 8443
+                    if [[ "$port" == "8443" ]]; then
+                        if ! kubectl exec "$ws_pod" -n "$ns" -- curl -ksf https://127.0.0.1:8443/health >/dev/null 2>&1; then
+                            log "      ⚠️  TLS FAIL: Port open, but SSL handshake rejected (Check Certs!)"
+                            ((failures++))
+                        fi
+                    fi
+                    ;;
+                "111")
+                    log "      🔴 REFUSED: App not listening on $port (Bind issue?)"
+                    ((failures++))
+                    ;;
+                "110" | "115")
+                    log "      🔴 TIMEOUT: NetworkPolicy/Firewall blocking port $port."
+                    ((failures++))
+                    ;;
+                *)
+                    # Emergency Fallback
+                    if kubectl exec "$ws_pod" -n "$ns" -- nc -zv -w 2 "$target_addr" "$port" &>/dev/null; then
+                        log "      🟢 SUCCESS (via nc fallback)"
+                    else
+                        log "      🔴 FAILED (Code: $probe_result)"
+                        ((failures++))
+                    fi
+                    ;;
+            esac
+        done
+
+        [[ $failures -eq 0 ]] && { log "🚀 ALL WS PATHS VERIFIED."; return 0; }
+        
+        log "  ⏳ Attempt $attempt failed. Retrying..."
+        sleep 5; ((attempt++))
     done
 
-    log "❌ WS DIAGNOSTIC CRITICAL FAILURE: Internal paths are inconsistent."
     return 1
 }
 
