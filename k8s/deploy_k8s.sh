@@ -1567,7 +1567,7 @@ check_mqtt_egress() {
             log "📡 Tracing $host on $port (Attempt $i)..."
             # Replace the 'if kubectl exec' line in your loop with this:
             if kubectl exec "$pod_name" -n "$ns" -- python3 -c "import socket; s=socket.socket(); s.settimeout(2); exit(s.connect_ex(('$host', $port)))"; then
-                log "   🟢 SUCCESS: Path to $host is OPEN"
+                log "   🟢 SUCCESS: MQTT Path to $host is OPEN"
                 infra_open=true
                 break
             fi
@@ -1600,20 +1600,34 @@ check_ws_egress() {
     log "🧪 [DIAGNOSTIC] WebSocket Egress Audit (Timestamp: $(date -u))"
 
     while [ $attempt -le $max_attempts ]; do
-        # 1. Resolve Pods (Filtering out terminating/non-running pods)
+        log "📡 Attempt $attempt/$max_attempts: Probing WS Stack Connectivity..."
+
+        # 1. RESOLVE PODS (Filtering out terminating/ghost pods)
         local ws_pod fe_pod
         ws_pod=$(kubectl get pods -n "$ns" -l app=darkseek-backend-ws --field-selector=status.phase=Running -o jsonpath='{.items[?(@.metadata.deletionTimestamp=="")].metadata.name}' | awk '{print $1}')
         fe_pod=$(kubectl get pods -n "$ns" -l app=darkseek-frontend --field-selector=status.phase=Running -o jsonpath='{.items[?(@.metadata.deletionTimestamp=="")].metadata.name}' | awk '{print $1}')
 
-        if [[ -z "$ws_pod" || -z "$fe_pod" ]]; then
-            log "  ⚠️ Attempt $attempt: Pods not ready. WS: ${ws_pod:-MISSING}, FE: ${fe_pod:-MISSING}. Waiting 5s..."
+        # 🚨 TRIGGER EMERGENCY TRACE IF PODS ARE MISSING
+        if [[ -z "$ws_pod" ]]; then
+            log "  ⚠️ Attempt $attempt: No stable Running WS pods found. Investigating cluster state..."
+            
+            # Check for CrashLoopBackOff or ImagePull issues
+            local pod_status
+            pod_status=$(kubectl get pods -n "$ns" -l app=darkseek-backend-ws -o jsonpath='{.items[0].status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "Unknown")
+            log "    🔍 TRACE: Pod is currently in state: [$pod_status]"
+            
+            if [[ "$pod_status" == "CrashLoopBackOff" ]]; then
+                log "    🚨 CRITICAL: Pod is crashing. Last 5 lines of logs:"
+                kubectl logs -n "$ns" -l app=darkseek-backend-ws --tail=5
+            fi
+            
             sleep 5; ((attempt++)); continue
         fi
 
-        log "🔎 Auditing Pod: $ws_pod"
+        log "  🔎 Auditing Live Pod: $ws_pod"
         local failures=0
         
-        # 2. Dynamic Config Extraction
+        # 2. DYNAMIC BROKER EXTRACTION
         local broker_host
         broker_host=$(kubectl exec "$ws_pod" -n "$ns" -- printenv MQTT_BROKER_HOST 2>/dev/null || echo "test.mosquitto.org")
 
@@ -1632,20 +1646,20 @@ check_ws_egress() {
             local port="${h_p#*:}"
             local target_addr="$host"
 
-            # Logic: Handle DNS suffixes for cluster internal services
+            # 🌐 INTERNAL DNS LOGIC
             if [[ "$label" != EXTERNAL* && "$label" != LOCAL* ]]; then
                 target_addr="${host}.${ns}.svc.cluster.local"
                 
-                # Pre-flight check: Does the service even have endpoints?
+                # Check if the service actually has a back-end endpoint
                 if ! kubectl get endpoints "$host" -n "$ns" -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; then
-                    log "   ⚠️  [SKIP] $label: No active endpoints. Pod likely failing probes."
+                    log "    ⚠️ [SKIP] $label: No active endpoints. Target app is likely down."
                     ((failures++)); continue
                 fi
             fi
 
-            log "   🧪 [PROBE] WS -> $label ($target_addr:$port)..."
+            log "    🧪 [PROBE] WS -> $label ($target_addr:$port)..."
 
-            # 3. The Surgical Case Breakdown
+            # 🐍 PYTHON SURGICAL PROBE (Captures errno)
             local probe_result
             probe_result=$(kubectl exec "$ws_pod" -n "$ns" -- python3 -c \
                 "import socket; s=socket.socket(); s.settimeout(3); \
@@ -1655,40 +1669,39 @@ check_ws_egress() {
             case "$probe_result" in
                 "0")
                     log "      🟢 SUCCESS."
-                    # Deep TLS Audit for 8443
+                    # 🔒 DEEP TLS HANDSHAKE CHECK
                     if [[ "$port" == "8443" ]]; then
                         if ! kubectl exec "$ws_pod" -n "$ns" -- curl -ksf https://127.0.0.1:8443/health >/dev/null 2>&1; then
-                            log "      ⚠️  TLS FAIL: Port open, but SSL handshake rejected (Check Certs!)"
+                            log "      ⚠️  TLS FAIL: Port open, but SSL handshake rejected. Check certs!"
                             ((failures++))
                         fi
                     fi
                     ;;
                 "111")
-                    log "      🔴 REFUSED: App not listening on $port (Bind issue?)"
+                    log "      🔴 REFUSED: Connection reached pod but app isn't listening."
                     ((failures++))
                     ;;
                 "110" | "115")
-                    log "      🔴 TIMEOUT: NetworkPolicy/Firewall blocking port $port."
+                    log "      🔴 TIMEOUT: NetworkPolicy or Firewall is dropping packets."
                     ((failures++))
                     ;;
                 *)
-                    # Emergency Fallback
-                    if kubectl exec "$ws_pod" -n "$ns" -- nc -zv -w 2 "$target_addr" "$port" &>/dev/null; then
-                        log "      🟢 SUCCESS (via nc fallback)"
-                    else
-                        log "      🔴 FAILED (Code: $probe_result)"
-                        ((failures++))
-                    fi
+                    log "      🔴 UNKNOWN ERROR: $probe_result"
+                    ((failures++))
                     ;;
             esac
         done
 
-        [[ $failures -eq 0 ]] && { log "🚀 ALL WS PATHS VERIFIED."; return 0; }
-        
-        log "  ⏳ Attempt $attempt failed. Retrying..."
+        if [ $failures -eq 0 ]; then
+            log "🚀 ALL WS PATHS VERIFIED."
+            return 0
+        fi
+
+        log "  ⏳ Attempt $attempt failed. Retrying in 5s..."
         sleep 5; ((attempt++))
     done
 
+    log "❌ WS DIAGNOSTIC CRITICAL FAILURE: Internal paths are inconsistent."
     return 1
 }
 
