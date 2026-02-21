@@ -1592,7 +1592,7 @@ check_mqtt_egress() {
 }
    
 check_ws_egress() {
-    # Keep the shell strict but localized
+    set -euo pipefail
     local ns="${NAMESPACE:-default}"
     local max_attempts=3
     local attempt=1
@@ -1614,13 +1614,22 @@ check_ws_egress() {
         else
             log "  🔎 Auditing Pod: $pod_name"
             local failures=0
-
-            # Infrastructure Targets
+            
+            # 1. Grab the host from the pod's own environment with fallback
+            local broker_host
+            broker_host=$(kubectl exec "$pod_name" -n "$ns" -- printenv MQTT_BROKER_HOST 2>/dev/null || echo "")
+            broker_host="${broker_host:-test.mosquitto.org}"
+            
+            log "📡 Probing with Broker: $broker_host"
+        
+            # 2. Define targets
             local targets=(
-                "REDIS:darkseek-redis:6379"
+                "LOCAL-HTTP:127.0.0.1:8000"
+                "LOCAL-HTTPS:127.0.0.1:8443"
                 "DB:darkseek-db:5432"
-                "MQTT-INTERNAL:darkseek-backend-mqtt:8001"
-                "EXTERNAL-SSL:google.com:443"
+                "REDIS:darkseek-redis:6379"
+                "RELAY:darkseek-backend-mqtt:8001"
+                "EXTERNAL-BROKER:$broker_host:8885"
             )
 
             for entry in "${targets[@]}"; do
@@ -1629,8 +1638,11 @@ check_ws_egress() {
                 local host="${h_p%:*}"
                 local port="${h_p#*:}"
 
+                # LOGIC: Don't append .svc for EXTERNAL or LOCAL probes
                 local target_addr="$host"
-                [[ "$label" != "EXTERNAL-SSL" ]] && target_addr="${host}.${ns}.svc.cluster.local"
+                if [[ "$label" != EXTERNAL* && "$label" != LOCAL* ]]; then
+                    target_addr="${host}.${ns}.svc.cluster.local"
+                fi
 
                 log "   🧪 [PROBE] WS -> $label ($target_addr:$port)..."
 
@@ -1639,23 +1651,27 @@ check_ws_egress() {
                 probe_result=$(kubectl exec "$pod_name" -n "$ns" -- python3 -c \
                     "import socket; s=socket.socket(); s.settimeout(3); \
                     err=s.connect_ex(('$target_addr', $port)); \
-                    print(err)" 2>/dev/null || echo "999")
-                
-                # Cleanup carriage returns from kubectl output
-                probe_result=$(echo "$probe_result" | tr -d '\r')
+                    print(err)" 2>/dev/null | tr -d '\r' || echo "999")
 
                 case "$probe_result" in
                     "0")
                         log "      🟢 SUCCESS: Connection Established."
+                        # Explicit TLS check if port is 8443
+                        if [[ "$port" == "8443" ]]; then
+                            if ! kubectl exec "$pod_name" -n "$ns" -- curl -ksf https://127.0.0.1:8443/health >/dev/null 2>&1; then
+                                log "      ⚠️  TLS HANDSHAKE FAILED: Process is up, but SSL is rejecting."
+                                ((failures++))
+                            else
+                                log "      🔒 TLS HANDSHAKE: OK"
+                            fi
+                        fi
                         ;;
                     "111")
                         log "      🟡 REFUSED: Port open, but App NOT listening (Check 0.0.0.0 bind)."
-                        
                         ((failures++))
                         ;;
                     "110" | "115")
                         log "      🔴 TIMEOUT: Packet dropped (Check NetworkPolicy/Firewall)."
-                        
                         ((failures++))
                         ;;
                     "999")
@@ -1672,7 +1688,7 @@ check_ws_egress() {
                                 ((failures++))
                             fi
                         else
-                            log "      ⚠️ nc not found in pod. Marking as failure."
+                            log "      ⚠️ nc not found. Marking failure."
                             ((failures++))
                         fi
                         ;;
