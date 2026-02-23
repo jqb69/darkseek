@@ -1604,9 +1604,8 @@ check_ws_egress() {
 
         # 1. RESOLVE PODS (Filtering out terminating/ghost pods)
         local ws_pod fe_pod
-        ws_pod=$(kubectl get pods -n "$ns" -l app=darkseek-backend-ws --field-selector=status.phase=Running -o jsonpath='{.items[?(@.metadata.deletionTimestamp=="")].metadata.name}' | awk '{print $1}')
-        fe_pod=$(kubectl get pods -n "$ns" -l app=darkseek-frontend --field-selector=status.phase=Running -o jsonpath='{.items[?(@.metadata.deletionTimestamp=="")].metadata.name}' | awk '{print $1}')
-
+        ws_pod=$(kubectl get pods -n "$ns" -l app=darkseek-backend-ws --field-selector=status.phase=Running | grep -v Terminating | awk 'NR==2 {print $1}')
+        fe_pod=$(kubectl get pods -n "$ns" -l app=darkseek-frontend --field-selector=status.phase=Running | grep -v Terminating | awk 'NR==2 {print $1}')
         # 🚨 TRIGGER EMERGENCY TRACE IF PODS ARE MISSING
         if [[ -z "$ws_pod" ]]; then
             log "  ⚠️ Attempt $attempt: No stable Running WS pods found. Investigating cluster state..."
