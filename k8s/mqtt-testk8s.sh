@@ -58,6 +58,40 @@ check_tcp_python() {
     kubectl exec "$pod" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$host', $port)))" &>/dev/null
 }
 
+get_broker() {
+    # Dynamically grab the broker host from the live deployment
+    local host
+    host=$(kubectl exec deployment/"$BACKEND_NAME" -n "$NAMESPACE" -- python3 -c "import os; print(os.environ.get('MQTT_BROKER_HOST', ''))" 2>/dev/null || echo "")
+    
+    if [[ -z "$host" ]]; then
+        log "❌ ERROR: Could not find MQTT_BROKER_HOST in deployment/$BACKEND_NAME"
+        return 1
+    fi
+    
+    echo "$host"
+    return 0
+}
+
+
+# ... [Keep your variables from source 1] ...
+
+check_tcp() {
+    local pod="$1" host="$2" port="$3" label="$4"
+    log "📡 Testing $label ($host:$port)..."
+    # Returns 1 if ERROR! [cite: 7, 8]
+    if kubectl exec "$pod" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$host', $port)))" &>/dev/null; then
+        log "   🟢 SUCCESS: $label"
+        return 0
+    else
+        log "   🔴 FAILED: $label"
+        return 1
+    fi
+}
+
+
+
+
+
 # =======================================================
 # STAGED TESTS (NON-FATAL)
 # =======================================================
@@ -97,23 +131,19 @@ test_backend_dns() {
 }
 
 
+# Update your core test to use the same logic
 test_backend_core() {
-    log "🔍 Backend WS → Redis..."
+    log "🔍 Validating Backend Core Path..."
+    test_backend_dns || return 1 
     
-    if ! test_backend_dns; then 
-        log "❌ Backend DNS failed"
-        return 1
+    # Use Python helper instead of nc [cite: 1]
+    if ! check_tcp "deployment/$BACKEND_WS" "$REDIS_NAME" 6379 "Backend Redis TCP"; then
+        log "🚨 CORE FAILURE: WS cannot reach Redis."
+        return 1 
     fi
-    
-    # Updated to use Python3 instead of nc 
-    local py_cmd="python3 -c \"import socket; s=socket.socket(); s.settimeout(5); exit(0 if s.connect_ex(('$REDIS_NAME', 6379)) == 0 else 1)\""
-    if ! wait_for_connectivity "kubectl exec -n '$NAMESPACE' deployment/$BACKEND_WS -- $py_cmd" "Backend Redis TCP"; then [cite: 7, 8]
-        log "❌ Backend Redis TCP failed"
-        return 1
-    fi
-    
-    log "✅ Backend core healthy"
+    return 0
 }
+
 
 # =======================================================
 # CONTROLLED RECOVERY (LIMITED)
@@ -126,11 +156,11 @@ controlled_recovery() {
         log "🔧 Recovery attempt $attempt..."
         touch "$RECOVERY_LOCK"
         
-        kubectl delete netpol allow-backend-ws allow-to-redis allow-to-backend-mqtt -n "$NAMESPACE" --ignore-not-found 
+        kubectl delete netpol allow-backend-ws allow-to-redis allow-to-backend-mqtt allow-dns-global -n "$NAMESPACE" --ignore-not-found 
         sleep 5
         
         # Re-apply EVERYTHING (including the missing MQTT policies)
-        #kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE" 
+        kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE" 
         kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE" 
         kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE" 
         # NEW: Restore MQTT connectivity
@@ -180,7 +210,36 @@ fix_mqtt_health() {
 }
 
 
+test_tcp_connectivity() {
+    log "🌐 STARTING INFRASTRUCTURE TRACE..."
+    local failed=0
+    
+    # 1. Get the real broker host
+    local broker_host
+    if ! broker_host=$(get_broker); then
+        failed=1
+    else
+        # 2. Test path to External Broker on 8885
+        log "📡 Testing MQTT Path -> $broker_host:8885"
+        if kubectl exec deployment/"$BACKEND_NAME" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$broker_host', 8885)))" &>/dev/null; then
+            log "   🟢 SUCCESS: MQTT -> External Broker"
+        else
+            log "   🔴 FAILED: MQTT -> External Broker (Check Egress Policy)"
+            failed=1
+        fi
+    fi
 
+    # 3. Test WS -> Redis
+    log "📡 Testing WS Path -> $REDIS_NAME:6379"
+    if kubectl exec deployment/"$BACKEND_WS" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$REDIS_NAME', 6379)))" &>/dev/null; then
+        log "   🟢 SUCCESS: WS -> Redis"
+    else
+        log "   🔴 FAILED: WS -> Redis"
+        failed=1
+    fi
+
+    return $failed
+}
 
 # ADD THIS FUNCTION anywhere before main()
 # Update this in mqtttest.sh
