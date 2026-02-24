@@ -183,32 +183,37 @@ fix_mqtt_health() {
 
 
 # ADD THIS FUNCTION anywhere before main()
+# Update this in mqtttest.sh
 test_tcp_connectivity() {
     log "🌐 TCP CONNECTIVITY VERIFICATION (Python3)..."
     local failed=0
 
-    # Test 1: WS -> Redis
-    if check_tcp_python "deployment/$BACKEND_WS" "$REDIS_NAME" 6379; then
-        log "✅ WS → Redis:6379 OK"
+    # 1. WS -> Redis [cite: 28]
+    if kubectl exec deployment/$BACKEND_WS -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$REDIS_NAME', 6379)))" &>/dev/null; then
+        log "   🟢 SUCCESS: WS -> Redis:6379"
     else
-        log "❌ WS → Redis FAILED"
+        log "   🔴 FAILED: WS -> Redis"
         failed=1
     fi
 
-    # Test 2: MQTT -> External Broker (Port 8885 Pierce)
-    # Dynamically gets broker host from pod env
+    # 2. MQTT -> External Broker (Dynamic Lookup)
+    # Extracts the ACTUAL host the app is trying to use
     local broker
     broker=$(kubectl exec deployment/$BACKEND_NAME -n "$NAMESPACE" -- python3 -c "import os; print(os.environ.get('MQTT_BROKER_HOST',''))" 2>/dev/null)
+    
     if [[ -n "$broker" ]]; then
-        if check_tcp_python "deployment/$BACKEND_NAME" "$broker" 8885; then
-            log "✅ MQTT → External:8885 OK"
+        log "📡 Testing External Broker: $broker:8885"
+        if kubectl exec deployment/$BACKEND_NAME -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$broker', 8885)))" &>/dev/null; then
+            log "   🟢 SUCCESS: MQTT -> External:8885"
         else
-            log "❌ MQTT → External:8885 FAILED"
+            log "   🔴 FAILED: MQTT -> External:8885"
             failed=1
         fi
+    else
+        log "⚠️ Could not resolve MQTT_BROKER_HOST from environment"
+        failed=1
     fi
 
-    # Return 1 if ANY check above failed
     return $failed
 }
 # =======================================================
