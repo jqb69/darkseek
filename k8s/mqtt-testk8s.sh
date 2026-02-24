@@ -48,6 +48,16 @@ wait_for_connectivity() {
     return 1
 }
 
+# Replacement for nc -zv using Python
+# Returns 0 on success, 1 on failure
+check_tcp_python() {
+    local pod="$1"
+    local host="$2"
+    local port="$3"
+    # Runs a 5-second TCP handshake check inside the pod
+    kubectl exec "$pod" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$host', $port)))" &>/dev/null
+}
+
 # =======================================================
 # STAGED TESTS (NON-FATAL)
 # =======================================================
@@ -64,9 +74,9 @@ test_mqtt_from_debug() {
 }
 
 test_http_from_debug() {
-    log "🌐 HTTP health check (raw TCP)..."
-    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- \
-        timeout 5 nc -zv "$BACKEND_WS" 8000 >/dev/null 2>&1; then
+    log "🌐 HTTP health check (Python TCP)..."
+    # Replacing nc -zv [cite: 11]
+    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('$BACKEND_WS', 8000))" 2>/dev/null; then
         log "✅ Backend port 8000 TCP open"
         return 0
     else
@@ -90,15 +100,15 @@ test_backend_dns() {
 test_backend_core() {
     log "🔍 Backend WS → Redis..."
     
-    # Test DNS first (SHORT!)
-    if ! test_backend_dns; then
-        log "❌ Backend DNS failed → Check allow-dns-egress policy"
+    if ! test_backend_dns; then 
+        log "❌ Backend DNS failed"
         return 1
     fi
     
-    # Test TCP
-    if ! wait_for_connectivity "kubectl exec -n '$NAMESPACE' deployment/$BACKEND_WS -- nc -zv '$REDIS_NAME' 6379" "Backend Redis TCP"; then
-        log "❌ Backend Redis TCP failed → Check allow-to-redis policy"
+    # Updated to use Python3 instead of nc 
+    local py_cmd="python3 -c \"import socket; s=socket.socket(); s.settimeout(5); exit(0 if s.connect_ex(('$REDIS_NAME', 6379)) == 0 else 1)\""
+    if ! wait_for_connectivity "kubectl exec -n '$NAMESPACE' deployment/$BACKEND_WS -- $py_cmd" "Backend Redis TCP"; then [cite: 7, 8]
+        log "❌ Backend Redis TCP failed"
         return 1
     fi
     
@@ -116,14 +126,15 @@ controlled_recovery() {
         log "🔧 Recovery attempt $attempt..."
         touch "$RECOVERY_LOCK"
         
-        # Soft reset: just policies (no pod kills)
-        kubectl delete netpol allow-backend-ws allow-to-redis allow-dns-egress -n "$NAMESPACE" --ignore-not-found || true
+        kubectl delete netpol allow-backend-ws allow-to-redis allow-to-backend-mqtt -n "$NAMESPACE" --ignore-not-found 
         sleep 5
         
-        kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE" || true
-        kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE" || true
-        kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE" || true
-        
+        # Re-apply EVERYTHING (including the missing MQTT policies)
+        #kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE" 
+        kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE" 
+        kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE" 
+        # NEW: Restore MQTT connectivity
+        kubectl apply -f "$POLICY_DIR/03-allow-to-backend-mqtt.yaml" -n "$NAMESPACE"
         log "⏳ 60s CNI propagation..."
         sleep 60
         
@@ -143,61 +154,63 @@ controlled_recovery() {
     dump_network_state
     return 1
 }
-
 # ADD THIS FUNCTION before main()
+
 fix_mqtt_health() {
-    log "🔧 CHECKING MQTT HEALTH (emergency diagnostics)..."
-    
-    # 1. MQTT diagnostics (non-blocking)
+    log "🔧 CHECKING MQTT HEALTH (emergency diagnostics)..." 
     log "--- MQTT POD LOGS ---"
     kubectl logs -l app=$BACKEND_NAME -n "$NAMESPACE" --tail=20 || true
     log "--- MQTT POD STATUS ---" 
     kubectl describe pod -l app=$BACKEND_NAME -n "$NAMESPACE" || true
     
-    # 2. Check health file (SAFE exec)
-    if kubectl exec deployment/$BACKEND_NAME -n "$NAMESPACE" -- test -f /tmp/mqtt-healthy 2>/dev/null; then
+    
+    # 1. Check health file (SAFE exec)
+    if kubectl exec deployment/$BACKEND_NAME -n "$NAMESPACE" -- test -f /tmp/mqtt-healthy 2>/dev/null; [cite: 26]
+    then
         log "✅ MQTT health file exists"
         return 0
     else
         log "❌ MQTT /tmp/mqtt-healthy MISSING → DISABLE LIVENESS PROBE"
-        # PATCH ONLY (NO rollout restart - per your history)
-        kubectl patch deployment $BACKEND_NAME -p '{"spec":{"template":{"spec":{"containers":[{"name":"backend-mqtt","livenessProbe":null}]}}}}' --type=merge -n "$NAMESPACE"
-        log "✅ MQTT liveness probe DISABLED (no restart)"
-        sleep 10  # Brief settle
+        # FIXED PATCH: Uses a specific index to avoid the "image: Required value" error
+        kubectl patch deployment "$BACKEND_NAME" -n "$NAMESPACE" --type='json' -p='[{"op": "remove", "path": "/spec/template/spec/containers/0/livenessProbe"}]'
+        log "✅ MQTT liveness probe REMOVED (no restart)"
+        sleep 10 
         return 0
     fi
 }
 
 
+
+
 # ADD THIS FUNCTION anywhere before main()
 test_tcp_connectivity() {
-    log "🌐 TCP CONNECTIVITY VERIFICATION (NO verification traps)..."
-    
-    # Test 1: WS → Redis (direct deployment exec)
-    if kubectl exec deployment/$BACKEND_WS -n "$NAMESPACE" -- nc -zv $REDIS_NAME 6379 &>/dev/null; then
-        log "✅ WS → Redis:6379 TCP OK"
-    else
-        log "❌ WS → Redis TCP FAILED"
-    fi
-    
-    # Test 2: Debug → WS
-    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv $BACKEND_WS 8000 &>/dev/null; then
-        log "✅ Debug → WS:8000 TCP OK"
-    else
-        log "❌ Debug → WS TCP FAILED"
-    fi
-    
-    # Test 3: Debug → Redis
-    if kubectl exec "$DEBUG_POD" -n "$NAMESPACE" -- nc -zv $REDIS_NAME 6379 &>/dev/null; then
-        log "✅ Debug → Redis:6379 TCP OK"
-    else
-        log "❌ Debug → Redis TCP FAILED"
-    fi
-    
-    log "📊 TCP SUMMARY COMPLETE"
-    return 0  # Always succeed - just reporting
-}
+    log "🌐 TCP CONNECTIVITY VERIFICATION (Python3)..."
+    local failed=0
 
+    # Test 1: WS -> Redis
+    if check_tcp_python "deployment/$BACKEND_WS" "$REDIS_NAME" 6379; then
+        log "✅ WS → Redis:6379 OK"
+    else
+        log "❌ WS → Redis FAILED"
+        failed=1
+    fi
+
+    # Test 2: MQTT -> External Broker (Port 8885 Pierce)
+    # Dynamically gets broker host from pod env
+    local broker
+    broker=$(kubectl exec deployment/$BACKEND_NAME -n "$NAMESPACE" -- python3 -c "import os; print(os.environ.get('MQTT_BROKER_HOST',''))" 2>/dev/null)
+    if [[ -n "$broker" ]]; then
+        if check_tcp_python "deployment/$BACKEND_NAME" "$broker" 8885; then
+            log "✅ MQTT → External:8885 OK"
+        else
+            log "❌ MQTT → External:8885 FAILED"
+            failed=1
+        fi
+    fi
+
+    # Return 1 if ANY check above failed
+    return $failed
+}
 # =======================================================
 # MAIN (SAFE, NO FAILFAST)
 # =======================================================
