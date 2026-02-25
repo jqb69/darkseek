@@ -110,25 +110,25 @@ test_tcp_connectivity() {
 # =======================================================
 # 🔧 RECOVERY
 # =======================================================
-
 controlled_recovery() {
     [[ -f "$RECOVERY_LOCK" ]] && { log "⚠️ Recovery lock active. Skipping."; return 1; }
     touch "$RECOVERY_LOCK"
     log "🔧 TRIGGERING CONTROLLED RECOVERY..."
     
+    # Clean up only what we are about to replace
     kubectl delete netpol allow-backend-ws allow-to-redis allow-to-backend-mqtt allow-dns-global -n "$NAMESPACE" --ignore-not-found 
     sleep 5
     
+    # Re-apply using the CORRECTED file names
     kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE"
     kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE"
     kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE"
-    kubectl apply -f "$POLICY_DIR/03-allow-to-backend-mqtt.yaml" -n "$NAMESPACE"
+    kubectl apply -f "$POLICY_DIR/03-allow-backend-mqtt.yaml" -n "$NAMESPACE"  # Fixed Name
     
     log "⏳ Waiting 45s for CNI propagation..."
     sleep 45
     rm -f "$RECOVERY_LOCK"
 }
-
 # =======================================================
 # 🎬 MAIN
 # =======================================================
