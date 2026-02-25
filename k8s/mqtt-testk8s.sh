@@ -73,24 +73,6 @@ get_broker() {
 }
 
 
-# ... [Keep your variables from source 1] ...
-
-check_tcp() {
-    local pod="$1" host="$2" port="$3" label="$4"
-    log "📡 Testing $label ($host:$port)..."
-    # Returns 1 if ERROR! [cite: 7, 8]
-    if kubectl exec "$pod" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$host', $port)))" &>/dev/null; then
-        log "   🟢 SUCCESS: $label"
-        return 0
-    else
-        log "   🔴 FAILED: $label"
-        return 1
-    fi
-}
-
-
-
-
 
 # =======================================================
 # STAGED TESTS (NON-FATAL)
@@ -193,88 +175,92 @@ fix_mqtt_health() {
     log "--- MQTT POD STATUS ---" 
     kubectl describe pod -l app=$BACKEND_NAME -n "$NAMESPACE" || true
     
-    
-    # 1. Check health file (SAFE exec)
-    if kubectl exec deployment/$BACKEND_NAME -n "$NAMESPACE" -- test -f /tmp/mqtt-healthy 2>/dev/null; [cite: 26]
-    then
-        log "✅ MQTT health file exists"
+    # --- THE COUNTER LOOP ---
+    local max_attempts=6
+    local attempt=1
+    local file_found=0
+
+    while [ $attempt -le $max_attempts ]; do
+        log "📡 Checking for /tmp/mqtt-healthy (Attempt $attempt/$max_attempts)..."
+        
+        # 1. Check health file (SAFE exec)
+        if kubectl exec deployment/$BACKEND_NAME -n "$NAMESPACE" -- test -f /tmp/mqtt-healthy 2>/dev/null; then
+            log "✅ MQTT health file exists!"
+            file_found=1
+            break
+        fi
+        
+        log "⏳ Health file not ready yet. Waiting 10s..."
+        sleep 10
+        attempt=$((attempt + 1))
+    done
+
+    # --- THE VERDICT ---
+    if [ "$file_found" -eq 1 ]; then
         return 0
     else
-        log "❌ MQTT /tmp/mqtt-healthy MISSING → DISABLE LIVENESS PROBE"
+        log "❌ MQTT /tmp/mqtt-healthy STILL MISSING after 60s → DISABLING LIVENESS PROBE"
+        
         # FIXED PATCH: Uses a specific index to avoid the "image: Required value" error
-        kubectl patch deployment "$BACKEND_NAME" -n "$NAMESPACE" --type='json' -p='[{"op": "remove", "path": "/spec/template/spec/containers/0/livenessProbe"}]'
+        kubectl patch deployment "$BACKEND_NAME" -n "$NAMESPACE" --type='json' -p='[{"op": "remove", "path": "/spec/template/spec/containers/0/livenessProbe"}]' 2>/dev/null || log "⚠️ Probe might already be removed."
+        
         log "✅ MQTT liveness probe REMOVED (no restart)"
         sleep 10 
         return 0
     fi
 }
 
+# Helper that retries 3 times before returning a hard failure (1)
+check_tcp_with_retry() {
+    local pod="$1" host="$2" port="$3" label="$4"
+    local max_attempts=3
+    local attempt=1
 
+    log "📡 Testing $label ($host:$port)..."
+    
+    while [ $attempt -le $max_attempts ]; do
+        log "   🔄 Attempt $attempt/$max_attempts..."
+        
+        if kubectl exec "$pod" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$host', $port)))" &>/dev/null; then
+            log "   🟢 SUCCESS: $label"
+            return 0
+        else
+            log "   ⚠️ FAILED: $label (Attempt $attempt)"
+        fi
+        
+        if [ $attempt -lt $max_attempts ]; then
+            sleep 5 # Give the network/pod time to catch up
+        fi
+        attempt=$((attempt + 1))
+    done
+    
+    log "   🔴 CRITICAL FAILURE: $label unreachable after $max_attempts attempts."
+    return 1
+}
+
+# The Main Infrastructure Trace
 test_tcp_connectivity() {
-    log "🌐 STARTING INFRASTRUCTURE TRACE..."
+    log "🌐 STARTING INFRASTRUCTURE TRACE (Python3 Mode w/ Retries)..."
     local failed=0
     
-    # 1. Get the real broker host
+    # 1. Get the dynamic broker host
     local broker_host
     if ! broker_host=$(get_broker); then
+        log "   🔴 FAILED: Could not resolve broker host from pod environment."
         failed=1
     else
         # 2. Test path to External Broker on 8885
-        log "📡 Testing MQTT Path -> $broker_host:8885"
-        if kubectl exec deployment/"$BACKEND_NAME" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$broker_host', 8885)))" &>/dev/null; then
-            log "   🟢 SUCCESS: MQTT -> External Broker"
-        else
-            log "   🔴 FAILED: MQTT -> External Broker (Check Egress Policy)"
-            failed=1
-        fi
+        check_tcp_with_retry "deployment/$BACKEND_NAME" "$broker_host" 8885 "MQTT -> External Broker" || failed=1
     fi
 
-    # 3. Test WS -> Redis
-    log "📡 Testing WS Path -> $REDIS_NAME:6379"
-    if kubectl exec deployment/"$BACKEND_WS" -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$REDIS_NAME', 6379)))" &>/dev/null; then
-        log "   🟢 SUCCESS: WS -> Redis"
-    else
-        log "   🔴 FAILED: WS -> Redis"
-        failed=1
-    fi
+    # 3. Test WS -> Redis Path
+    check_tcp_with_retry "deployment/$BACKEND_WS" "$REDIS_NAME" 6379 "WS -> Redis" || failed=1
 
+    # Return 1 to trigger recovery if ANY check permanently failed
     return $failed
 }
 
-# ADD THIS FUNCTION anywhere before main()
-# Update this in mqtttest.sh
-test_tcp_connectivity() {
-    log "🌐 TCP CONNECTIVITY VERIFICATION (Python3)..."
-    local failed=0
-
-    # 1. WS -> Redis [cite: 28]
-    if kubectl exec deployment/$BACKEND_WS -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$REDIS_NAME', 6379)))" &>/dev/null; then
-        log "   🟢 SUCCESS: WS -> Redis:6379"
-    else
-        log "   🔴 FAILED: WS -> Redis"
-        failed=1
-    fi
-
-    # 2. MQTT -> External Broker (Dynamic Lookup)
-    # Extracts the ACTUAL host the app is trying to use
-    local broker
-    broker=$(kubectl exec deployment/$BACKEND_NAME -n "$NAMESPACE" -- python3 -c "import os; print(os.environ.get('MQTT_BROKER_HOST',''))" 2>/dev/null)
-    
-    if [[ -n "$broker" ]]; then
-        log "📡 Testing External Broker: $broker:8885"
-        if kubectl exec deployment/$BACKEND_NAME -n "$NAMESPACE" -- python3 -c "import socket; s=socket.socket(); s.settimeout(5); exit(s.connect_ex(('$broker', 8885)))" &>/dev/null; then
-            log "   🟢 SUCCESS: MQTT -> External:8885"
-        else
-            log "   🔴 FAILED: MQTT -> External:8885"
-            failed=1
-        fi
-    else
-        log "⚠️ Could not resolve MQTT_BROKER_HOST from environment"
-        failed=1
-    fi
-
-    return $failed
-}
+#
 # =======================================================
 # MAIN (SAFE, NO FAILFAST)
 # =======================================================
