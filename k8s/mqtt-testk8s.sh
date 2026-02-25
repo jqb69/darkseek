@@ -63,6 +63,50 @@ check_dns_python() {
     fi
 }
 
+# --- NEW: DNS TEMPLATING LOGIC ---
+template_policies() {
+    log "🎯 Detecting Cluster DNS..."
+    # Fetch the real IP of kube-dns
+    local dns_ip
+    dns_ip=$(kubectl get svc kube-dns -n kube-system -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+    [[ -z "$dns_ip" ]] && dns_ip="34.118.224.10" # Your GKE fallback
+    log "🎯 GKE_DNS DETECTED: $dns_ip"
+
+    # Replace placeholder in ALL files and create .tmp versions
+    for f in "$POLICY_DIR"/*.yaml; do
+        sed "s/DNS_IP_PLACEHOLDER/$dns_ip/g" "$f" > "$f.tmp"
+    done
+}
+
+# --- UPDATED: RECOVERY BLOCK ---
+controlled_recovery() {
+    [[ -f "$RECOVERY_LOCK" ]] && { log "⚠️ Recovery lock active. Skipping."; return 1; }
+    touch "$RECOVERY_LOCK"
+    
+    log "🔧 TRIGGERING DNS-AWARE RECOVERY..."
+    
+    # 1. Create the valid YAMLs
+    template_policies
+
+    # 2. Nuclear Clean (optional, but keeps things fresh)
+    kubectl delete netpol allow-backend-ws allow-to-redis allow-to-backend-mqtt allow-dns-global -n "$NAMESPACE" --ignore-not-found 
+    sleep 5
+    
+    # 3. Apply in specific order
+    log "🛡️ Applying DNS-Aware Policies..."
+    kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml.tmp" -n "$NAMESPACE"
+    kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml.tmp" -n "$NAMESPACE"
+    kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml.tmp" -n "$NAMESPACE"
+    kubectl apply -f "$POLICY_DIR/03-allow-backend-mqtt.yaml.tmp" -n "$NAMESPACE"
+    
+    log "⏳ Waiting 45s for CNI propagation..."
+    sleep 45
+    
+    # 4. Cleanup temp files
+    rm -f "$POLICY_DIR"/*.tmp
+    rm -f "$RECOVERY_LOCK"
+}
+
 # =======================================================
 # 🔍 DIAGNOSTICS & TRACE
 # =======================================================
@@ -107,28 +151,7 @@ test_tcp_connectivity() {
     return $failed
 }
 
-# =======================================================
-# 🔧 RECOVERY
-# =======================================================
-controlled_recovery() {
-    [[ -f "$RECOVERY_LOCK" ]] && { log "⚠️ Recovery lock active. Skipping."; return 1; }
-    touch "$RECOVERY_LOCK"
-    log "🔧 TRIGGERING CONTROLLED RECOVERY..."
-    
-    # Clean up only what we are about to replace
-    kubectl delete netpol allow-backend-ws allow-to-redis allow-to-backend-mqtt allow-dns-global -n "$NAMESPACE" --ignore-not-found 
-    sleep 5
-    
-    # Re-apply using the CORRECTED file names
-    kubectl apply -f "$POLICY_DIR/00-allow-dns.yaml" -n "$NAMESPACE"
-    kubectl apply -f "$POLICY_DIR/05-allow-redis-access.yaml" -n "$NAMESPACE"
-    kubectl apply -f "$POLICY_DIR/02-allow-backend-ws.yaml" -n "$NAMESPACE"
-    kubectl apply -f "$POLICY_DIR/03-allow-backend-mqtt.yaml" -n "$NAMESPACE"  # Fixed Name
-    
-    log "⏳ Waiting 45s for CNI propagation..."
-    sleep 45
-    rm -f "$RECOVERY_LOCK"
-}
+
 # =======================================================
 # 🎬 MAIN
 # =======================================================
