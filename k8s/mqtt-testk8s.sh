@@ -59,20 +59,24 @@ check_tcp_python() {
 }
 
 get_broker() {
-    # Dynamically grab the broker host from the live deployment
-    local host
-    host=$(kubectl exec deployment/"$BACKEND_NAME" -n "$NAMESPACE" -- python3 -c "import os; print(os.environ.get('MQTT_BROKER_HOST', ''))" 2>/dev/null || echo "")
+    local host=""
     
+    # 1. Try to grab it from the live Pod's environment
+    host=$(kubectl exec deployment/"$BACKEND_NAME" -n "$NAMESPACE" -- sh -c 'echo $MQTT_BROKER_HOST' 2>/dev/null || echo "")
+    
+    # 2. Fallback: Extract directly from the Secret (since we know it's there)
     if [[ -z "$host" ]]; then
-        log "❌ ERROR: Could not find MQTT_BROKER_HOST in deployment/$BACKEND_NAME"
+        host=$(kubectl get secret darkseek-secrets -n "$NAMESPACE" -o jsonpath='{.data.MQTT_BROKER_HOST}' | base64 --decode 2>/dev/null || echo "")
+    fi
+
+    if [[ -z "$host" ]]; then
+        log "❌ CRITICAL: MQTT_BROKER_HOST is missing from both Pod and Secret 'darkseek-secrets'"
         return 1
     fi
     
     echo "$host"
     return 0
 }
-
-
 
 # =======================================================
 # STAGED TESTS (NON-FATAL)
