@@ -91,41 +91,61 @@ run_surgical_diagnostic() {
     done
 
     [[ -z "$pod_name" ]] && { log "❌ CRITICAL: No Running pod found."; return 1; }
-
-    log "🕵️ ANALYZING KERNEL STATE: $pod_name"
-    local tcp_table=$(kubectl exec "$pod_name" -n "$NAMESPACE" -- cat /proc/net/tcp 2>/dev/null)
-    [[ -z "$tcp_table" ]] && { log "⚠️ /proc/net/tcp unreachable."; return 1; }
-
-    # --- 1. INBOUND BINDING (PORT 8001 -> 1F41) ---
-    local listen_hex=$(echo "$tcp_table" | grep "1F41" | grep " 0A ") # 0A is LISTEN state
-    if [[ -z "$listen_hex" ]]; then
-        log "❌ FAILURE: No process listening on 8001."
-    elif echo "$listen_hex" | grep -q "0100007F:1F41"; then
-        log "🚨 LOCALHOST TRAP: Bound to 127.0.0.1 (REFUSED 111)."
-    else
-        log "🟢 BINDING OK: Listening on 0.0.0.0:8001."
+    
+    # --- KERNEL BINDING CHECK (BULLETPROOF) ---
+    log "🔍 Checking Kernel TCP Table for Port 8001 (1F41)..."
+    
+    local tcp_table
+    tcp_table=$(kubectl exec "$pod_name" -n "$NAMESPACE" -- cat /proc/net/tcp 2>/dev/null || echo "EXEC_FAILED")
+    
+    if [[ "$tcp_table" == "EXEC_FAILED" ]]; then
+        log "❌ FAILURE: Pod is in a crashloop or unresponsive to exec."
+        
+        # Dump logs and exit early so we don't run greps on "EXEC_FAILED"
+        log "📜 Scrape: Last 20 lines of pod logs..."
+        kubectl logs "$pod_name" -n "$NAMESPACE" --tail=20 || true
+        return 1
     fi
 
+    local tcp_hex
+    tcp_hex=$(echo "$tcp_table" | grep "1F41" || true)
+    
+    if [[ -z "$tcp_hex" ]]; then
+        log "❌ FAILURE: No process is listening on 8001 (1F41). The App did not start the server."
+    elif echo "$tcp_hex" | grep -q "0100007F:1F41"; then
+        log "🚨 LOCALHOST TRAP: App is bound to 127.0.0.1:8001. Connections REFUSED."
+    elif echo "$tcp_hex" | grep -q "00000000:1F41"; then
+        log "🟢 BINDING OK: App is listening on 0.0.0.0:8001."
+    fi
+    
     # --- 2. OUTBOUND CONNECTIONS (ESTABLISHED = 01) ---
     log "🔍 Checking Outbound Dependencies (State 01 = Established)..."
     
-    # DB (5432 -> 1538)
-    echo "$tcp_table" | grep ":1538 " | grep -q " 01 " \
-        && log "   🟢 DB (5432): Connected." || log "   ❌ DB (5432): Disconnected/Blocked."
+    # DB (5432 -> 1538) using a single safe regex grep
+    if echo "$tcp_table" | grep -q -E ":1538 .* 01 "; then
+        log "   🟢 DB (5432): Connected."
+    else
+        log "   ❌ DB (5432): Disconnected/Blocked."
+    fi
 
     # REDIS (6379 -> 18EB)
-    echo "$tcp_table" | grep ":18EB " | grep -q " 01 " \
-        && log "   🟢 REDIS (6379): Connected." || log "   ❌ REDIS (6379): Disconnected/Blocked."
+    if echo "$tcp_table" | grep -q -E ":18EB .* 01 "; then
+        log "   🟢 REDIS (6379): Connected."
+    else
+        log "   ❌ REDIS (6379): Disconnected/Blocked."
+    fi
 
     # BROKER (8885 -> 22B5)
-    echo "$tcp_table" | grep ":22B5 " | grep -q " 01 " \
-        && log "   🟢 BROKER (8885): Connected." || log "   ❌ BROKER (8885): Disconnected/Blocked."
+    if echo "$tcp_table" | grep -q -E ":22B5 .* 01 "; then
+        log "   🟢 BROKER (8885): Connected."
+    else
+        log "   ❌ BROKER (8885): Disconnected/Blocked."
+    fi
 
-    # --- 3. LOG FINAL GOTO ---
-    log "📜 Final Pod Logs (Tail 10):"
-    kubectl logs "$pod_name" -n "$NAMESPACE" --tail=10
+    # ALWAYS dump the logs, no matter what happened above
+    log "📜 Scrape: Last 20 lines of pod logs..."
+    kubectl logs "$pod_name" -n "$NAMESPACE" --tail=20 || true
 }
-
 # --- UPDATED: RECOVERY BLOCK ---
 controlled_recovery() {
     [[ -f "$RECOVERY_LOCK" ]] && { log "⚠️ Recovery lock active. Skipping."; return 1; }
