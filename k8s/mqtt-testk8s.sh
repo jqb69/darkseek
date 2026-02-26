@@ -78,58 +78,52 @@ template_policies() {
     done
 }
 
-#!/bin/bash
-
-# --- 1. THE BRAINS: SURGICAL DIAGNOSTIC ---
-# This looks inside the pod's "soul" (the kernel) since netstat is missing.
 run_surgical_diagnostic() {
-    local pod_name
-    pod_name=$(kubectl get pods -l app="$BACKEND_NAME" -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    
-    log "🕵️ STARTING AUTO-DIAGNOSTIC FOR: $pod_name"
-    
-    if [[ -z "$pod_name" ]]; then
-        log "❌ CRITICAL: No pod found for $BACKEND_NAME. Is the deployment scaled?"
-        return 1
+    local pod_name=""
+    local retry_limit=10
+    local count=0
+
+    log "🕵️ DISCOVERING TARGET POD..."
+    while [[ -z "$pod_name" && $count -lt $retry_limit ]]; do
+        pod_name=$(kubectl get pods -l app="$BACKEND_NAME" -n "$NAMESPACE" \
+            --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        [[ -z "$pod_name" ]] && { log "   ⏳ Waiting for Running pod... ($((count+1))/$retry_limit)"; sleep 3; ((count++)); }
+    done
+
+    [[ -z "$pod_name" ]] && { log "❌ CRITICAL: No Running pod found."; return 1; }
+
+    log "🕵️ ANALYZING KERNEL STATE: $pod_name"
+    local tcp_table=$(kubectl exec "$pod_name" -n "$NAMESPACE" -- cat /proc/net/tcp 2>/dev/null)
+    [[ -z "$tcp_table" ]] && { log "⚠️ /proc/net/tcp unreachable."; return 1; }
+
+    # --- 1. INBOUND BINDING (PORT 8001 -> 1F41) ---
+    local listen_hex=$(echo "$tcp_table" | grep "1F41" | grep " 0A ") # 0A is LISTEN state
+    if [[ -z "$listen_hex" ]]; then
+        log "❌ FAILURE: No process listening on 8001."
+    elif echo "$listen_hex" | grep -q "0100007F:1F41"; then
+        log "🚨 LOCALHOST TRAP: Bound to 127.0.0.1 (REFUSED 111)."
+    else
+        log "🟢 BINDING OK: Listening on 0.0.0.0:8001."
     fi
 
-    # --- KERNEL BINDING CHECK (HEX 1F41 = PORT 8001) ---
-    log "🔍 Checking Kernel TCP Table for Port 8001 (1F41)..."
-    local tcp_hex
-    tcp_hex=$(kubectl exec "$pod_name" -n "$NAMESPACE" -- cat /proc/net/tcp | grep "1F41")
+    # --- 2. OUTBOUND CONNECTIONS (ESTABLISHED = 01) ---
+    log "🔍 Checking Outbound Dependencies (State 01 = Established)..."
     
-    if [[ -z "$tcp_hex" ]]; then
-        log "❌ FAILURE: No process is even attempting to listen on 8001."
-    elif echo "$tcp_hex" | grep -q "0100007F:1F41"; then
-        log "🚨 LOCALHOST TRAP: App is bound to 127.0.0.1:8001. Connections will be REFUSED (111)."
-    elif echo "$tcp_hex" | grep -q "00000000:1F41"; then
-        log "🟢 BINDING OK: App is listening on 0.0.0.0:8001 (Global)."
-    fi
+    # DB (5432 -> 1538)
+    echo "$tcp_table" | grep ":1538 " | grep -q " 01 " \
+        && log "   🟢 DB (5432): Connected." || log "   ❌ DB (5432): Disconnected/Blocked."
 
-    # --- EGRESS & DNS TRACE ---
-    log "🔍 Testing Egress paths from inside $pod_name..."
-    
-    # Check internal DNS
-    kubectl exec "$pod_name" -n "$NAMESPACE" -- nslookup darkseek-db >/dev/null 2>&1 \
-        && log "🟢 DNS: Internal resolution working." \
-        || log "❌ DNS: Internal resolution BLOCKED."
+    # REDIS (6379 -> 18EB)
+    echo "$tcp_table" | grep ":18EB " | grep -q " 01 " \
+        && log "   🟢 REDIS (6379): Connected." || log "   ❌ REDIS (6379): Disconnected/Blocked."
 
-    # Check external Egress (Port 8885)
-    log "🔍 Checking External Broker Path (8885)..."
-    # Using a simple timeout/cat trick if nc is missing
-    kubectl exec "$pod_name" -n "$NAMESPACE" -- timeout 2 bash -c "</dev/tcp/***_BROKER_IP/8885" 2>/dev/null \
-        && log "🟢 EGRESS: Path to 8885 is OPEN." \
-        || log "❌ EGRESS: Path to 8885 is BLOCKED (Error 11/Timeout)."
+    # BROKER (8885 -> 22B5)
+    echo "$tcp_table" | grep ":22B5 " | grep -q " 01 " \
+        && log "   🟢 BROKER (8885): Connected." || log "   ❌ BROKER (8885): Disconnected/Blocked."
 
-    # --- SERVICE MAPPING ---
-    log "🔍 Checking K8s Service -> Pod Endpoints..."
-    local endpoints
-    endpoints=$(kubectl get endpoints "$BACKEND_NAME" -n "$NAMESPACE" -o jsonpath='{.subsets[].addresses[].ip}')
-    log "📍 Service currently points to: $endpoints"
-
-    # --- ERROR LOG SCRAPE ---
-    log "🔍 Scraping logs for the 'Source of Evil'..."
-    kubectl logs "$pod_name" -n "$NAMESPACE" --tail=50 | grep -iE "error|refused|eagain|timeout"
+    # --- 3. LOG FINAL GOTO ---
+    log "📜 Final Pod Logs (Tail 10):"
+    kubectl logs "$pod_name" -n "$NAMESPACE" --tail=10
 }
 
 # --- UPDATED: RECOVERY BLOCK ---
