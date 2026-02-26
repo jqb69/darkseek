@@ -78,6 +78,60 @@ template_policies() {
     done
 }
 
+#!/bin/bash
+
+# --- 1. THE BRAINS: SURGICAL DIAGNOSTIC ---
+# This looks inside the pod's "soul" (the kernel) since netstat is missing.
+run_surgical_diagnostic() {
+    local pod_name
+    pod_name=$(kubectl get pods -l app="$BACKEND_NAME" -n "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    
+    log "🕵️ STARTING AUTO-DIAGNOSTIC FOR: $pod_name"
+    
+    if [[ -z "$pod_name" ]]; then
+        log "❌ CRITICAL: No pod found for $BACKEND_NAME. Is the deployment scaled?"
+        return 1
+    fi
+
+    # --- KERNEL BINDING CHECK (HEX 1F41 = PORT 8001) ---
+    log "🔍 Checking Kernel TCP Table for Port 8001 (1F41)..."
+    local tcp_hex
+    tcp_hex=$(kubectl exec "$pod_name" -n "$NAMESPACE" -- cat /proc/net/tcp | grep "1F41")
+    
+    if [[ -z "$tcp_hex" ]]; then
+        log "❌ FAILURE: No process is even attempting to listen on 8001."
+    elif echo "$tcp_hex" | grep -q "0100007F:1F41"; then
+        log "🚨 LOCALHOST TRAP: App is bound to 127.0.0.1:8001. Connections will be REFUSED (111)."
+    elif echo "$tcp_hex" | grep -q "00000000:1F41"; then
+        log "🟢 BINDING OK: App is listening on 0.0.0.0:8001 (Global)."
+    fi
+
+    # --- EGRESS & DNS TRACE ---
+    log "🔍 Testing Egress paths from inside $pod_name..."
+    
+    # Check internal DNS
+    kubectl exec "$pod_name" -n "$NAMESPACE" -- nslookup darkseek-db >/dev/null 2>&1 \
+        && log "🟢 DNS: Internal resolution working." \
+        || log "❌ DNS: Internal resolution BLOCKED."
+
+    # Check external Egress (Port 8885)
+    log "🔍 Checking External Broker Path (8885)..."
+    # Using a simple timeout/cat trick if nc is missing
+    kubectl exec "$pod_name" -n "$NAMESPACE" -- timeout 2 bash -c "</dev/tcp/***_BROKER_IP/8885" 2>/dev/null \
+        && log "🟢 EGRESS: Path to 8885 is OPEN." \
+        || log "❌ EGRESS: Path to 8885 is BLOCKED (Error 11/Timeout)."
+
+    # --- SERVICE MAPPING ---
+    log "🔍 Checking K8s Service -> Pod Endpoints..."
+    local endpoints
+    endpoints=$(kubectl get endpoints "$BACKEND_NAME" -n "$NAMESPACE" -o jsonpath='{.subsets[].addresses[].ip}')
+    log "📍 Service currently points to: $endpoints"
+
+    # --- ERROR LOG SCRAPE ---
+    log "🔍 Scraping logs for the 'Source of Evil'..."
+    kubectl logs "$pod_name" -n "$NAMESPACE" --tail=50 | grep -iE "error|refused|eagain|timeout"
+}
+
 # --- UPDATED: RECOVERY BLOCK ---
 controlled_recovery() {
     [[ -f "$RECOVERY_LOCK" ]] && { log "⚠️ Recovery lock active. Skipping."; return 1; }
@@ -110,22 +164,39 @@ controlled_recovery() {
 # =======================================================
 # 🔍 DIAGNOSTICS & TRACE
 # =======================================================
-
 fix_mqtt_health() {
-    log "🔧 CHECKING MQTT HEALTH (Liveness Probe Guard)..." 
-    local max_attempts=6
-    for i in $(seq 1 $max_attempts); do
-        if kubectl exec deployment/"$BACKEND_NAME" -n "$NAMESPACE" -- test -f /tmp/mqtt-healthy 2>/dev/null; then
-            log "   ✅ MQTT health file exists!"
-            return 0
+    log "🔧 CHECKING MQTT HEALTH (Liveness Probe Guard)..."
+    local healthy=false
+
+    for attempt in {1..6}; do
+        log "   ⏳ Waiting for /tmp/mqtt-healthy ($attempt/6)..."
+        
+        # Check if the health file exists
+        if kubectl exec deployment/"$BACKEND_NAME" -n "$NAMESPACE" -- ls /tmp/mqtt-healthy >/dev/null 2>&1; then
+            log "🟢 HEALTHY: Signal detected."
+            healthy=true
+            break  # Exit the loop early on success
         fi
-        log "   ⏳ Waiting for /tmp/mqtt-healthy ($i/$max_attempts)..."
+    
+        # If we reached the final attempt and still aren't healthy
+        if [ "$attempt" -eq 6 ] && [ "$healthy" = false ]; then
+            log "❌ HEALTH FILE MISSING → DIAGNOSING BEFORE RECOVERY..."
+            
+            run_surgical_diagnostic
+    
+            log "🛠️ Removal of Liveness Probe and Triggering Recovery..."
+            kubectl patch deployment "$BACKEND_NAME" -n "$NAMESPACE" --type json -p='[{"op": "remove", "path": "/spec/template/spec/containers/0/livenessProbe"}]'
+            
+            template_policies
+            controlled_recovery
+            exit 1 # Hard exit because the environment is unstable
+        fi
+
         sleep 10
     done
-    
-    log "   ❌ HEALTH FILE MISSING → Removing Liveness Probe..."
-    kubectl patch deployment "$BACKEND_NAME" -n "$NAMESPACE" --type='json' \
-        -p='[{"op": "remove", "path": "/spec/template/spec/containers/0/livenessProbe"}]' 2>/dev/null || true
+
+    # If we broke out of the loop because of success
+    return 0
 }
 
 test_tcp_connectivity() {
