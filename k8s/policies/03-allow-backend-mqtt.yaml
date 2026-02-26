@@ -17,6 +17,9 @@ spec:
     - podSelector:
         matchLabels:
           app: darkseek-backend-ws
+    - podSelector: # ADD THIS: Allow the Spy Pod
+        matchLabels:
+          app: debug-mqtt
     ports:
     - protocol: TCP
       port: 1883
@@ -24,6 +27,7 @@ spec:
       port: 8883
     - protocol: TCP
       port: 8001
+  
   egress:
   # --- TOP PRIORITY: DB & REDIS ---
   - to:
