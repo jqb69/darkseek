@@ -236,25 +236,57 @@ test_tcp_connectivity() {
     return $failed
 }
 
+# =======================================================
+# 🎬 MAIN (Resilient Version)
+# =======================================================
 
 # =======================================================
-# 🎬 MAIN
+# 🎬 MAIN (Final Bulletproof Version)
 # =======================================================
 
 main() {
     log "🚀 DarkSeek Health Monitor Starting..."
     
+    # 1. Reset health signal
     fix_mqtt_health
 
-    if ! test_tcp_connectivity; then
-        log "🚨 CORE PATH FAILURE → Attempting recovery..."
+    # 2. 3-Strike Verification Loop
+    local retry_count=0
+    local max_retries=3
+    local success=false
+
+    while [ $retry_count -lt $max_retries ]; do
+        if test_tcp_connectivity; then
+            success=true
+            break
+        else
+            retry_count=$((retry_count + 1))
+            log "⚠️ Path Check Failed ($retry_count/$max_retries). Retrying in 5s..."
+            sleep 5
+        fi
+    done
+
+    # 3. LAST RESORT: Actual Infrastructure Re-Sync
+    if [ "$success" = false ]; then
+        log "🚨 PERSISTENT FAILURE → Triggering Infrastructure Re-Sync..."
+        
+        # ACTUALLY APPLY THE MANIFESTS
+        # We don't delete (Last Resort or not, 'apply' is safer for MQTT uptime)
         if ! controlled_recovery; then
-            log "💀 FATAL: Recovery failed."
+            log "💀 FATAL: Recovery function failed."
             exit 1
         fi
         
-        log "🔄 Verifying paths after recovery..."
-        test_tcp_connectivity || { log "💀 FATAL: Still broken."; exit 1; }
+        log "🔄 Re-Sync Complete. Cooldown for CNI (15s)..."
+        sleep 15 
+
+        # Final Verification
+        if test_tcp_connectivity; then
+            log "✅ RECOVERY SUCCESSFUL: Paths Restored."
+        else
+            log "💀 FATAL: Infrastructure re-sync failed to restore connectivity."
+            exit 1
+        fi
     fi
     
     log "🎉 ALL SYSTEMS OPERATIONAL"
