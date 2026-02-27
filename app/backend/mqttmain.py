@@ -102,55 +102,54 @@ class AsyncMQTTServer:
         self.health_file = "/tmp/mqtt-healthy"
 
     async def start(self):
-        """aiomqtt context manager with exponential backoff retry logic."""
         reconnect_interval = 2  # Initial delay in seconds
         max_interval = 60
         
-        try: # Outer try to catch process-level interruptions
+        try: 
             while True:
                 try:
                     logger.info(f"Connecting to {MQTT_BROKER_URI}:{MQTT_PORT}...")
-                    pod_id = socket.gethostname().split('-')[-1] # Grabs just the last 5 chars (e.g., 'rmjv9')
-                    client_id = f"ds-bk-{pod_id}" # Total ~12 characters
-                    # === Corrected block in AsyncMQTTServer.start ===
+                    pod_id = socket.gethostname().split('-')[-1]
+                    client_id = f"ds-bk-{pod_id}"
+    
                     async with aiomqtt.Client(
                         hostname=MQTT_BROKER_URI,
                         port=MQTT_PORT,
                         timeout=60,
                         keepalive=30,
                         tls_params=self.tls_params,
-                        identifier=client_id, # Safely under the 23-char limit
+                        identifier=client_id,
                     ) as client:
                         self.client = client
                         self._connected = True
                         logger.info("✅ MQTT connected via TLS")
- 
-                        # 1. SUBSCRIBE FIRST
-                        await client.subscribe("chat/#")
-                        
-                        # 2. SIGNAL HEALTH
+    
+                        # 1. SIGNAL HEALTH IMMEDIATELY
                         with open(self.health_file, "w") as f:
                             f.write("healthy")
+                        
+                        # 2. WRAP SUBSCRIBE IN A TIMEOUT
+                        try:
+                            await asyncio.wait_for(client.subscribe("chat/#"), timeout=10.0)
+                            logger.info("✅ Subscription active")
+                        except asyncio.TimeoutError:
+                            logger.error("⚠️ Subscription timed out - Broker is silent!")
     
                         reconnect_interval = 2  
-    
-                        # 3. LISTEN (Aligned exactly with the lines above)
+                        
+                        # 3. LISTEN (Non-blocking processing)
                         async for message in client.messages:
-                        # 🚀 FIXED: Use create_task so we don't block the listener loop
                             asyncio.create_task(self.on_message(client, message))
-   
+    
                 except (aiomqtt.MqttError, Exception) as e:
                     self._connected = False
-                    # Remove health file immediately so K8s stops routing
                     if os.path.exists(self.health_file):
                         os.unlink(self.health_file)
                     
                     logger.error(f"MQTT Connection Error: {e}. Retrying in {reconnect_interval}s...")
                     await asyncio.sleep(reconnect_interval)
                     reconnect_interval = min(reconnect_interval * 2, max_interval)
-                    
         finally:
-            # This runs only when the while loop is broken (e.g., SIGTERM)
             if os.path.exists(self.health_file):
                 os.unlink(self.health_file)
             logger.info("MQTT Server process shutting down.")
