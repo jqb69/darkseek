@@ -67,6 +67,29 @@ async def wait_for_network():
             
     return False
 
+# === 🛡️ NEW: Health Check Server (Port 8001) ===
+# === 🛡️ NEW: Health Check Server (Port 8001) ===
+class HealthCheckServer:
+    """Satisfies the K8s Port 8001 check (1F41)."""
+    def __init__(self, host="0.0.0.0", port=8001):
+        self.host = host
+        self.port = port
+
+    async def handle_client(self, reader, writer):
+        try:
+            # Minimal response to satisfy a Port 8001 probe
+            response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
+            writer.write(response)
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def run(self):
+        server = await asyncio.start_server(self.handle_client, self.host, self.port)
+        logger.info(f"🟢 Health Server listening on {self.host}:{self.port}")
+        async with server:
+            await server.serve_forever()
 # === Asynchronous MQTT Server ===
 class AsyncMQTTServer:
     def __init__(self):
@@ -113,7 +136,8 @@ class AsyncMQTTServer:
     
                         # 3. LISTEN (Aligned exactly with the lines above)
                         async for message in client.messages:
-                            await self.on_message(client, message)
+                        # 🚀 FIXED: Use create_task so we don't block the listener loop
+                            asyncio.create_task(self.on_message(client, message))
    
                 except (aiomqtt.MqttError, Exception) as e:
                     self._connected = False
@@ -185,23 +209,29 @@ class AsyncMQTTServer:
             logger.error(f"Error processing message: {e}", exc_info=True)
             return {"error": "Failed to process the query."}
 
-    
-
-# === Main async Function ===
+ # === Main ===
+# === Main Function ===
 async def main():
+    # 1. First, wait for the network to be valid
     if not await wait_for_network():
-        logger.critical("❌ DNS resolution failed. Infrastructure not ready.")
+        logger.critical("❌ DNS/Network failed. Giving up.")
         return
+
     mqtt_server = AsyncMQTTServer()
+    health_server = HealthCheckServer()
+
+    logger.info("🚀 Starting DarkSeek Services...")
     try:
-        await mqtt_server.start()
+        # 2. Run both the MQTT Worker and Health Responder in parallel
+        await asyncio.gather(
+            mqtt_server.start(),
+            health_server.run()
+        )
     except asyncio.CancelledError:
         logger.info("Shutting down due to signal...")
     finally:
         if os.path.exists("/tmp/mqtt-healthy"):
             os.unlink("/tmp/mqtt-healthy")
-    #finally:
-    #    await mqtt_server.close_connection()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main())   
