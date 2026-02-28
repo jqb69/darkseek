@@ -157,8 +157,8 @@ controlled_recovery() {
     template_policies
 
     # 2. Nuclear Clean (optional, but keeps things fresh)
-    kubectl delete netpol allow-backend-ws allow-to-redis allow-to-backend-mqtt allow-dns-global -n "$NAMESPACE" --ignore-not-found 
-    sleep 5
+    #kubectl delete netpol allow-backend-ws allow-to-redis allow-to-backend-mqtt allow-dns-global -n "$NAMESPACE" --ignore-not-found 
+    #sleep 5
     
     # 3. Apply in specific order
     log "🛡️ Applying DNS-Aware Policies..."
