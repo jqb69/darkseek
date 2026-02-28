@@ -2206,6 +2206,7 @@ main() {
     kubectl run dns-shield-test -n "$NAMESPACE" --image=busybox --rm -it --restart=Never -- nslookup google.com
     # --- PHASE 8: DASHBOARD & LOGS ---
     show_deployment_dashboard
+    deploy_self_healing_monitor
 
     log "💡 Real-time logs: kubectl logs -f -n $NAMESPACE -l 'app in (darkseek-backend-ws, darkseek-backend-mqtt, darkseek-frontend)' --tail=20 --prefix"
     log "🎉 DEPLOYMENT COMPLETE!"
