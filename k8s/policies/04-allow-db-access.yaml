@@ -19,6 +19,9 @@ spec:
     - podSelector:
         matchLabels:
           app: darkseek-backend-ws
+    - podSelector:
+        matchLabels:
+          app: debug-mqtt      
     ports:
     - protocol: TCP
       port: 5432
