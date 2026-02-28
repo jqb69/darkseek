@@ -13,6 +13,8 @@ POLICY_DIR="${POLICY_DIR:-k8s/policies}"
 LOGFILE="/tmp/mqtt-test-$(date +%Y%m%d-%H%M%S).log"
 RECOVERY_LOCK="/tmp/mqtt-test-recovery-${NAMESPACE}.lock"
 
+
+
 exec &> >(tee -a "$LOGFILE")
 trap 'rm -f "$RECOVERY_LOCK"' EXIT
 
@@ -35,6 +37,27 @@ get_broker() {
         return 1
     fi
     echo "$host"
+}
+
+# 🟢 NATIVE BASH CHECK (No nc needed)
+check_connection() {
+    local host=$1
+    local port=$2
+    timeout 2 bash -c "cat < /dev/null > /dev/tcp/$host/$port" 2>/dev/null
+}
+
+# 🧪 CONSOLIDATED PATH CHECK
+# Wraps all dependencies into a single success/fail for the retry loop
+check_all_paths() {
+    if ! check_connection "$MQTT_BROKER_HOST" 8885; then
+        log "❌ BROKER ($MQTT_BROKER_HOST) unreachable."
+        return 1
+    fi
+    if ! check_connection "darkseek-db" 5432; then
+        log "❌ DB unreachable."
+        return 1
+    fi
+    return 0
 }
 
 check_tcp_python() {
@@ -244,19 +267,34 @@ test_tcp_connectivity() {
 # 🎬 MAIN (Final Bulletproof Version)
 # =======================================================
 
+# 🚀 MAIN LOOP
 main() {
     log "🚀 DarkSeek Health Monitor Starting..."
     
-    # 1. Reset health signal
-    fix_mqtt_health
+    main() {
+    log "🚀 DarkSeek Health Monitor Starting..."
 
-    # 2. 3-Strike Verification Loop
+    # RESILIENCE CHECK: Don't just exit, try to find the host!
+    if [[ -z "$MQTT_BROKER_HOST" ]]; then
+        log "⚠️ MQTT_BROKER_HOST env missing. Attempting secret lookup..."
+        MQTT_BROKER_HOST=$(kubectl get secret darkseek-secrets -o jsonpath='{.data.MQTT_BROKER_HOST}' | base64 --decode 2>/dev/null)
+        
+        if [[ -z "$MQTT_BROKER_HOST" ]]; then
+            log "⚠️ Secret lookup failed. Using default fallback."
+            MQTT_BROKER_HOST="10.0.0.50" # Put your emergency default here
+        fi
+    fi
+
+    # 1. Reset health signal
+    # fix_mqtt_health ...
+
+    # 1. 3-Strike Verification Loop
     local retry_count=0
     local max_retries=3
     local success=false
 
     while [ $retry_count -lt $max_retries ]; do
-        if test_tcp_connectivity; then
+        if check_all_paths; then
             success=true
             break
         else
@@ -266,30 +304,28 @@ main() {
         fi
     done
 
-    # 3. LAST RESORT: Actual Infrastructure Re-Sync
+    # 2. LAST RESORT: Actual Infrastructure Re-Sync
     if [ "$success" = false ]; then
         log "🚨 PERSISTENT FAILURE → Triggering Infrastructure Re-Sync..."
         
-        # ACTUALLY APPLY THE MANIFESTS
-        # We don't delete (Last Resort or not, 'apply' is safer for MQTT uptime)
         if ! controlled_recovery; then
             log "💀 FATAL: Recovery function failed."
             exit 1
         fi
         
-        log "🔄 Re-Sync Complete. Cooldown for CNI (15s)..."
-        sleep 15 
+        log "🔄 Re-Sync Complete. Verifying..."
+        sleep 5 
 
         # Final Verification
-        if test_tcp_connectivity; then
+        if check_all_paths; then
             log "✅ RECOVERY SUCCESSFUL: Paths Restored."
         else
             log "💀 FATAL: Infrastructure re-sync failed to restore connectivity."
             exit 1
         fi
+    else
+        log "🎉 ALL SYSTEMS OPERATIONAL"
     fi
-    
-    log "🎉 ALL SYSTEMS OPERATIONAL"
 }
 
 main "$@"
