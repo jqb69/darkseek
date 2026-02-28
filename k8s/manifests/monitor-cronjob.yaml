@@ -6,16 +6,22 @@ metadata:
   name: mqtt-monitor
   namespace: default
 spec:
-  schedule: "*/15 * * * *" # Every 15 minutes
+  schedule: "*/15 * * * *"
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
       template:
         spec:
-          serviceAccountName: default
+          serviceAccountName: default # Must have 'edit' or 'patch' permissions!
           containers:
           - name: monitor
             image: bitnami/kubectl:latest
+            env:
+            - name: MQTT_BROKER_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: darkseek-secrets # <-- Your actual secret name
+                  key: MQTT_BROKER_HOST
             command: ["/bin/bash", "/scripts/mqtt-testk8s.sh"]
             volumeMounts:
             - name: script-vol
