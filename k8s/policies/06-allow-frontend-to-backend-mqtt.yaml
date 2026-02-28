@@ -14,4 +14,23 @@ spec:
   ingress:
   - {} # Open Inbound
   egress:
-  - {} # Open Outbound
+  # 1. ALLOW DNS (Crucial for resolving Broker address)
+  - to:
+    - namespaceSelector: {} # Allow to kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # 2. ALLOW BROKER
+  - to:
+    - ports:
+      - protocol: TCP
+        port: 8885
+  # 3. ALLOW INTERNAL DB/REDIS
+  - to:
+    - ports:
+      - protocol: TCP
+        port: 5432
+      - protocol: TCP
+        port: 6379
