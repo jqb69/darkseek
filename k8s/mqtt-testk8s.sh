@@ -271,8 +271,6 @@ test_tcp_connectivity() {
 main() {
     log "🚀 DarkSeek Health Monitor Starting..."
     
-    main() {
-    log "🚀 DarkSeek Health Monitor Starting..."
 
     # RESILIENCE CHECK: Don't just exit, try to find the host!
     if [[ -z "$MQTT_BROKER_HOST" ]]; then
@@ -284,7 +282,7 @@ main() {
             MQTT_BROKER_HOST="10.0.0.50" # Put your emergency default here
         fi
     fi
-
+    export MQTT_BROKER_HOST
     # 1. Reset health signal
     # fix_mqtt_health ...
 
