@@ -131,6 +131,36 @@ check_envsubst() {
   }
 }
 
+deploy_self_healing_monitor() {
+    echo "-------------------------------------------------------"
+    echo "🚀 DEPLOYING SELF-HEALING MONITOR"
+    
+    # We are already inside the k8s/ directory
+    local SCRIPT_FILE="./mqtt-testk8s.sh"
+    local RBAC_FILE="./manifests/monitor-rbac.yaml"
+    local CRONJOB_FILE="./manifests/monitor-cronjob.yaml"
+
+    if [[ ! -f "$SCRIPT_FILE" ]]; then
+        echo "❌ ERROR: $SCRIPT_FILE not found in $(pwd)"
+        return 1
+    fi
+
+    # OVERWRITE: This pushes your local script into the cluster ConfigMap.
+    # If the ConfigMap exists, it is UPDATED with the new file content.
+    echo "📦 Syncing $SCRIPT_FILE to ConfigMap..."
+    kubectl create configmap mqtt-monitor-script \
+        --from-file="$SCRIPT_FILE" \
+        --dry-run=client -o yaml | kubectl apply -f -
+
+    # Apply Infrastructure (Idempotent: Creates or Updates)
+    kubectl apply -f "$RBAC_FILE"
+    kubectl apply -f "$CRONJOB_FILE"
+
+    # Trigger initial check
+    echo "🧪 Triggering immediate maintenance check..."
+    kubectl create job --from=cronjob/mqtt-monitor "monitor-init-$(date +%s)"
+}
+
 check_env_vars() {
   log "Validating required environment variables..."
   required_vars=( "GCP_PROJECT_ID" "GOOGLE_API_KEY" "GOOGLE_CSE_ID" "HUGGINGFACEHUB_API_TOKEN" "DATABASE_URL" "REDIS_URL" "MQTT_BROKER_HOST" "MQTT_BROKER_PORT" "MQTT_TLS" "MQTT_USERNAME" "MQTT_PASSWORD" "POSTGRES_USER" "POSTGRES_PASSWORD" "POSTGRES_DB")
