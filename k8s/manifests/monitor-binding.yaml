@@ -1,0 +1,15 @@
+---
+# monitor-binding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mqtt-monitor-binding
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: mqtt-monitor-sa
+  namespace: default
+roleRef:
+  kind: Role
+  name: mqtt-monitor-role
+  apiGroup: rbac.authorization.k8s.io
