@@ -2089,6 +2089,35 @@ verify_golden_paths() {
     fi
 }
 
+deploy_monitor_infrastructure() {
+    # Path adjusted since you are already inside the k8s directory
+    local MANIFEST_DIR="./manifests"
+    local FILES=("monitor-sa.yaml" "monitor-role.yaml" "monitor-binding.yaml" "monitor-configmap.yaml" "monitor-cronjob.yaml")
+
+    for FILE in "${FILES[@]}"; do
+        if [ -f "$MANIFEST_DIR/$FILE" ]; then
+            kubectl apply -f "$MANIFEST_DIR/$FILE"
+        else
+            echo "⚠️ Warning: $MANIFEST_DIR/$FILE not found."
+        fi
+    done
+
+    # --- THE MANUAL TRIGGER ---
+    echo "🚀 Triggering immediate health check..."
+    local JOB_NAME="manual-monitor-check-$(date +%s)"
+    kubectl create job --from=cronjob/mqtt-monitor "$JOB_NAME"
+
+    echo "⏳ Waiting for job to complete (timeout 30s)..."
+    kubectl wait --for=condition=complete --timeout=30s "job/$JOB_NAME" 2>/dev/null || echo "⚠️ Job didn't complete in time or failed."
+
+    echo "📋 Fetching logs..."
+    kubectl logs "job/$JOB_NAME"
+
+    # --- CLEANUP ---
+    echo "🧹 Cleaning up manual job $JOB_NAME..."
+    kubectl delete job "$JOB_NAME" --ignore-not-found=true
+}
+
 provision_loadbalancer_ip() {
     log "⏳ Waiting for LoadBalancer IPs (60s max)..."
     local FRONTEND_IP=""
@@ -2207,9 +2236,19 @@ main() {
     # --- PHASE 8: DASHBOARD & LOGS ---
     show_deployment_dashboard
     deploy_self_healing_monitor
+    
+    # This creates the SA, Roles, ConfigMap, and CronJob
+    deploy_monitor_infrastructure 
 
     log "💡 Real-time logs: kubectl logs -f -n $NAMESPACE -l 'app in (darkseek-backend-ws, darkseek-backend-mqtt, darkseek-frontend)' --tail=20 --prefix"
+    
+    echo "--------------------------------------------------"
+    echo "📊 MONITORING STATUS:"
+    kubectl get cronjob mqtt-monitor -n "$NAMESPACE"
+    echo "--------------------------------------------------"
+    
     log "🎉 DEPLOYMENT COMPLETE!"
+
 }
 
 # START
