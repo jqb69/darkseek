@@ -1,0 +1,11 @@
+---
+# monitor-role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mqtt-monitor-role
+  namespace: default
+rules:
+- apiGroups: ["", "apps", "networking.k8s.io"]
+  resources: ["pods", "deployments", "networkpolicies"]
+  verbs: ["get", "list", "patch", "delete", "create"]
