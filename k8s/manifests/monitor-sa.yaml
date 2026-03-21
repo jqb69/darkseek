@@ -1,0 +1,7 @@
+---
+# monitor-sa.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mqtt-monitor-sa
+  namespace: default
