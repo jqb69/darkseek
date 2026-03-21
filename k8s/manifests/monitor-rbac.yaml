@@ -6,9 +6,12 @@ metadata:
   name: monitor-admin-binding
 subjects:
 - kind: ServiceAccount
-  name: default
+  # FIX: Target the specific monitor, NOT the default account
+  name: mqtt-monitor-sa 
   namespace: default
 roleRef:
   kind: ClusterRole
-  name: edit
+  # 'edit' is a built-in K8s role. This gives the monitor 
+  # full power to fix things across the cluster.
+  name: edit 
   apiGroup: rbac.authorization.k8s.io
