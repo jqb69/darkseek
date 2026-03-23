@@ -27,6 +27,78 @@ spec:
                 name: darkseek-config
             - secretRef:
                 name: darkseek-secrets
+          # 1. ADD THE PORT DEFINITION
+          ports:
+            - containerPort: 8001
+              name: health-port
+
+          # 2. SWITCH TO TCPSOCKET PROBES
+          # This hits your Python HealthCheckServer immediately
+          startupProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 2 # Fast start because the server is now backgrounded
+            failureThreshold: 30
+            periodSeconds: 5
+
+          livenessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 30
+
+          readinessProbe:
+            # Keep this as 'exec' if you want to ensure the MQTT 
+            # connection is ALIVE before sending traffic
+            exec:
+              command: ["cat", "/tmp/mqtt-healthy"]
+            initialDelaySeconds: 5
+            periodSeconds: 10      
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: certs-volume
+              mountPath: /etc/mosquitto/ssl
+              readOnly: true 
+      volumes:
+        - name: certs-volume
+          secret:
+            secretName: darkseek-mqtt-certs---
+# ./k8s/backend-mqtt-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: darkseek-backend-mqtt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: darkseek-backend-mqtt
+  template:
+    metadata:
+      labels:
+        app: darkseek-backend-mqtt
+    spec:
+      restartPolicy: Always
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "5"
+      containers:
+        - name: backend-mqtt
+          image: us-central1-docker.pkg.dev/${GCP_PROJECT_ID}/darkseek/darkseek-backend-mqtt:latest
+          envFrom:
+            - configMapRef:
+                name: darkseek-config
+            - secretRef:
+                name: darkseek-secrets
           startupProbe:
             exec:
               command: ["cat", "/tmp/mqtt-healthy"]
