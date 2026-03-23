@@ -70,11 +70,10 @@ async def wait_for_network():
 # === 🛡️ NEW: Health Check Server (Port 8001) ===
 # === 🛡️ NEW: Health Check Server (Port 8001) ===
 class HealthCheckServer:
-    """Satisfies the K8s Port 8001 check (1F41)."""
-    def __init__(self, host="0.0.0.0", port=8001):
+    def __init__(self, host="", port=8001): # "" binds to all interfaces
         self.host = host
         self.port = port
-
+        
     async def handle_client(self, reader, writer):
         try:
             # Minimal response to satisfy a Port 8001 probe
@@ -211,26 +210,31 @@ class AsyncMQTTServer:
  # === Main ===
 # === Main Function ===
 async def main():
-    # 1. First, wait for the network to be valid
-    if not await wait_for_network():
-        logger.critical("❌ DNS/Network failed. Giving up.")
-        return
-
     mqtt_server = AsyncMQTTServer()
     health_server = HealthCheckServer()
 
-    logger.info("🚀 Starting DarkSeek Services...")
+    # 1. Start the Health Server IMMEDIATELY in the background
+    # This prevents K8s from REJECTING while we wait for the network
+    health_task = asyncio.create_task(health_server.run())
+    logger.info("🟢 Health Port 8001 is now LIVE.")
+
+    # 2. Now wait for the network
+    if not await wait_for_network():
+        logger.critical("❌ DNS/Network failed. Giving up.")
+        health_task.cancel()
+        return
+
+    logger.info("🚀 Starting MQTT Worker...")
     try:
-        # 2. Run both the MQTT Worker and Health Responder in parallel
-        await asyncio.gather(
-            mqtt_server.start(),
-            health_server.run()
-        )
+        # 3. Run the MQTT worker (Health server is already running in background)
+        await mqtt_server.start()
     except asyncio.CancelledError:
-        logger.info("Shutting down due to signal...")
+        logger.info("Shutting down...")
     finally:
+        health_task.cancel()
         if os.path.exists("/tmp/mqtt-healthy"):
             os.unlink("/tmp/mqtt-healthy")
+
 
 if __name__ == "__main__":
     asyncio.run(main())   
