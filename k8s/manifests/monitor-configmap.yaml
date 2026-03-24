@@ -16,12 +16,21 @@ data: # <--- data must be at this level
     }
 
     recover() {
-      log "🚨 Connectivity lost. Refreshing NetworkPolicies..."
-      kubectl delete netpol --all --ignore-not-found
-      # Wait 60s for GKE Autopilot/Calico to re-sync state
-      sleep 60 
+      log "🔎 Running deep-trace before acting..."
+      
+      # Check if it's a 'Refused' (App issue) or 'Timeout' (Network issue)
+      # We use 'curl' here because it gives us specific error codes
+      local status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 http://darkseek-backend-ws:8000/health || echo "FAIL")
+    
+      if [[ "$status" == "000" ]]; then
+        log "🚨 Network Timeout detected. Tickling policies..."
+        # Only update a timestamp. Don't delete.
+        kubectl annotate netpol --all darkseek/sync-tick=$(date +%s) --overwrite
+      else
+        log "⚠️ App is reachable but returned $status. Check App Binds/Logs, NOT NetworkPolicies."
+      fi
     }
-
+   
     log "🚀 Monitor Cycle Start"
     if check_net; then
       log "✅ Network OK"
