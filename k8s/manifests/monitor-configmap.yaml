@@ -5,14 +5,14 @@ kind: ConfigMap
 metadata:
   name: mqtt-monitor-script
   namespace: default
-座data:
-  mqtt-testk8s.sh: |
+data: # <--- data must be at this level
+  mqtt-testk8s.sh: | # <--- keys under data MUST be indented
     #!/bin/bash
     log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
     
     check_net() {
-      # Proves CNI is working by hitting the Backend WS port
-      nc -zv darkseek-backend-ws 8000 >/dev/null 2>&1
+      # This works in bash without needing any extra binaries
+      (timeout 2 bash -c "</dev/tcp/darkseek-backend-ws/8000") >/dev/null 2>&1
     }
 
     recover() {
