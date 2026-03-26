@@ -2133,6 +2133,17 @@ provision_loadbalancer_ip() {
     log "⚠️ LB IP is taking longer than expected. It will continue provisioning in the background."
 }
 
+# --- BIND VERIFICATION ---
+verify_darkseek_health() {
+    echo "🔍 VERIFYING BIND STATUS (Must be 0.0.0.0):"
+    
+    echo -n "DB (5432): "
+    kubectl exec -it deployment/darkseek-db -- netstat -ltn | grep 5432 | awk '{print $4}' || echo "❌ NOT LISTENING"
+    
+    echo -n "Redis (6379): "
+    kubectl exec -it deployment/darkseek-redis -- netstat -ltn | grep 6379 | awk '{print $4}' || echo "❌ NOT LISTENING"
+}
+
 # --- MAIN (ULTIMATE BADDA** GEMINI EDITION) ---
 main() {
     log "🏁 Starting DarkSeek Deployment: Gemini Ultimate Edition"
@@ -2233,15 +2244,17 @@ main() {
     # Manual check if the script halts:
     # Faster "Golden Check" using an existing image to avoid pull-rate limits
     kubectl run dns-shield-test -n "$NAMESPACE" --image=busybox --rm -it --restart=Never -- nslookup google.com
-    # --- PHASE 8: DASHBOARD & LOGS ---
-    show_deployment_dashboard
+    
     deploy_self_healing_monitor
+    
     
     # This creates the SA, Roles, ConfigMap, and CronJob
     deploy_monitor_infrastructure 
 
     log "💡 Real-time logs: kubectl logs -f -n $NAMESPACE -l 'app in (darkseek-backend-ws, darkseek-backend-mqtt, darkseek-frontend)' --tail=20 --prefix"
-    
+    verify_darkseek_health
+    # --- PHASE 8: DASHBOARD & LOGS ---
+    show_deployment_dashboard
     echo "--------------------------------------------------"
     echo "📊 MONITORING STATUS:"
     kubectl get cronjob mqtt-monitor -n "$NAMESPACE"
