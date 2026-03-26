@@ -24,7 +24,7 @@ spec:
                   name: darkseek-secrets
                   key: MQTT_BROKER_HOST
             # FIX 2: Match the filename inside your ConfigMap
-            command: ["/bin/bash", "/scripts/run-mqtt-tests.sh"] 
+            command: ["/bin/bash", "/scripts/mqtt-testk8s.sh"] 
             volumeMounts:
             - name: script-vol
               mountPath: /scripts
