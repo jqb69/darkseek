@@ -13,10 +13,10 @@ spec:
       template:
         spec:
           # FIX 1: Use the ServiceAccount we just created, NOT 'default'
-          serviceAccountName: mqtt-monitor-sa 
+          serviceAccountName: mqtt-monitor-sa
           containers:
           - name: monitor
-            image: bitnami/kubectl:latest
+            image: alpine/k8s:1.29.2  # <--- Has EVERYTHING: bash, curl, and kubectl
             env:
             - name: MQTT_BROKER_HOST
               valueFrom:
