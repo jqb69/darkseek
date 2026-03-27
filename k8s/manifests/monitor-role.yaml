@@ -6,6 +6,9 @@ metadata:
   name: mqtt-monitor-role
   namespace: default
 rules:
-- apiGroups: ["", "apps", "networking.k8s.io"]
-  resources: ["pods", "deployments", "networkpolicies"]
-  verbs: ["get", "list", "patch", "delete", "create"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "patch", "list"]
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["get", "list"]
