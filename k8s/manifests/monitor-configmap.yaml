@@ -5,35 +5,43 @@ kind: ConfigMap
 metadata:
   name: mqtt-monitor-script
   namespace: default
-data: # <--- data must be at this level
-  mqtt-testk8s.sh: | # <--- keys under data MUST be indented
+data:
+  mqtt-testk8s.sh: |
     #!/bin/bash
-    log() { echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*"; }
+    # k8s/mqtt-testk8s.sh
+    TARGET_DB="darkseek-db"
+    TARGET_REDIS="darkseek-redis"
+    NAMESPACE="default"
     
-    check_net() {
-      # This works in bash without needing any extra binaries
-      (timeout 2 bash -c "</dev/tcp/darkseek-backend-ws/8000") >/dev/null 2>&1
+    # 🩹 Surgery: Force Postgres to listen to the cluster
+    patch_postgres() {
+      echo "🔧 Patching Postgres Deployment..."
+      kubectl -n "$NAMESPACE" patch deployment "$1" --type='json' \
+        -p='[{"op":"add","path":"/spec/template/spec/containers/0/args","value":["-c","listen_addresses=0.0.0.0"]}]'
     }
-
-    recover() {
-      log "🔎 Running deep-trace before acting..."
-      
-      # Check if it's a 'Refused' (App issue) or 'Timeout' (Network issue)
-      # We use 'curl' here because it gives us specific error codes
-      local status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 http://darkseek-backend-ws:8000/health || echo "FAIL")
     
-      if [[ "$status" == "000" ]]; then
-        log "🚨 Network Timeout detected. Tickling policies..."
-        # Only update a timestamp. Don't delete.
-        kubectl annotate netpol --all darkseek/sync-tick=$(date +%s) --overwrite
-      else
-        log "⚠️ App is reachable but returned $status. Check App Binds/Logs, NOT NetworkPolicies."
+    # 🩹 Surgery: Force Redis to drop protected mode
+    patch_redis() {
+      echo "🔧 Patching Redis Deployment..."
+      kubectl -n "$NAMESPACE" patch deployment "$1" --type='json' \
+        -p='[{"op":"replace","path":"/spec/template/spec/containers/0/command","value":["redis-server","--protected-mode","no","--bind","0.0.0.0"]}]'
+    }
+    
+    tcp_check() {
+      # Since you are using alpine/k8s, bash sockets are the most reliable
+      timeout 2 bash -c "</dev/tcp/$1/$2" >/dev/null 2>&1
+    }
+    
+    check_and_fix() {
+      local service=$1 port=$2 type=$3
+      echo "🧪 Probing $service:$port..."
+      if ! tcp_check "$service" "$port"; then
+        echo "🚨 REFUSED (111): $service is ignoring the cluster."
+        [[ "$type" == "db" ]] && patch_postgres "$service" || patch_redis "$service"
+        return 1
       fi
+      echo "🟢 OK: $service is wide open."
     }
-   
-    log "🚀 Monitor Cycle Start"
-    if check_net; then
-      log "✅ Network OK"
-    else
-      recover
-    fi
+    
+    check_and_fix "$TARGET_DB" 5432 db
+    check_and_fix "$TARGET_REDIS" 6379 redis
