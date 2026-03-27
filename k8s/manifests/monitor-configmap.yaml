@@ -43,5 +43,5 @@ data:
       echo "🟢 OK: $service is wide open."
     }
     
-    check_and_fix "$TARGET_DB" 5432 db
-    check_and_fix "$TARGET_REDIS" 6379 redis
+    check_and_fix "$TARGET_DB" 5432 db || true
+    check_and_fix "$TARGET_REDIS" 6379 redis || true
