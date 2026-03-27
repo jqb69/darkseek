@@ -2107,8 +2107,8 @@ deploy_monitor_infrastructure() {
     local JOB_NAME="manual-monitor-check-$(date +%s)"
     kubectl create job --from=cronjob/mqtt-monitor "$JOB_NAME"
 
-    echo "⏳ Waiting for job to complete (timeout 30s)..."
-    kubectl wait --for=condition=complete --timeout=30s "job/$JOB_NAME" 2>/dev/null || echo "⚠️ Job didn't complete in time or failed."
+    echo "⏳ Waiting for job to complete (timeout 45)..."
+    kubectl wait --for=condition=complete --timeout=45s "job/$JOB_NAME" 2>/dev/null || echo "⚠️ Job didn't complete in time or failed."
 
     echo "📋 Fetching logs..."
     kubectl logs "job/$JOB_NAME"
@@ -2138,10 +2138,12 @@ verify_darkseek_health() {
     echo "🔍 VERIFYING BIND STATUS (Must be 0.0.0.0):"
     
     echo -n "DB (5432): "
-    kubectl exec -it deployment/darkseek-db -- netstat -ltn | grep 5432 | awk '{print $4}' || echo "❌ NOT LISTENING"
+    # Postgres lacks netstat. We verify the K8s deployment arguments instead.
+    kubectl get deployment darkseek-db -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].args}' | grep -q "listen_addresses=0.0.0.0" && echo "✅ PATCHED (0.0.0.0)" || echo "❌ NOT LISTENING"
     
     echo -n "Redis (6379): "
-    kubectl exec -it deployment/darkseek-redis -- netstat -ltn | grep 6379 | awk '{print $4}' || echo "❌ NOT LISTENING"
+    # Redis has netstat, but we remove the -it flag to prevent TTY terminal crashes
+    kubectl exec deployment/darkseek-redis -n "$NAMESPACE" -- netstat -ltn 2>/dev/null | grep 6379 | awk '{print $4}' || echo "❌ NOT LISTENING"
 }
 
 # --- MAIN (ULTIMATE BADDA** GEMINI EDITION) ---
@@ -2195,7 +2197,13 @@ main() {
     # --- PHASE 3: INFRA + APPS + SERVICES ---
     # Consolidated block as requested: DB -> Redis -> Apps -> Services -> Egress Check
     deploy_core
-
+    
+    # >>> 🚨 MOVE THIS HERE! BEFORE ZERO-TRUST AUDITS 🚨 <<<
+    log "🩺 PHASE 3.5: Deploying Self-Healing & Fixing Binds..."
+    deploy_self_healing_monitor  # Sync the configmap script
+    deploy_monitor_infrastructure # Spin up the RBAC + Job to force 0.0.0.0
+    sleep 5
+    
     # --- PHASE 4: THE GATEKEEPER ---
     log "🚀 PHASE 4.0: Verifying Network Integrity..."
     # Proves the "pipes" are open while pods are Running but before Probes time out
@@ -2245,11 +2253,6 @@ main() {
     # Faster "Golden Check" using an existing image to avoid pull-rate limits
     kubectl run dns-shield-test -n "$NAMESPACE" --image=busybox --rm -it --restart=Never -- nslookup google.com
     
-    deploy_self_healing_monitor
-    
-    
-    # This creates the SA, Roles, ConfigMap, and CronJob
-    deploy_monitor_infrastructure 
 
     log "💡 Real-time logs: kubectl logs -f -n $NAMESPACE -l 'app in (darkseek-backend-ws, darkseek-backend-mqtt, darkseek-frontend)' --tail=20 --prefix"
     verify_darkseek_health
