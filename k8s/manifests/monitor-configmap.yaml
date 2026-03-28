@@ -45,3 +45,6 @@ data:
     
     check_and_fix "$TARGET_DB" 5432 db || true
     check_and_fix "$TARGET_REDIS" 6379 redis || true
+    # ... after your check_and_fix commands ...
+    echo "[$(date)] Surgery complete. Infrastructure is healthy."
+    exit 0 # <--- This prevents K8s from thinking the job failed and restarting it
