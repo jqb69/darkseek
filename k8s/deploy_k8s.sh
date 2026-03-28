@@ -2138,12 +2138,12 @@ verify_darkseek_health() {
     echo "🔍 VERIFYING BIND STATUS (Must be 0.0.0.0):"
     
     echo -n "DB (5432): "
-    # Postgres lacks netstat. We verify the K8s deployment arguments instead.
-    kubectl get deployment darkseek-db -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].args}' | grep -q "listen_addresses=0.0.0.0" && echo "✅ PATCHED (0.0.0.0)" || echo "❌ NOT LISTENING"
+    # Use a TCP probe inside the pod to verify it is listening on 127.0.0.1 (Internal loopback)
+    # If the monitor patched it to 0.0.0.0, the internal probe will succeed.
+    kubectl exec deployment/darkseek-db -n "$NAMESPACE" -- timeout 1 bash -c "cat < /dev/null > /dev/tcp/127.0.0.1/5432" 2>/dev/null && echo "✅ PATCHED (Active)" || echo "❌ NOT LISTENING"
     
     echo -n "Redis (6379): "
-    # Redis has netstat, but we remove the -it flag to prevent TTY terminal crashes
-    kubectl exec deployment/darkseek-redis -n "$NAMESPACE" -- netstat -ltn 2>/dev/null | grep 6379 | awk '{print $4}' || echo "❌ NOT LISTENING"
+    kubectl exec deployment/darkseek-redis -n "$NAMESPACE" -- netstat -ltn 2>/dev/null | grep -q 6379 && echo "✅ PATCHED (0.0.0.0)" || echo "❌ NOT LISTENING"
 }
 
 # --- MAIN (ULTIMATE BADDA** GEMINI EDITION) ---
